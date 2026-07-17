@@ -15,14 +15,16 @@ import {
 import { eventLogPath, eventsDir } from "../paths.js";
 import type { EventSource, ExecEvent } from "./types.js";
 import { isValidType } from "./types.js";
+import { nextSeq, currentSeq } from "./seq.js";
 
 /** Append one event to the source's JSONL log. */
 export async function append(input: {
   source: EventSource;
   type: string;
   data?: Record<string, unknown>;
+  seq?: number; // Optional seq for testing; auto-assigned if omitted
 }): Promise<ExecEvent> {
-  const { source, type, data = {} } = input;
+  const { source, type, data = {}, seq: providedSeq } = input;
 
   // Validate type prefix matches source.
   if (!isValidType(source, type)) {
@@ -35,7 +37,10 @@ export async function append(input: {
   // Ensure the log file and directory exist (bootstrap-level safety).
   ensureLogExists(source);
 
+  const seq = providedSeq !== undefined ? providedSeq : nextSeq();
+
   const event: ExecEvent = {
+    seq,
     id: crypto.randomUUID(),
     ts: new Date().toISOString(),
     source,
@@ -67,6 +72,10 @@ export async function read(source: EventSource): Promise<ExecEvent[]> {
 
     try {
       const event = JSON.parse(line) as ExecEvent;
+      // Legacy line without seq — default to 0 so it doesn't crash.
+      if (event.seq === undefined) {
+        event.seq = 0;
+      }
       events.push(event);
     } catch {
       // A single corrupt line must NOT crash the whole read.
@@ -82,19 +91,21 @@ export async function read(source: EventSource): Promise<ExecEvent[]> {
 
 /**
  * Read the last N events from one source (or all sources merged &
- * sorted by ts ascending if source is omitted).
+ * sorted by seq ascending if source is omitted).
  */
 export async function tail(
   n: number,
   source?: EventSource
 ): Promise<ExecEvent[]> {
   if (source) {
-    // Single source: read all, return last n.
+    // Single source: read all, return last n by seq.
     const events = await read(source);
+    events.sort((a, b) => a.seq - b.seq || (a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : 0));
     return events.slice(-n);
   }
 
-  // All sources: read all 4 logs, merge, sort ascending by ts, return last n.
+  // All sources: read all 4 logs, merge, sort ascending by seq (primary),
+  // ts ascending (tie-break only if seq missing), return last n.
   const sources: EventSource[] = ["git", "terminal", "editor", "system"];
   const all: ExecEvent[] = [];
   for (const src of sources) {
@@ -102,8 +113,8 @@ export async function tail(
     all.push(...events);
   }
 
-  // Sort ascending by timestamp.
-  all.sort((a, b) => (a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : 0));
+  // Sort by seq ascending (primary), ts ascending (tie-break).
+  all.sort((a, b) => a.seq - b.seq || (a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : 0));
 
   return all.slice(-n);
 }

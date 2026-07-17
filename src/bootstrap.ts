@@ -10,8 +10,9 @@ import { defaultConfig } from "./config.js";
 const SOURCES: EventSource[] = ["git", "terminal", "editor", "system"];
 
 /**
- * Create .executive/, its subdirs, empty jsonl files, and default config
- * if they don't already exist. Safe to call multiple times.
+ * Create .executive/, its subdirs, empty jsonl files, default config,
+ * and meta.json (seq counter) if they don't already exist.
+ * Safe to call multiple times.
  */
 export async function bootstrap(): Promise<void> {
   // Create directory tree (recursive, idempotent).
@@ -31,5 +32,11 @@ export async function bootstrap(): Promise<void> {
   const cfgPath = configPath();
   if (!existsSync(cfgPath)) {
     writeFileSync(cfgPath, JSON.stringify(defaultConfig(), null, 2) + "\n");
+  }
+
+  // Write meta.json (seq counter) only if it does not already exist.
+  const metaPath = execRoot() + "/meta.json";
+  if (!existsSync(metaPath)) {
+    writeFileSync(metaPath, JSON.stringify({ lastSeq: 0 }) + "\n");
   }
 }

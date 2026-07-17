@@ -6,6 +6,8 @@ export type EventSource = "git" | "terminal" | "editor" | "system";
 
 /** Base fields present on every event. */
 export interface BaseEvent {
+  /** Monotonic global sequence number, unique & increasing across all sources. Starts at 1. */
+  seq: number;
   /** Unique identifier (generated via crypto.randomUUID()). */
   id: string;
   /** ISO-8601 UTC timestamp, e.g. "2026-07-17T09:14:03.211Z". */

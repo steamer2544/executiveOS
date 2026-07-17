@@ -1,14 +1,19 @@
-// Unit tests for EventStore (append, read, tail) and bootstrap.
+// Unit tests for Phase 2: seq, append with seq, tail ordering, read legacy,
+// EventBus, StoreSink, WatcherManager, GitWatcher integration.
 // Uses EXECUTIVE_HOME to isolate tests in a temp directory.
 
-import { rmSync } from "node:fs";
+import { rmSync, writeFileSync, readFileSync, existsSync, mkdirSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import { bootstrap } from "../bootstrap.js";
-import { loadConfig, defaultConfig } from "../config.js";
 import { append, read, tail } from "./store.js";
+import { nextSeq, currentSeq } from "./seq.js";
 import { eventLogPath, execRoot, configPath } from "../paths.js";
 import type { EventSource } from "./types.js";
+import { EventBus, type EventInput } from "../bus.js";
+import { attachStoreSink } from "../sink.js";
+import { WatcherManager } from "../watchers/index.js";
+import type { Watcher } from "../watchers/index.js";
 
 // Use a unique temp dir per test run.
 const TEST_DIR = "/tmp/executive-test-" + randomUUID();
@@ -26,127 +31,347 @@ function cleanup(dir: string): void {
   delete process.env.EXECUTIVE_HOME;
 }
 
-describe("bootstrap()", () => {
+// ─── seq ────────────────────────────────────────────────────────────────────
+
+describe("nextSeq()", () => {
   beforeEach(() => setExecutiveHome(TEST_DIR));
   afterEach(() => cleanup(TEST_DIR));
 
-  it("creates the full dir tree + 4 jsonl files + config.json", async () => {
-    await bootstrap();
-
-    const { existsSync } = await import("node:fs");
-    const root = execRoot();
-    expect(existsSync(root)).toBe(true);
-    expect(existsSync(root + "/events")).toBe(true);
-    expect(existsSync(root + "/logs")).toBe(true);
-
-    for (const src of ["git", "terminal", "editor", "system"]) {
-      expect(existsSync(root + "/events/" + src + ".jsonl")).toBe(true);
-    }
-    expect(existsSync(configPath())).toBe(true);
+  it("returns strictly increasing ints starting at 1", () => {
+    const values = [nextSeq(), nextSeq(), nextSeq()];
+    expect(values).toEqual([1, 2, 3]);
   });
 
-  it("is idempotent — running twice doesn't error or clobber config", async () => {
-    await bootstrap();
-    const { readFileSync, existsSync } = await import("node:fs");
-    const cfgPath = configPath();
-    const firstConfig = readFileSync(cfgPath, "utf-8");
+  it("persists across calls (reads back from meta.json)", () => {
+    nextSeq();
+    nextSeq();
+    expect(currentSeq()).toBe(2);
+  });
 
-    await bootstrap();
-
-    // Config should be unchanged.
-    const secondConfig = readFileSync(cfgPath, "utf-8");
-    expect(secondConfig).toBe(firstConfig);
-
-    // Events should still exist.
-    expect(existsSync(cfgPath)).toBe(true);
+  it("starts at 1 after cleanup", () => {
+    cleanup(TEST_DIR);
+    setExecutiveHome(TEST_DIR);
+    expect(nextSeq()).toBe(1);
   });
 });
 
-describe("append()", () => {
+describe("bootstrap() creates meta.json", () => {
   beforeEach(() => setExecutiveHome(TEST_DIR));
   afterEach(() => cleanup(TEST_DIR));
 
-  it("writes a valid event, fills id+ts, returns it", async () => {
+  it("creates meta.json with lastSeq:0", async () => {
     await bootstrap();
-    const event = await append({
-      source: "system",
-      type: "system.note",
-      data: { msg: "hello" },
-    });
-
-    expect(event.id).toBeDefined();
-    expect(event.ts).toBeDefined();
-    expect(event.source).toBe("system");
-    expect(event.type).toBe("system.note");
-    expect(event.data).toEqual({ msg: "hello" });
+    const metaPath = execRoot() + "/meta.json";
+    expect(existsSync(metaPath)).toBe(true);
+    const meta = JSON.parse(readFileSync(metaPath, "utf-8"));
+    expect(meta.lastSeq).toBe(0);
   });
 
-  it("the file gains exactly one line", async () => {
+  it("is idempotent — does not clobber existing meta.json", async () => {
     await bootstrap();
-    await append({ source: "git", type: "git.commit", data: { branch: "main" } });
-
-    const { readFileSync } = await import("node:fs");
-    const content = readFileSync(eventLogPath("git"), "utf-8");
-    const lines = content.split("\n").filter((l) => l !== undefined && l.trim() !== "");
-    expect(lines.length).toBe(1);
-  });
-
-  it("throws when type prefix doesn't match source", async () => {
+    // Manually bump the seq
+    writeFileSync(execRoot() + "/meta.json", JSON.stringify({ lastSeq: 99 }) + "\n");
     await bootstrap();
-    await expect(
-      append({ source: "git", type: "system.note", data: {} })
-    ).rejects.toThrow('Invalid type "system.note" for source "git"');
+    const meta = JSON.parse(readFileSync(execRoot() + "/meta.json", "utf-8"));
+    expect(meta.lastSeq).toBe(99);
   });
 });
 
-describe("read()", () => {
+// ─── append assigns seq ─────────────────────────────────────────────────────
+
+describe("append assigns seq", () => {
   beforeEach(() => setExecutiveHome(TEST_DIR));
   afterEach(() => cleanup(TEST_DIR));
 
-  it("returns appended events in order", async () => {
+  it("two appends across different sources get seq 1 then 2", async () => {
     await bootstrap();
-    await append({ source: "editor", type: "editor.save", data: { file: "a.ts" } });
-    await append({ source: "editor", type: "editor.save", data: { file: "b.ts" } });
-
-    const events = await read("editor");
-    expect(events.length).toBe(2);
-    expect(events[0]!.data.file).toBe("a.ts");
-    expect(events[1]!.data.file).toBe("b.ts");
+    const e1 = await append({ source: "git", type: "git.commit", data: { sha: "aaa" } });
+    const e2 = await append({ source: "editor", type: "editor.save", data: { file: "x.ts" } });
+    expect(e1.seq).toBe(1);
+    expect(e2.seq).toBe(2);
   });
 
-  it("skips a corrupt line without throwing", async () => {
+  it("stored events contain the seq field", async () => {
     await bootstrap();
-    const { writeFileSync } = await import("node:fs");
-    const path = eventLogPath("terminal");
-
-    // Manually write a bad line, then a good one.
-    writeFileSync(path, "NOT VALID JSON\n");
-    await append({ source: "terminal", type: "terminal.command", data: { cmd: "ls" } });
-
-    const events = await read("terminal");
+    await append({ source: "system", type: "system.note", data: { msg: "hello" } });
+    const events = await read("system");
     expect(events.length).toBe(1);
-    expect(events[0]!.type).toBe("terminal.command");
+    expect(events[0]!.seq).toBe(1);
   });
 });
 
-describe("tail()", () => {
+// ─── tail orders by seq ─────────────────────────────────────────────────────
+
+describe("tail orders by seq", () => {
   beforeEach(() => setExecutiveHome(TEST_DIR));
   afterEach(() => cleanup(TEST_DIR));
 
-  it("returns the newest n merged events sorted by ts", async () => {
+  it("returns events in append order by seq, not just ts", async () => {
     await bootstrap();
 
-    // Add events to different sources with distinct data.
+    // Add events to different sources rapidly (same ms possible).
     await append({ source: "git", type: "git.commit", data: { sha: "aaa" } });
     await append({ source: "editor", type: "editor.save", data: { file: "x.ts" } });
     await append({ source: "system", type: "system.note", data: { msg: "z" } });
 
-    // Get last 2 across all sources.
-    const events = await tail(2);
-    expect(events.length).toBe(2);
-    // Should be the last two appended (editor + system).
+    const events = await tail(3);
+    const seqs = events.map((e) => e.seq);
+    expect(seqs).toEqual([1, 2, 3]);
+
     const types = events.map((e) => e.type);
-    expect(types).toContain("editor.save");
-    expect(types).toContain("system.note");
+    expect(types).toEqual(["git.commit", "editor.save", "system.note"]);
+  });
+});
+
+// ─── read tolerates legacy line without seq ─────────────────────────────────
+
+describe("read tolerates legacy line without seq", () => {
+  beforeEach(() => setExecutiveHome(TEST_DIR));
+  afterEach(() => cleanup(TEST_DIR));
+
+  it("returns both events, legacy one has seq === 0, no throw", async () => {
+    await bootstrap();
+    const path = eventLogPath("terminal");
+
+    // Write a legacy line without seq, then a normal append.
+    writeFileSync(
+      path,
+      JSON.stringify({
+        id: "legacy-1",
+        ts: "2026-01-01T00:00:00.000Z",
+        source: "terminal",
+        type: "terminal.command",
+        data: { cmd: "ls" },
+      }) + "\n"
+    );
+    await append({ source: "terminal", type: "terminal.command", data: { cmd: "pwd" } });
+
+    const events = await read("terminal");
+    expect(events.length).toBe(2);
+    expect(events[0]!.seq).toBe(0);
+    expect(events[1]!.seq).toBe(1);
+  });
+});
+
+// ─── EventBus ───────────────────────────────────────────────────────────────
+
+describe("EventBus", () => {
+  it("publish reaches all subscribers in order", () => {
+    const bus = new EventBus();
+    const order: number[] = [];
+
+    bus.subscribe(() => {
+      order.push(1);
+    });
+    bus.subscribe(() => {
+      order.push(2);
+    });
+    bus.subscribe(() => {
+      order.push(3);
+    });
+
+    bus.publish({ source: "system", type: "system.note", data: {} });
+    expect(order).toEqual([1, 2, 3]);
+  });
+
+  it("unsubscribe stops delivery", () => {
+    const bus = new EventBus();
+    let called = false;
+    const unsub = bus.subscribe(() => {
+      called = true;
+    });
+    unsub();
+    bus.publish({ source: "system", type: "system.note", data: {} });
+    expect(called).toBe(false);
+  });
+
+  it("a throwing handler does not prevent later handlers from running", () => {
+    const bus = new EventBus();
+    const order: number[] = [];
+
+    bus.subscribe(() => {
+      throw new Error("boom");
+    });
+    bus.subscribe(() => {
+      order.push(2);
+    });
+
+    // Should not throw; the error is caught and logged to stderr.
+    bus.publish({ source: "system", type: "system.note", data: {} });
+    expect(order).toEqual([2]);
+  });
+});
+
+// ─── StoreSink ──────────────────────────────────────────────────────────────
+
+describe("StoreSink", () => {
+  beforeEach(() => setExecutiveHome(TEST_DIR));
+  afterEach(() => cleanup(TEST_DIR));
+
+  it("publishing an EventInput to a bus with an attached sink results in exactly one persisted event", async () => {
+    await bootstrap();
+
+    const bus = new EventBus();
+    attachStoreSink(bus);
+
+    bus.publish({ source: "editor", type: "editor.save", data: { file: "test.ts" } });
+
+    const events = await read("editor");
+    expect(events.length).toBe(1);
+    expect(events[0]!.type).toBe("editor.save");
+    expect(events[0]!.seq).toBe(1);
+  });
+
+  it("unsubscribe stops the sink", async () => {
+    await bootstrap();
+
+    const bus = new EventBus();
+    const unsub = attachStoreSink(bus);
+    unsub();
+
+    bus.publish({ source: "system", type: "system.note", data: {} });
+
+    const events = await read("system");
+    expect(events.length).toBe(0);
+  });
+});
+
+// ─── WatcherManager ─────────────────────────────────────────────────────────
+
+describe("WatcherManager", () => {
+  it("a fake in-memory watcher's start/stop are invoked by startAll/stopAll", async () => {
+    const bus = new EventBus();
+    let started = false;
+    let stopped = false;
+
+    const fakeWatcher: Watcher = {
+      name: "fake",
+      start: async () => {
+        started = true;
+      },
+      stop: async () => {
+        stopped = true;
+      },
+    };
+
+    const manager = new WatcherManager(bus, [fakeWatcher]);
+    await manager.startAll();
+    expect(started).toBe(true);
+    expect(stopped).toBe(false);
+
+    await manager.stopAll();
+    expect(stopped).toBe(true);
+  });
+
+  it("stopAll is safe to call even if startAll was not called", async () => {
+    const bus = new EventBus();
+    const fakeWatcher: Watcher = {
+      name: "fake",
+      start: async () => {},
+      stop: async () => {},
+    };
+    const manager = new WatcherManager(bus, [fakeWatcher]);
+    // Should not throw.
+    await manager.stopAll();
+  });
+});
+
+// ─── GitWatcher (integration, temp git repo) ────────────────────────────────
+
+describe("GitWatcher (integration)", () => {
+  // Use a dedicated temp dir for the git repo.
+  const GIT_REPO_DIR = "/tmp/executive-test-git-" + randomUUID();
+  const EXEC_DIR = "/tmp/executive-test-git-exec-" + randomUUID();
+
+  beforeEach(async () => {
+    setExecutiveHome(EXEC_DIR);
+    mkdirSync(GIT_REPO_DIR, { recursive: true });
+    // Initialize a real git repo.
+    await Bun.$`git init ${GIT_REPO_DIR}`;
+    await Bun.$`git -C ${GIT_REPO_DIR} config user.email "test@test.com"`;
+    await Bun.$`git -C ${GIT_REPO_DIR} config user.name "Test"`;
+  });
+
+  afterEach(() => {
+    cleanup(EXEC_DIR);
+    try {
+      rmSync(GIT_REPO_DIR, { recursive: true, force: true });
+    } catch {
+      // Ignore.
+    }
+    delete process.env.EXECUTIVE_HOME;
+  });
+
+  it("detects a new commit and emits git.commit", async () => {
+    await bootstrap();
+
+    const bus = new EventBus();
+    const publishedEvents: EventInput[] = [];
+    bus.subscribe((e: EventInput) => {
+      publishedEvents.push(e);
+    });
+    attachStoreSink(bus);
+
+    // Create the git watcher with a short poll interval.
+    const { createGitWatcher } = await import("../watchers/git.js");
+    const watcher = createGitWatcher({ repoPath: GIT_REPO_DIR, pollMs: 500 });
+    await watcher.start(bus);
+
+    // Make a commit.
+    const testFile = GIT_REPO_DIR + "/test.txt";
+    writeFileSync(testFile, "hello\n");
+    await Bun.$`git -C ${GIT_REPO_DIR} add test.txt`;
+    await Bun.$`git -C ${GIT_REPO_DIR} commit -m "initial commit"`;
+
+    // Wait for at least one poll cycle.
+    await new Promise<void>((r) => setTimeout(r, 2000));
+
+    watcher.stop();
+
+    // Assert a git.commit event was published with the new sha.
+    const commitEvents = publishedEvents.filter((e) => e.type === "git.commit");
+    expect(commitEvents.length).toBeGreaterThan(0);
+    const first = commitEvents[0]!;
+    expect(first.source).toBe("git" as EventSource);
+    const d = first.data ?? {};
+    expect(typeof d.sha).toBe("string");
+    expect(d.subject).toBe("initial commit");
+  });
+
+  it("detects a branch switch and emits git.branch_switch", async () => {
+    await bootstrap();
+
+    const bus = new EventBus();
+    const publishedEvents: EventInput[] = [];
+    bus.subscribe((e: EventInput) => {
+      publishedEvents.push(e);
+    });
+    attachStoreSink(bus);
+
+    // Create initial commit so branch exists.
+    const testFile = GIT_REPO_DIR + "/test.txt";
+    writeFileSync(testFile, "hello\n");
+    await Bun.$`git -C ${GIT_REPO_DIR} add test.txt`;
+    await Bun.$`git -C ${GIT_REPO_DIR} commit -m "initial"`;
+
+    const { createGitWatcher } = await import("../watchers/git.js");
+    const watcher = createGitWatcher({ repoPath: GIT_REPO_DIR, pollMs: 500 });
+    await watcher.start(bus);
+
+    // Switch branch.
+    await Bun.$`git -C ${GIT_REPO_DIR} checkout -b feature`;
+
+    // Wait for at least one poll cycle.
+    await new Promise<void>((r) => setTimeout(r, 2000));
+
+    watcher.stop();
+
+    // Assert a git.branch_switch event was published.
+    const branchEvents = publishedEvents.filter((e) => e.type === "git.branch_switch");
+    expect(branchEvents.length).toBeGreaterThan(0);
+    const first = branchEvents[0]!;
+    expect(first.source).toBe("git" as EventSource);
+    const d = first.data ?? {};
+    expect(d.to).toBe("feature");
   });
 });

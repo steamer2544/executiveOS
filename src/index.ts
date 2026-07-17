@@ -1,11 +1,18 @@
 // CLI entry point for ExecutiveOS.
 // Parse process.argv hand-rolled (no CLI framework).
 
+import { existsSync, writeFileSync } from "node:fs";
 import { bootstrap } from "./bootstrap.js";
 import { append, read, tail } from "./events/store.js";
 import type { EventSource } from "./events/types.js";
 import { isValidType } from "./events/types.js";
-import { execRoot } from "./paths.js";
+import { execRoot, logsDir } from "./paths.js";
+import { EventBus } from "./bus.js";
+import { attachStoreSink } from "./sink.js";
+import { WatcherManager } from "./watchers/index.js";
+import { createGitWatcher } from "./watchers/git.js";
+import { createFsWatcher } from "./watchers/fs.js";
+import { loadConfig } from "./config.js";
 
 const VALID_SOURCES: EventSource[] = ["git", "terminal", "editor", "system"];
 
@@ -19,6 +26,7 @@ Commands:
   init                                          Initialize .executive/ directory
   emit <source> <type> [json-data]              Append an event
   tail [n] [source]                             Show last n events
+  watch                                         Start the watcher daemon
   --help                                        Show this help
 
 Sources: git, terminal, editor, system
@@ -28,7 +36,17 @@ Examples:
   bun run src/index.ts emit system system.note '{"msg":"hello"}'
   bun run src/index.ts tail 5
   bun run src/index.ts tail 10 git
+  bun run src/index.ts watch
 `);
+}
+
+/** Format a short display string for an event. */
+function formatEventLine(e: { seq: number; ts: string; type: string; data: Record<string, unknown> }): string {
+  const shortData = Object.entries(e.data)
+    .slice(0, 2)
+    .map(([k, v]) => k + "=" + (typeof v === "string" ? v : JSON.stringify(v)))
+    .join(" ");
+  return "#" + e.seq + " " + e.ts + " " + e.type + (shortData ? " " + shortData : "");
 }
 
 async function main(): Promise<void> {
@@ -44,7 +62,6 @@ async function main(): Promise<void> {
   switch (command) {
     case "init": {
       await bootstrap();
-      // Print the resolved .executive path
       process.stdout.write("initialized: " + execRoot() + "\n");
       process.exit(0);
       break;
@@ -60,7 +77,6 @@ async function main(): Promise<void> {
       const type = args[2]!;
       const rawData = args[3] ?? "{}";
 
-      // Validate source.
       if (!VALID_SOURCES.includes(source)) {
         process.stderr.write(
           'Error: invalid source "' +
@@ -72,7 +88,6 @@ async function main(): Promise<void> {
         process.exit(1);
       }
 
-      // Validate type prefix.
       if (!isValidType(source, type)) {
         process.stderr.write(
           'Error: invalid type "' +
@@ -86,7 +101,6 @@ async function main(): Promise<void> {
         process.exit(1);
       }
 
-      // Parse optional json-data.
       let data: Record<string, unknown> = {};
       try {
         data = JSON.parse(rawData);
@@ -128,6 +142,71 @@ async function main(): Promise<void> {
         process.stdout.write(JSON.stringify(event) + "\n");
       }
       process.exit(0);
+      break;
+    }
+
+    case "watch": {
+      // Daemon mode: bootstrap → EventBus → StoreSink → Watchers → run until SIGINT.
+      await bootstrap();
+
+      const config = loadConfig();
+      const bus = new EventBus();
+      attachStoreSink(bus);
+
+      // Build enabled watchers from config.
+      const watchers = [];
+      const activeNames: string[] = [];
+
+      const watchConfig = config.watch ?? { git: {}, fs: {} };
+      const gitConfig = watchConfig.git ?? {};
+      const fsConfig = watchConfig.fs ?? {};
+
+      if (gitConfig.enabled !== false) {
+        const watcher = createGitWatcher({
+          repoPath: gitConfig.repoPath ?? process.cwd(),
+          pollMs: gitConfig.pollMs ?? 5000,
+        });
+        watchers.push(watcher);
+        activeNames.push("git");
+      }
+
+      if (fsConfig.enabled !== false) {
+        const watcher = createFsWatcher({
+          paths: fsConfig.paths ?? [process.cwd() + "/src"],
+          debounceMs: fsConfig.debounceMs ?? 300,
+        });
+        watchers.push(watcher);
+        activeNames.push("fs");
+      }
+
+      const manager = new WatcherManager(bus, watchers);
+      await manager.startAll();
+
+      // Also write to a rolling log file.
+      const dateStr = new Date().toISOString().slice(0, 10).replace(/-/g, "");
+      const logFilePath = logsDir() + "/watch-" + dateStr + ".log";
+
+      process.stdout.write("ExecutiveOS watch started. Active watchers: " + activeNames.join(", ") + "\n");
+      process.stdout.write("Runtime root: " + execRoot() + "\n");
+
+      // Wait for SIGINT.
+      process.on("SIGINT", async () => {
+        process.stdout.write("\nStopping watchers...\n");
+        await manager.stopAll();
+        // Write final line to log file
+        try {
+          writeFileSync(logFilePath, "[stopped]\n", { flag: "a" });
+        } catch {
+          // Ignore log write errors.
+        }
+        process.stdout.write("stopped\n");
+        process.exit(0);
+      });
+
+      // Keep the process alive.
+      await new Promise<void>(() => {
+        // This promise never resolves; we rely on SIGINT to exit.
+      });
       break;
     }
 
