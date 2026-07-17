@@ -69,8 +69,18 @@ docs/scopes/           # per-phase specs (the contract handed to the implementer
   the interval), wired per-event stdout/log output through `attachStoreSink(onPersist)`, made the
   fs ignore segment-aware. **Windows caveat:** graceful SIGINT (exit 0) only on real console Ctrl-C;
   programmatic signals hard-terminate (process still exits, doesn't hang).
-- **Phase 3 — next**: State Builder (`state.json`/`context.json`, rebuilt every ~30s). No terminal/
-  github/calendar watchers, no planner, no LLM yet.
+- **Phase 3 — DONE** (qwen impl + architect review, this commit): rule-based **State Builder**.
+  `buildState(now?)` reads the 4 JSONL logs, sorts by `seq`, and derives a compact **`state.json`**
+  (currentProject/Task/deadline, currentFile + recentFiles≤5, git.branch/lastCommit, tests,
+  blocked/reason, activity idle) + a larger **`context.json`** (summary + embedded state + last 20
+  events seq-asc). Rule: **newest event (highest `seq`) wins** per field. `writeState()` persists
+  atomically (temp+rename). New `build-state` CLI + periodic rebuild wired into the `watch` daemon
+  (every `state.intervalMs`, default 30000, plus one at startup; `clearInterval` on SIGINT). Config
+  gains `state.intervalMs` (backward-compatible merge). 30 passing tests (12 new). Reviewed live:
+  scripted `emit`→`build-state` field-exact, gitignore verified. Spec:
+  `docs/scopes/phase-3-state-builder.md`. No qwen defects found (only harmless redundant fallback in
+  the blocked/unblocked derivation — correct, left as-is).
+- **Phase 4 — next**: rule-based Planner ("highest-value action now?"). Still no LLM.
 
 ## Commands
 
@@ -78,6 +88,7 @@ docs/scopes/           # per-phase specs (the contract handed to the implementer
 bun run src/index.ts init                          # create .executive/ (+ meta.json)
 bun run src/index.ts emit <source> <type> [json]   # append an event (gets a seq)
 bun run src/index.ts tail [n] [source]             # show last n events (seq order)
+bun run src/index.ts build-state                   # derive state.json + context.json from events
 bun run src/index.ts watch                          # start the watcher daemon (Ctrl-C to stop)
 bun run typecheck                                  # tsc --noEmit
 bun test                                           # unit tests

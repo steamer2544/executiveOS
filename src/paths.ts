@@ -29,3 +29,13 @@ export function logsDir(): string {
 export function eventLogPath(source: EventSource): string {
   return eventsDir() + "/" + source + ".jsonl";
 }
+
+/** Absolute path to .executive/state.json. */
+export function statePath(): string {
+  return execRoot() + "/state.json";
+}
+
+/** Absolute path to .executive/context.json. */
+export function contextPath(): string {
+  return execRoot() + "/context.json";
+}

@@ -23,6 +23,10 @@ export interface Config {
       debounceMs?: number;
     };
   };
+  /** State builder configuration (defaults applied when absent). */
+  state?: {
+    intervalMs?: number;
+  };
 }
 
 /** Default configuration values. */
@@ -42,6 +46,9 @@ export function defaultConfig(): Config {
         paths: [process.cwd() + "/src"],
         debounceMs: 300,
       },
+    },
+    state: {
+      intervalMs: 30000,
     },
   };
 }
@@ -91,6 +98,12 @@ export function loadConfig(): Config {
   parsed.watch.fs.enabled = parsed.watch.fs.enabled ?? defaults.watch!.fs.enabled!;
   parsed.watch.fs.paths = parsed.watch.fs.paths ?? defaults.watch!.fs.paths!;
   parsed.watch.fs.debounceMs = parsed.watch.fs.debounceMs ?? defaults.watch!.fs.debounceMs!;
+
+  // Merge missing state fields with defaults.
+  if (!parsed.state) {
+    parsed.state = defaults.state!;
+  }
+  parsed.state.intervalMs = parsed.state.intervalMs ?? defaults.state!.intervalMs!;
 
   return parsed;
 }

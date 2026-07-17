@@ -6,13 +6,14 @@ import { bootstrap } from "./bootstrap.js";
 import { append, read, tail } from "./events/store.js";
 import type { EventSource } from "./events/types.js";
 import { isValidType } from "./events/types.js";
-import { execRoot, logsDir } from "./paths.js";
+import { execRoot, logsDir, statePath, contextPath } from "./paths.js";
 import { EventBus } from "./bus.js";
 import { attachStoreSink } from "./sink.js";
 import { WatcherManager } from "./watchers/index.js";
 import { createGitWatcher } from "./watchers/git.js";
 import { createFsWatcher } from "./watchers/fs.js";
 import { loadConfig } from "./config.js";
+import { buildState, writeState } from "./state/builder.js";
 
 const VALID_SOURCES: EventSource[] = ["git", "terminal", "editor", "system"];
 
@@ -26,6 +27,7 @@ Commands:
   init                                          Initialize .executive/ directory
   emit <source> <type> [json-data]              Append an event
   tail [n] [source]                             Show last n events
+  build-state                                   Build state.json and context.json
   watch                                         Start the watcher daemon
   --help                                        Show this help
 
@@ -145,6 +147,20 @@ async function main(): Promise<void> {
       break;
     }
 
+    case "build-state": {
+      await bootstrap();
+      try {
+        const built = buildState();
+        writeState(built);
+        process.stdout.write(statePath() + " — " + built.context.summary + "\n");
+        process.exit(0);
+      } catch (err) {
+        process.stderr.write("Error: " + (err as Error).message + "\n");
+        process.exit(1);
+      }
+      break;
+    }
+
     case "watch": {
       // Daemon mode: bootstrap → EventBus → StoreSink → Watchers → run until SIGINT.
       await bootstrap();
@@ -200,9 +216,34 @@ async function main(): Promise<void> {
       process.stdout.write("ExecutiveOS watch started. Active watchers: " + activeNames.join(", ") + "\n");
       process.stdout.write("Runtime root: " + execRoot() + "\n");
 
-      // Wait for SIGINT.
+      // ── Periodic state rebuild ───────────────────────────────────────────
+      const stateIntervalMs = config.state?.intervalMs ?? 30000;
+
+      // One rebuild immediately at startup.
+      try {
+        const built = buildState();
+        writeState(built);
+        process.stdout.write(
+          "State rebuild (interval: " + stateIntervalMs + "ms) — " + built.context.summary + "\n"
+        );
+      } catch (err) {
+        process.stderr.write("State rebuild failed at startup: " + (err as Error).message + "\n");
+      }
+
+      // Rebuild every intervalMs.
+      const rebuildTimer = setInterval(() => {
+        try {
+          const built = buildState();
+          writeState(built);
+        } catch (err) {
+          process.stderr.write("State rebuild failed: " + (err as Error).message + "\n");
+        }
+      }, stateIntervalMs);
+
+      // ── Wait for SIGINT ──────────────────────────────────────────────────
       process.on("SIGINT", async () => {
         process.stdout.write("\nStopping watchers...\n");
+        clearInterval(rebuildTimer);
         await manager.stopAll();
         // Write final line to log file
         try {

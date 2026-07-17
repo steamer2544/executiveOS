@@ -7,6 +7,8 @@ bun.lockb
 .executive/events/*.jsonl
 .executive/*.sqlite
 .executive/*.db
+.executive/state.json
+.executive/context.json
 
 # Build output
 dist/
