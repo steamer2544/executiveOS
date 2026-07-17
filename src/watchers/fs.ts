@@ -19,18 +19,13 @@ export function createFsWatcher(config: FsWatcherConfig): Watcher {
   const watchers: ReturnType<typeof watch>[] = [];
 
   function shouldIgnore(filePath: string): boolean {
-    // Check if path is under any ignored directory
-    for (const ignoreDir of IGNORE_DIRS) {
-      if (
-        filePath.includes("/" + ignoreDir + "/") ||
-        filePath.includes("/" + ignoreDir) ||
-        filePath.includes("\\" + ignoreDir + "\\") ||
-        filePath.includes("\\" + ignoreDir)
-      ) {
-        return true;
-      }
-    }
-    return false;
+    // Segment-aware match: split on both separators and ignore the path if ANY
+    // segment is an ignored dir. This catches ".executive/events/git.jsonl"
+    // (relative filename from fs.watch, no leading separator) as well as
+    // absolute paths — preventing a feedback loop where writing the event log
+    // would itself trigger an editor.save.
+    const segments = filePath.split(/[/\\]/);
+    return segments.some((seg) => IGNORE_DIRS.includes(seg));
   }
 
   function emitDebounced(filePath: string, changeType: string, b: EventBus): void {
@@ -60,10 +55,11 @@ export function createFsWatcher(config: FsWatcherConfig): Watcher {
     async start(bus: EventBus): Promise<void> {
       for (const dir of config.paths) {
         try {
-          const watcher = watch(dir, { recursive: true }, (_eventType, filename) => {
+          const watcher = watch(dir, { recursive: true }, (eventType, filename) => {
             if (!filename) return;
             const filePath = typeof filename === "string" ? filename : String(filename);
-            emitDebounced(filePath, "change", bus);
+            // eventType is "rename" | "change" from fs.watch.
+            emitDebounced(filePath, eventType, bus);
           });
           watchers.push(watcher);
         } catch (err) {

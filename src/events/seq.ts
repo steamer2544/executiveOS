@@ -55,7 +55,7 @@ export function nextSeq(): number {
 
   // Ensure the parent directory exists (tests may call nextSeq without bootstrap).
   const parentDir = path.substring(0, path.lastIndexOf("/"));
-  if (parentDir && !existsSync(parentDir)) {
+  if (parentDir) {
     mkdirSync(parentDir, { recursive: true });
   }
 

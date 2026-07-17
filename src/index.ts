@@ -151,7 +151,22 @@ async function main(): Promise<void> {
 
       const config = loadConfig();
       const bus = new EventBus();
-      attachStoreSink(bus);
+
+      // Rolling log file for full event mirroring.
+      const dateStr = new Date().toISOString().slice(0, 10).replace(/-/g, "");
+      const logFilePath = logsDir() + "/watch-" + dateStr + ".log";
+
+      // The single persisting sink. On each persisted event (now carrying its
+      // seq), print a concise line to stdout and mirror the full event to the
+      // rolling log file.
+      attachStoreSink(bus, (stored) => {
+        process.stdout.write(formatEventLine(stored) + "\n");
+        try {
+          writeFileSync(logFilePath, JSON.stringify(stored) + "\n", { flag: "a" });
+        } catch {
+          // Ignore log write errors — never crash the daemon over logging.
+        }
+      });
 
       // Build enabled watchers from config.
       const watchers = [];
@@ -181,10 +196,6 @@ async function main(): Promise<void> {
 
       const manager = new WatcherManager(bus, watchers);
       await manager.startAll();
-
-      // Also write to a rolling log file.
-      const dateStr = new Date().toISOString().slice(0, 10).replace(/-/g, "");
-      const logFilePath = logsDir() + "/watch-" + dateStr + ".log";
 
       process.stdout.write("ExecutiveOS watch started. Active watchers: " + activeNames.join(", ") + "\n");
       process.stdout.write("Runtime root: " + execRoot() + "\n");
