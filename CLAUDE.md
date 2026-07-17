@@ -80,7 +80,22 @@ docs/scopes/           # per-phase specs (the contract handed to the implementer
   scripted `emit`→`build-state` field-exact, gitignore verified. Spec:
   `docs/scopes/phase-3-state-builder.md`. No qwen defects found (only harmless redundant fallback in
   the blocked/unblocked derivation — correct, left as-is).
-- **Phase 4 — next**: rule-based Planner ("highest-value action now?"). Still no LLM.
+- **Phase 4 — DONE** (qwen impl + architect review, this commit): rule-based **Planner**. `plan(state,
+  context?)` (in `src/planner/`) reads the Phase 3 **`State` only** — never the raw event logs, so new
+  watchers plug in without touching it — and answers *"highest-value action now?"* via an ordered rule
+  set (`src/planner/rules.ts`): R1 `fix_tests` (tests failing, p100, conf0.97→**act**), R2
+  `resolve_block` (p90→ask), R3 `review_deadline` (p70→ask), R4 `resume_task` (idle+task, p40→ask).
+  Emits a ranked **`plan.json`** (`topAction` + `actions[]` priority-desc + provenance `basedOnState`).
+  **Decides but never executes** (no git/test/commit/LLM — that's Phase 5). Guardrail is a single
+  unbypassable `applyGuardrail()`: `disposition = (!forbidden && confidence > 0.95) ? "act" : "ask"`;
+  the `forbidden` flag (relationships/morality/spending/life-goals) forces `ask`. New `plan` CLI +
+  plan rebuild wired after each state rebuild in the `watch` daemon (no new timer). 45 passing tests
+  (15 new). Reviewed live: `plan` field-exact (clean→null, failing+deadline→`fix_tests/act` +
+  `review_deadline/ask`), watch plan-refresh, gitignore. Spec: `docs/scopes/phase-4-planner.md`. Only
+  cleanup: removed an unused `dirname` import.
+- **Phase 5 — next**: Claude Worker — the LLM finally enters, called by the Planner to *carry out* an
+  `act` action (read repo / patch / test / commit) with assembled context. First phase that touches
+  an LLM.
 
 ## Commands
 
@@ -89,6 +104,7 @@ bun run src/index.ts init                          # create .executiveOS/ (+ met
 bun run src/index.ts emit <source> <type> [json]   # append an event (gets a seq)
 bun run src/index.ts tail [n] [source]             # show last n events (seq order)
 bun run src/index.ts build-state                   # derive state.json + context.json from events
+bun run src/index.ts plan                          # build state + derive plan.json (rule-based)
 bun run src/index.ts watch                          # start the watcher daemon (Ctrl-C to stop)
 bun run typecheck                                  # tsc --noEmit
 bun test                                           # unit tests

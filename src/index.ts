@@ -6,7 +6,7 @@ import { bootstrap } from "./bootstrap.js";
 import { append, read, tail } from "./events/store.js";
 import type { EventSource } from "./events/types.js";
 import { isValidType } from "./events/types.js";
-import { execRoot, logsDir, statePath, contextPath } from "./paths.js";
+import { execRoot, logsDir, statePath, contextPath, planPath } from "./paths.js";
 import { EventBus } from "./bus.js";
 import { attachStoreSink } from "./sink.js";
 import { WatcherManager } from "./watchers/index.js";
@@ -14,6 +14,7 @@ import { createGitWatcher } from "./watchers/git.js";
 import { createFsWatcher } from "./watchers/fs.js";
 import { loadConfig } from "./config.js";
 import { buildState, writeState } from "./state/builder.js";
+import { plan, writePlan } from "./planner/planner.js";
 
 const VALID_SOURCES: EventSource[] = ["git", "terminal", "editor", "system"];
 
@@ -28,6 +29,7 @@ Commands:
   emit <source> <type> [json-data]              Append an event
   tail [n] [source]                             Show last n events
   build-state                                   Build state.json and context.json
+  plan                                          Build state + plan.json
   watch                                         Start the watcher daemon
   --help                                        Show this help
 
@@ -161,6 +163,22 @@ async function main(): Promise<void> {
       break;
     }
 
+    case "plan": {
+      await bootstrap();
+      try {
+        const built = buildState();
+        writeState(built);
+        const p = plan(built.state, built.context);
+        writePlan(p);
+        process.stdout.write(planPath() + " — " + p.summary + "\n");
+        process.exit(0);
+      } catch (err) {
+        process.stderr.write("Error: " + (err as Error).message + "\n");
+        process.exit(1);
+      }
+      break;
+    }
+
     case "watch": {
       // Daemon mode: bootstrap → EventBus → StoreSink → Watchers → run until SIGINT.
       await bootstrap();
@@ -223,8 +241,10 @@ async function main(): Promise<void> {
       try {
         const built = buildState();
         writeState(built);
+        const p = plan(built.state, built.context);
+        writePlan(p);
         process.stdout.write(
-          "State rebuild (interval: " + stateIntervalMs + "ms) — " + built.context.summary + "\n"
+          "State rebuild (interval: " + stateIntervalMs + "ms) — " + built.context.summary + " | Plan: " + p.summary + "\n"
         );
       } catch (err) {
         process.stderr.write("State rebuild failed at startup: " + (err as Error).message + "\n");
@@ -235,6 +255,13 @@ async function main(): Promise<void> {
         try {
           const built = buildState();
           writeState(built);
+          try {
+            const p = plan(built.state, built.context);
+            writePlan(p);
+          } catch (planErr) {
+            // Plan failure never crashes the daemon.
+            process.stderr.write("Plan rebuild failed: " + (planErr as Error).message + "\n");
+          }
         } catch (err) {
           process.stderr.write("State rebuild failed: " + (err as Error).message + "\n");
         }

@@ -39,3 +39,8 @@ export function statePath(): string {
 export function contextPath(): string {
   return execRoot() + "/context.json";
 }
+
+/** Absolute path to .executiveOS/plan.json. */
+export function planPath(): string {
+  return execRoot() + "/plan.json";
+}
