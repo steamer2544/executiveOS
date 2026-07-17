@@ -60,16 +60,25 @@ docs/scopes/           # per-phase specs (the contract handed to the implementer
 - **Phase 1 — DONE** (`0484d1f`): runtime skeleton. JSONL EventStore (`append`/`read`/`tail`),
   idempotent `bootstrap`, config, hand-rolled CLI (`init`/`emit`/`tail`), 8 passing tests.
   Spec: `docs/scopes/phase-1-runtime.md`.
-- **Phase 2 — next**: Event Bus + real watchers (git/terminal/editor/system) emitting events
-  automatically. Add a monotonic **`seq`** field to the event model to fix `tail()` ordering when
-  timestamps collide at millisecond resolution.
+- **Phase 2 — DONE** (qwen impl `687a034`, architect review+fixes `2bc3dfc`): monotonic **`seq`**
+  (in `.executive/meta.json`) fixes `tail()` ordering; in-process **EventBus** + **StoreSink**;
+  **Watcher/WatcherManager**; poll-based **GitWatcher** (`git.commit`/`git.branch_switch`) and
+  **FsWatcher** (`editor.save`, ignores `.git`/`node_modules`/`.executive`); `watch` daemon.
+  18 passing tests. Spec: `docs/scopes/phase-2-eventbus-watchers.md`. Reviewed live against a temp
+  git repo. Fixes: rewrote GitWatcher (was `Bun.spawnAsync` + module state + `stop()` not clearing
+  the interval), wired per-event stdout/log output through `attachStoreSink(onPersist)`, made the
+  fs ignore segment-aware. **Windows caveat:** graceful SIGINT (exit 0) only on real console Ctrl-C;
+  programmatic signals hard-terminate (process still exits, doesn't hang).
+- **Phase 3 — next**: State Builder (`state.json`/`context.json`, rebuilt every ~30s). No terminal/
+  github/calendar watchers, no planner, no LLM yet.
 
-## Commands (Phase 1)
+## Commands
 
 ```
-bun run src/index.ts init                          # create .executive/
-bun run src/index.ts emit <source> <type> [json]   # append an event
-bun run src/index.ts tail [n] [source]             # show last n events
+bun run src/index.ts init                          # create .executive/ (+ meta.json)
+bun run src/index.ts emit <source> <type> [json]   # append an event (gets a seq)
+bun run src/index.ts tail [n] [source]             # show last n events (seq order)
+bun run src/index.ts watch                          # start the watcher daemon (Ctrl-C to stop)
 bun run typecheck                                  # tsc --noEmit
 bun test                                           # unit tests
 ```
