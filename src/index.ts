@@ -1,12 +1,12 @@
 // CLI entry point for ExecutiveOS.
 // Parse process.argv hand-rolled (no CLI framework).
 
-import { existsSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { bootstrap } from "./bootstrap.js";
 import { append, read, tail } from "./events/store.js";
 import type { EventSource } from "./events/types.js";
 import { isValidType } from "./events/types.js";
-import { execRoot, logsDir, statePath, contextPath, planPath, proposalPath } from "./paths.js";
+import { execRoot, logsDir, statePath, contextPath, planPath, proposalPath, execReportPath } from "./paths.js";
 import { EventBus } from "./bus.js";
 import { attachStoreSink } from "./sink.js";
 import { WatcherManager } from "./watchers/index.js";
@@ -16,6 +16,7 @@ import { loadConfig } from "./config.js";
 import { buildState, writeState } from "./state/builder.js";
 import { plan, writePlan } from "./planner/planner.js";
 import { runWorker, writeProposal } from "./worker/orchestrator.js";
+import { applyChangeSet, writeReport } from "./executor/executor.js";
 
 const VALID_SOURCES: EventSource[] = ["git", "terminal", "editor", "system"];
 
@@ -33,6 +34,7 @@ Commands:
   plan                                          Build state + plan.json
   work                                          Build state + plan, then run the Worker if actionable
   watch                                         Start the watcher daemon
+  execute <changeset.json> [--apply]            Apply a ChangeSet on an isolated branch (dry-run without --apply)
   --help                                        Show this help
 
 Sources: git, terminal, editor, system
@@ -337,6 +339,53 @@ async function main(): Promise<void> {
       await new Promise<void>(() => {
         // This promise never resolves; we rely on SIGINT to exit.
       });
+      break;
+    }
+
+    case "execute": {
+      if (args.length < 2) {
+        process.stderr.write("Error: execute requires <changeset.json>\n");
+        process.exit(1);
+      }
+
+      const changesetPath = args[1]!;
+      let rawCs: string;
+      try {
+        rawCs = readFileSync(changesetPath, "utf-8");
+      } catch {
+        process.stderr.write("Error: cannot read changeset file: " + changesetPath + "\n");
+        process.exit(1);
+      }
+
+      let cs: { id: string; title: string; ops: unknown[]; test: unknown; commitMessage: string };
+      try {
+        cs = JSON.parse(rawCs);
+      } catch {
+        process.stderr.write("Error: malformed JSON in changeset file\n");
+        process.exit(1);
+      }
+
+      await bootstrap();
+      const config = loadConfig();
+      const apply = args.includes("--apply");
+
+      const report = applyChangeSet(cs as any, { apply, repoRoot: process.cwd(), config });
+      writeReport(report);
+
+      // Print concise summary
+      process.stdout.write("mode: " + report.mode + "\n");
+      process.stdout.write("ok: " + report.ok + "\n");
+      for (const msg of report.messages) {
+        process.stdout.write("  " + msg + "\n");
+      }
+      for (const op of report.plannedOps) {
+        process.stdout.write(
+          "  " + op.op + " " + op.path + " — " + op.effect + (op.wouldSucceed ? "" : " (BLOCKED)") + "\n"
+        );
+      }
+      process.stdout.write("report: " + execReportPath() + "\n");
+
+      process.exit(report.ok ? 0 : 1);
       break;
     }
 

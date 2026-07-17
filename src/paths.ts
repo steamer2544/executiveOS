@@ -54,3 +54,8 @@ export function proposalsDir(): string {
 export function proposalPath(): string {
   return execRoot() + "/proposal.json";
 }
+
+/** Absolute path to .executive/exec-report.json (the latest Executor report). */
+export function execReportPath(): string {
+  return execRoot() + "/exec-report.json";
+}

@@ -37,6 +37,11 @@ export interface Config {
     timeoutMs?: number; // request timeout
     autoInvoke?: boolean; // if true, the watch daemon calls the Worker automatically
   };
+  /** Executor configuration (defaults applied when absent). */
+  executor?: {
+    branchPrefix?: string; // prefix for the isolated branch; default "executive/change-"
+    defaultTestCommand?: string | null; // used when a ChangeSet has test === null; default null
+  };
 }
 
 /** Default configuration values. */
@@ -68,6 +73,10 @@ export function defaultConfig(): Config {
       maxTokens: 1024,
       timeoutMs: 30000,
       autoInvoke: false,
+    },
+    executor: {
+      branchPrefix: "executive/change-",
+      defaultTestCommand: null,
     },
   };
 }
@@ -135,6 +144,14 @@ export function loadConfig(): Config {
   parsed.worker.maxTokens = parsed.worker.maxTokens ?? defaults.worker!.maxTokens!;
   parsed.worker.timeoutMs = parsed.worker.timeoutMs ?? defaults.worker!.timeoutMs!;
   parsed.worker.autoInvoke = parsed.worker.autoInvoke ?? defaults.worker!.autoInvoke!;
+
+  // Merge missing executor fields with defaults.
+  if (!parsed.executor) {
+    parsed.executor = defaults.executor!;
+  }
+  parsed.executor.branchPrefix = parsed.executor.branchPrefix ?? defaults.executor!.branchPrefix!;
+  parsed.executor.defaultTestCommand =
+    parsed.executor.defaultTestCommand ?? defaults.executor!.defaultTestCommand!;
 
   return parsed;
 }
