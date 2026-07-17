@@ -93,9 +93,29 @@ docs/scopes/           # per-phase specs (the contract handed to the implementer
   (15 new). Reviewed live: `plan` field-exact (clean→null, failing+deadline→`fix_tests/act` +
   `review_deadline/ask`), watch plan-refresh, gitignore. Spec: `docs/scopes/phase-4-planner.md`. Only
   cleanup: removed an unused `dirname` import.
-- **Phase 5 — next**: Claude Worker — the LLM finally enters, called by the Planner to *carry out* an
-  `act` action (read repo / patch / test / commit) with assembled context. First phase that touches
-  an LLM.
+- **Phase 5 — DONE** (qwen impl + architect review, commit `be90db9`): **LLM Worker** (`src/worker/`).
+  The **first phase the LLM enters**. When — and only when — `plan.topAction.disposition === "act"`,
+  `runWorker(context, plan, config)` calls an LLM to turn that action into a concrete **`Proposal`**
+  (suggested steps, persisted to `.executive/proposal.json` + `proposals/<id>.json`). **Scope was
+  narrowed vs the original "patch/test/commit" idea: the Worker PROPOSES, never EXECUTES** — no
+  git/patch/test/commit/shell/repo-reads; its whole input is the Phase 3 `Context`, its whole output a
+  Proposal file. Executing a Proposal is a later phase. Backend is a config-selected `Worker`: `mock`
+  (deterministic, offline — tests + default of last resort) or `anthropic` (`AnthropicWorker` → POST
+  `{baseUrl}/v1/messages`, Anthropic Messages API). **Default backend = the owner's 9arm Qwen gateway**
+  (`https://gateway.9arm.co`, model `qwen3.6-35b-a3b`) — a flat-rate shared server, NOT Claude, so the
+  runtime spends no Claude quota. The **auth token lives only in the gitignored `.env` / env var named
+  by `config.worker.apiKeyEnv` (`EXECUTIVE_WORKER_KEY`)** — never in source; `.env.example` is the
+  committed template. Unbypassable guardrail gate in `runWorker` (null / `forbidden` / non-`act` →
+  never call the LLM). New `work` CLI + optional Worker call in the `watch` daemon **gated by
+  `config.worker.autoInvoke` (default `false` → the daemon never auto-calls the LLM)**. 70 passing
+  tests (25 new, 100% offline via MockWorker). Reviewed live against every §11 criterion (clean→no-op,
+  failing+mock→`ok` proposal, blocked→ask/no-op, dead-host→`error` proposal + exit 0, autoInvoke off
+  vs on, gitignore, no out-of-scope primitives). Spec: `docs/scopes/phase-5-worker.md`. **No qwen
+  defects found.** NOT yet run against the live gateway (integration test — spends a real token; left
+  for the owner).
+- **Phase 6 — next**: Executor — apply a `Proposal` (patch / run tests / commit) behind explicit human
+  approval, keeping every action inspectable and reversible. This is where the runtime first *mutates*
+  the repo.
 
 ## Commands
 
@@ -105,6 +125,7 @@ bun run src/index.ts emit <source> <type> [json]   # append an event (gets a seq
 bun run src/index.ts tail [n] [source]             # show last n events (seq order)
 bun run src/index.ts build-state                   # derive state.json + context.json from events
 bun run src/index.ts plan                          # build state + derive plan.json (rule-based)
+bun run src/index.ts work                          # build state + plan, then run the Worker if actionable → proposal.json
 bun run src/index.ts watch                          # start the watcher daemon (Ctrl-C to stop)
 bun run typecheck                                  # tsc --noEmit
 bun test                                           # unit tests
