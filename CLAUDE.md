@@ -113,9 +113,29 @@ docs/scopes/           # per-phase specs (the contract handed to the implementer
   vs on, gitignore, no out-of-scope primitives). Spec: `docs/scopes/phase-5-worker.md`. **No qwen
   defects found.** NOT yet run against the live gateway (integration test — spends a real token; left
   for the owner).
-- **Phase 6 — next**: Executor — apply a `Proposal` (patch / run tests / commit) behind explicit human
-  approval, keeping every action inspectable and reversible. This is where the runtime first *mutates*
-  the repo.
+- **Phase 6 — DONE** (qwen impl + architect review, commit `2ea716a`): **Executor** (`src/executor/`).
+  The **first phase that mutates the repo** — but still **100% deterministic, rule-based, NO LLM**
+  (like Phase 3/4). `applyChangeSet(cs, {apply, repoRoot, config})` carries out a **`ChangeSet`**
+  (`{id,title,ops[],test,commitMessage}`; ops = `write`/`create`/`delete` file operations) **safely,
+  reversibly, and only behind explicit human approval**. Flow: `validate` (pure path-safety gate) →
+  `plan` (dry-run, reads disk, mutates nothing) → **dry-run by default**, or on `--apply`: verify git
+  repo + **clean working tree** → `checkout -b executive/change-<id>` → write ops → `git add -A` → run
+  `test` → **commit on that branch (regardless of pass/fail)** → `checkout` back to the original branch;
+  a `try/catch` always returns to the original branch on error. Emits **`.executive/exec-report.json`**.
+  **Hard guardrails (all verified live):** never touches the working branch history (work lands only on
+  `executive/change-<id>`); refuses on a dirty tree / outside a git repo; rejects `..`-escape /
+  absolute / drive-letter / `.git` / `.executive` paths **before** any mutation; reversible via
+  `git branch -D`; the owner is the final gate (Executor never merges). New `execute <changeset.json>
+  [--apply]` CLI. **NOT wired into the `watch` daemon** — no autonomous execution. Config gains a
+  backward-compatible `executor` block (`branchPrefix`, `defaultTestCommand`). 97 passing tests (27
+  new, offline; git tests use a temp repo). Reviewed live against every §13 criterion. **Two qwen
+  defects found + fixed by the architect:** (1) `planChangeSet` ran before the validation gate → a
+  changeset missing `ops` crashed (`cs.ops.length` on undefined) instead of failing cleanly — now
+  plans only when validation passes, + a regression test; (2) removed a dead `Config` import. Spec:
+  `docs/scopes/phase-6-executor.md`.
+- **Phase 7 — next**: the bridge — turn a Phase 5 `Proposal` (prose) into a Phase 6 `ChangeSet`
+  (executable file ops), closing the Observe→…→Act loop. Likely re-invokes the Worker in a structured
+  mode; first phase where reasoning output feeds repo mutation.
 
 ## Commands
 
@@ -126,6 +146,7 @@ bun run src/index.ts tail [n] [source]             # show last n events (seq ord
 bun run src/index.ts build-state                   # derive state.json + context.json from events
 bun run src/index.ts plan                          # build state + derive plan.json (rule-based)
 bun run src/index.ts work                          # build state + plan, then run the Worker if actionable → proposal.json
+bun run src/index.ts execute <changeset.json> [--apply]  # apply a ChangeSet on an isolated branch (dry-run without --apply)
 bun run src/index.ts watch                          # start the watcher daemon (Ctrl-C to stop)
 bun run typecheck                                  # tsc --noEmit
 bun test                                           # unit tests
