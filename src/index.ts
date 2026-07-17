@@ -18,7 +18,8 @@ import { plan, writePlan } from "./planner/planner.js";
 import { runWorker, writeProposal } from "./worker/orchestrator.js";
 import { applyChangeSet, writeReport } from "./executor/executor.js";
 import { runSynth, writeSynthReport } from "./synth/synth.js";
-import { changeSetPath } from "./paths.js";
+import { changeSetPath, autoReportPath } from "./paths.js";
+import { runAuto, writeAutoReport } from "./auto/auto.js";
 
 const VALID_SOURCES: EventSource[] = ["git", "terminal", "editor", "system"];
 
@@ -38,6 +39,7 @@ Commands:
   watch                                         Start the watcher daemon
   execute <changeset.json> [--apply]            Apply a ChangeSet on an isolated branch (dry-run without --apply)
   synth [--files a,b] [--proposal <id>]         Synthesize a ChangeSet from the latest Proposal (dry-run; does NOT apply)
+  auto [--apply] [--files a,b]                  Run the whole chain (plan→work→synth→execute); dry-run unless --apply
   --help                                        Show this help
 
 Sources: git, terminal, editor, system
@@ -440,6 +442,67 @@ async function main(): Promise<void> {
         }
         process.stdout.write("changeset: " + changeSetPath() + "\n");
         process.stdout.write("review " + changeSetPath() + ", then: execute " + changeSetPath() + " --apply\n");
+
+        process.exit(report.ok ? 0 : 1);
+      } catch (err) {
+        process.stderr.write("Error: " + (err as Error).message + "\n");
+        process.exit(1);
+      }
+      break;
+    }
+
+    case "auto": {
+      // Parse --apply and --files <csv>
+      let apply = false;
+      let explicitFiles: string[] | undefined;
+      for (let i = 1; i < args.length; i++) {
+        if (args[i] === "--apply") {
+          apply = true;
+        } else if (args[i] === "--files" && i + 1 < args.length) {
+          const csv = args[++i]!;
+          explicitFiles = csv.split(",").map((f) => f.trim()).filter((f) => f.length > 0);
+        }
+      }
+
+      await bootstrap();
+      const config = loadConfig();
+      try {
+        const report = await runAuto({
+          repoRoot: process.cwd(),
+          config,
+          apply,
+          explicitFiles,
+        });
+        writeAutoReport(report);
+
+        // Print concise summary
+        process.stdout.write("stage: " + report.stage + "\n");
+        process.stdout.write("ok: " + report.ok + "\n");
+        process.stdout.write("needsHuman: " + report.needsHuman + "\n");
+        if (report.topAction) {
+          process.stdout.write(
+            "topAction: " + report.topAction.kind + " (" + report.topAction.disposition + ")\n"
+          );
+        }
+        if (report.proposalId) {
+          process.stdout.write("proposal: " + report.proposalId + "\n");
+        }
+        if (report.validationOk !== null) {
+          process.stdout.write("validationOk: " + report.validationOk + "\n");
+        }
+        if (report.dryRunOk !== null) {
+          process.stdout.write("dryRunOk: " + report.dryRunOk + "\n");
+        }
+        if (report.applied) {
+          process.stdout.write("applied: true\n");
+          process.stdout.write("branch: " + report.branch + "\n");
+          process.stdout.write("commit: " + report.commitSha + "\n");
+          process.stdout.write("testPassed: " + (report.testPassed ?? "n/a") + "\n");
+        }
+        for (const m of report.messages) {
+          process.stdout.write("  " + m + "\n");
+        }
+        process.stdout.write("report: " + autoReportPath() + "\n");
 
         process.exit(report.ok ? 0 : 1);
       } catch (err) {

@@ -69,3 +69,8 @@ export function changeSetPath(): string {
 export function synthReportPath(): string {
   return execRoot() + "/synth-report.json";
 }
+
+/** Absolute path to .executive/auto-report.json (the latest Autopilot report). */
+export function autoReportPath(): string {
+  return execRoot() + "/auto-report.json";
+}
