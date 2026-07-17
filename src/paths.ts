@@ -59,3 +59,13 @@ export function proposalPath(): string {
 export function execReportPath(): string {
   return execRoot() + "/exec-report.json";
 }
+
+/** Absolute path to .executive/changeset.json (the latest synthesized ChangeSet). */
+export function changeSetPath(): string {
+  return execRoot() + "/changeset.json";
+}
+
+/** Absolute path to .executive/synth-report.json (the latest Synthesizer report). */
+export function synthReportPath(): string {
+  return execRoot() + "/synth-report.json";
+}

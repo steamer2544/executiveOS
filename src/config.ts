@@ -42,6 +42,11 @@ export interface Config {
     branchPrefix?: string; // prefix for the isolated branch; default "executive/change-"
     defaultTestCommand?: string | null; // used when a ChangeSet has test === null; default null
   };
+  /** Synthesizer configuration (defaults applied when absent). */
+  synth?: {
+    maxFileBytes?: number; // skip any single file larger than this (token bound); default 100000
+    maxFiles?: number;     // cap on number of files fed to the LLM; default 10
+  };
 }
 
 /** Default configuration values. */
@@ -77,6 +82,10 @@ export function defaultConfig(): Config {
     executor: {
       branchPrefix: "executive/change-",
       defaultTestCommand: null,
+    },
+    synth: {
+      maxFileBytes: 100000,
+      maxFiles: 10,
     },
   };
 }
@@ -152,6 +161,13 @@ export function loadConfig(): Config {
   parsed.executor.branchPrefix = parsed.executor.branchPrefix ?? defaults.executor!.branchPrefix!;
   parsed.executor.defaultTestCommand =
     parsed.executor.defaultTestCommand ?? defaults.executor!.defaultTestCommand!;
+
+  // Merge missing synth fields with defaults.
+  if (!parsed.synth) {
+    parsed.synth = defaults.synth!;
+  }
+  parsed.synth.maxFileBytes = parsed.synth.maxFileBytes ?? defaults.synth!.maxFileBytes!;
+  parsed.synth.maxFiles = parsed.synth.maxFiles ?? defaults.synth!.maxFiles!;
 
   return parsed;
 }

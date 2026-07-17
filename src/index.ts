@@ -17,6 +17,8 @@ import { buildState, writeState } from "./state/builder.js";
 import { plan, writePlan } from "./planner/planner.js";
 import { runWorker, writeProposal } from "./worker/orchestrator.js";
 import { applyChangeSet, writeReport } from "./executor/executor.js";
+import { runSynth, writeSynthReport } from "./synth/synth.js";
+import { changeSetPath } from "./paths.js";
 
 const VALID_SOURCES: EventSource[] = ["git", "terminal", "editor", "system"];
 
@@ -35,6 +37,7 @@ Commands:
   work                                          Build state + plan, then run the Worker if actionable
   watch                                         Start the watcher daemon
   execute <changeset.json> [--apply]            Apply a ChangeSet on an isolated branch (dry-run without --apply)
+  synth [--files a,b] [--proposal <id>]         Synthesize a ChangeSet from the latest Proposal (dry-run; does NOT apply)
   --help                                        Show this help
 
 Sources: git, terminal, editor, system
@@ -386,6 +389,63 @@ async function main(): Promise<void> {
       process.stdout.write("report: " + execReportPath() + "\n");
 
       process.exit(report.ok ? 0 : 1);
+      break;
+    }
+
+    case "synth": {
+      // Parse --files <csv> and --proposal <id>
+      let explicitFiles: string[] | undefined;
+      let proposalId: string | null = null;
+      for (let i = 1; i < args.length; i++) {
+        if (args[i] === "--files" && i + 1 < args.length) {
+          const csv = args[++i]!;
+          explicitFiles = csv.split(",").map((f) => f.trim()).filter((f) => f.length > 0);
+        } else if (args[i] === "--proposal" && i + 1 < args.length) {
+          proposalId = args[++i]!;
+        }
+      }
+
+      await bootstrap();
+      const config = loadConfig();
+      try {
+        const report = await runSynth({
+          repoRoot: process.cwd(),
+          config,
+          explicitFiles,
+          proposalId: proposalId || undefined,
+        });
+        writeSynthReport(report);
+
+        // Print concise summary
+        process.stdout.write("proposal: " + (report.proposalId || "(none)") + "\n");
+        process.stdout.write("synthesizer: " + (report.synthesizer || "(none)") + "\n");
+        process.stdout.write("selectedFiles: " + report.selectedFiles.join(", ") + "\n");
+        if (!report.changeSetWritten) {
+          // Early exit (no proposal / non-actionable proposal / synthesizer failure):
+          // report.messages carries the reason, and there is no changeset to point to.
+          for (const m of report.messages) {
+            process.stdout.write(m + "\n");
+          }
+          process.exit(report.ok ? 0 : 1);
+        }
+        process.stdout.write("validation.ok: " + report.validation.ok + "\n");
+        for (const e of report.validation.errors) {
+          process.stdout.write("  error: " + e + "\n");
+        }
+        if (report.execReport) {
+          process.stdout.write("dry-run.ok: " + report.execReport.ok + "\n");
+          for (const op of report.execReport.plannedOps) {
+            process.stdout.write("  " + op.op + " " + op.path + " — " + op.effect + (op.wouldSucceed ? "" : " (BLOCKED)") + "\n");
+          }
+        }
+        process.stdout.write("changeset: " + changeSetPath() + "\n");
+        process.stdout.write("review " + changeSetPath() + ", then: execute " + changeSetPath() + " --apply\n");
+
+        process.exit(report.ok ? 0 : 1);
+      } catch (err) {
+        process.stderr.write("Error: " + (err as Error).message + "\n");
+        process.exit(1);
+      }
       break;
     }
 

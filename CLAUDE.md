@@ -133,9 +133,36 @@ docs/scopes/           # per-phase specs (the contract handed to the implementer
   changeset missing `ops` crashed (`cs.ops.length` on undefined) instead of failing cleanly — now
   plans only when validation passes, + a regression test; (2) removed a dead `Config` import. Spec:
   `docs/scopes/phase-6-executor.md`.
-- **Phase 7 — next**: the bridge — turn a Phase 5 `Proposal` (prose) into a Phase 6 `ChangeSet`
-  (executable file ops), closing the Observe→…→Act loop. Likely re-invokes the Worker in a structured
-  mode; first phase where reasoning output feeds repo mutation.
+- **Phase 7 — DONE** (qwen impl + architect review, this commit): **Synthesizer** (`src/synth/`) —
+  the bridge from Phase 5 `Proposal` (prose) to Phase 6 `ChangeSet` (executable file ops), closing
+  the Observe→…→Act loop. `runSynth(opts)` loads the latest (or `--proposal <id>`) Proposal, selects
+  a bounded set of files (`--files`, else `State.currentFile`+`recentFiles`, capped at
+  `config.synth.maxFiles`), calls a `Synthesizer` (`mock` | `anthropic`, **reusing `config.worker`** —
+  no new gateway/token) to turn them into a candidate `ChangeSet`, then runs it through Phase 6's
+  `validateChangeSet` **before** ever handing it to the Executor, and — only if valid — calls
+  `applyChangeSet` in **dry-run only** (`apply: false`, never `true`). Writes
+  `.executive/changeset.json` (candidate, always, for inspection) + `.executive/synth-report.json`.
+  **The LLM's output is untrusted**: an unsafe path (`..`-escape/absolute/`.git`/`.executive`) is
+  rejected by validation and never reaches the Executor, not even dry-run. New `synth [--files a,b]
+  [--proposal <id>]` CLI. **NOT wired into the `watch` daemon**; does not touch `src/worker/*` or
+  `src/executor/*`. Config gains a backward-compatible `synth` block (`maxFileBytes`, `maxFiles`).
+  131 passing tests (34 new, 100% offline via `MockSynthesizer`). Reviewed live against every §11
+  criterion in a temp git repo (mock backend, present/missing/non-`ok` proposal, `--files` vs
+  State-fallback, old config without a `synth` block still merges defaults, grep confirms only
+  `apply: false` in `src/synth/`, `src/worker`/`src/executor` diff is empty). **Defects found + fixed
+  by the architect:** (1) two test bugs in `synth.test.ts` — repeated `writeFileSync` to the same
+  event-log path truncated instead of appending (only the last event survived, so `recentFiles`
+  fallback test saw 1 file instead of 3), and `createTempGitRepo()`'s happy-path tests wrote
+  `src/main.ts` *after* the initial commit without ever staging it, so `isWorkingTreeClean` correctly
+  failed regardless of `runSynth`'s behavior — fixed by using `appendFileSync` and committing the
+  fixture file before asserting a clean tree; (2) a real CLI bug in `src/index.ts` — the `synth`
+  command unconditionally printed the `changeset:` / `review … --apply` lines even when
+  `changeSetWritten` was `false` (no-proposal, non-actionable-proposal, synthesizer-failure cases),
+  misleadingly pointing at a file that was never written, and never surfaced `report.messages` (the
+  actual reason) to the user — fixed by branching: print `report.messages` and exit early when
+  `!report.changeSetWritten`, otherwise print the full validation/dry-run/changeset summary as before.
+  Spec: `docs/scopes/phase-7-synthesizer.md`.
+- **Phase 8 — next**: not yet scoped.
 
 ## Commands
 
@@ -147,6 +174,7 @@ bun run src/index.ts build-state                   # derive state.json + context
 bun run src/index.ts plan                          # build state + derive plan.json (rule-based)
 bun run src/index.ts work                          # build state + plan, then run the Worker if actionable → proposal.json
 bun run src/index.ts execute <changeset.json> [--apply]  # apply a ChangeSet on an isolated branch (dry-run without --apply)
+bun run src/index.ts synth [--files a,b] [--proposal <id>]  # synthesize a ChangeSet from the latest Proposal (dry-run; does NOT apply)
 bun run src/index.ts watch                          # start the watcher daemon (Ctrl-C to stop)
 bun run typecheck                                  # tsc --noEmit
 bun test                                           # unit tests
