@@ -1,6 +1,6 @@
 // Planner tests (Phase 4).
 // Tests the rule engine, guardrail, plan() + writePlan() round-trip.
-// Pure tests construct State directly — no .executiveOS/ on disk needed.
+// Pure tests construct State directly — no .executive/ on disk needed.
 
 import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
@@ -203,7 +203,7 @@ describe("planner — determinism", () => {
 });
 
 describe("planner — plan reads only State", () => {
-  it("plan() works with no .executiveOS/ on disk", () => {
+  it("plan() works with no .executive/ on disk", () => {
     // Ensure we're not relying on any files.
     const home = execRoot();
     const wasPresent = existsSync(home);
@@ -227,7 +227,7 @@ describe("planner — plan reads only State", () => {
   it("RULES and planner do not import event store", () => {
     // Architectural check: rules.ts and planner.ts must not import read/tail from the event store.
     // We verify by checking that plan() can produce a correct Plan from a hand-built State
-    // with no .executiveOS/ on disk — already tested above.
+    // with no .executive/ on disk — already tested above.
     // Additionally, verify RULES count is exactly 4 (no extra rules).
     expect(RULES.length).toBe(4);
   });
@@ -241,8 +241,8 @@ describe("planner — writePlan round-trip", () => {
     process.env.EXECUTIVE_HOME = tmpDir;
 
     try {
-      // Ensure .executiveOS/ exists (bootstrap subdirs).
-      const execDir = join(tmpDir, ".executiveOS");
+      // Ensure .executive/ exists (bootstrap subdirs).
+      const execDir = join(tmpDir, ".executive");
       mkdirSync(execDir, { recursive: true });
       mkdirSync(join(execDir, "events"), { recursive: true });
       mkdirSync(join(execDir, "logs"), { recursive: true });
@@ -254,7 +254,7 @@ describe("planner — writePlan round-trip", () => {
       const p = plan(s);
       writePlan(p);
 
-      // planPath() returns execRoot() + "/plan.json" (not inside .executiveOS/).
+      // planPath() returns execRoot() + "/plan.json" (not inside .executive/).
       const actualPlanPath = join(tmpDir, "plan.json");
       expect(existsSync(actualPlanPath)).toBe(true);
       const raw = readFileSync(actualPlanPath, "utf-8");

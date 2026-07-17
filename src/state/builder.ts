@@ -265,13 +265,13 @@ function buildSummary(s: State): string {
 // ─── writeState ─────────────────────────────────────────────────────────────
 
 /**
- * Atomically write state.json and context.json to .executiveOS/.
+ * Atomically write state.json and context.json to .executive/.
  * Writes to temp files then renames (same pattern as seq.ts).
  */
 export function writeState(built: { state: State; context: Context }): void {
   const { state, context } = built;
 
-  // Ensure .executiveOS/ exists.
+  // Ensure .executive/ exists.
   const root = execRoot();
   if (!existsSync(root)) {
     mkdirSync(root, { recursive: true });

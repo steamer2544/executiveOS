@@ -3,8 +3,8 @@ node_modules/
 bun.lockb
 
 # Runtime data (event logs, state, db) — machine-local, not source.
-# The whole .executiveOS/ tree is created by `init` and never committed.
-.executiveOS/
+# The whole .executive/ tree is created by `init` and never committed.
+.executive/
 
 # Build output
 dist/

@@ -6,7 +6,7 @@ import { EventBus, type EventInput } from "../bus.js";
 import type { Watcher } from "./index.js";
 import type { EventSource } from "../events/types.js";
 
-const IGNORE_DIRS = [".git", "node_modules", ".executiveOS"];
+const IGNORE_DIRS = [".git", "node_modules", ".executive"];
 
 export interface FsWatcherConfig {
   paths: string[];
@@ -20,7 +20,7 @@ export function createFsWatcher(config: FsWatcherConfig): Watcher {
 
   function shouldIgnore(filePath: string): boolean {
     // Segment-aware match: split on both separators and ignore the path if ANY
-    // segment is an ignored dir. This catches ".executiveOS/events/git.jsonl"
+    // segment is an ignored dir. This catches ".executive/events/git.jsonl"
     // (relative filename from fs.watch, no leading separator) as well as
     // absolute paths — preventing a feedback loop where writing the event log
     // would itself trigger an editor.save.

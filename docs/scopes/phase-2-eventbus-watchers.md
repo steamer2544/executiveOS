@@ -50,7 +50,7 @@ export interface BaseEvent {
 }
 ```
 
-**Sequence allocation** — add `.executiveOS/meta.json`:
+**Sequence allocation** — add `.executive/meta.json`:
 ```json
 { "lastSeq": 42 }
 ```
@@ -164,7 +164,7 @@ Watches configured directories for file changes and emits editor events.
 - Use Bun's `fs.watch(dir, { recursive: true })` for each path.
 - On a change event, **debounce per file path** (collapse rapid saves within `debounceMs` into one),
   then emit `editor.save` with `data: { path, changeType }` where `changeType` is `"change" | "rename"`.
-- **Ignore** paths under `.git/`, `node_modules/`, and the `.executiveOS/` dir itself (avoid feedback
+- **Ignore** paths under `.git/`, `node_modules/`, and the `.executive/` dir itself (avoid feedback
   loops where writing the event log triggers another event). Make the ignore list a constant.
 - `stop` closes all watchers and clears debounce timers.
 
@@ -201,11 +201,11 @@ Add one command:
 
 | Command | Behavior |
 |---|---|
-| `watch` | Start the daemon: bootstrap → build EventBus → attach StoreSink → build enabled watchers from config → `startAll()`. Print a startup line listing active watchers and the resolved `.executiveOS` path. Run until SIGINT (Ctrl-C). On SIGINT: `stopAll()`, flush, print "stopped", exit 0. |
+| `watch` | Start the daemon: bootstrap → build EventBus → attach StoreSink → build enabled watchers from config → `startAll()`. Print a startup line listing active watchers and the resolved `.executive` path. Run until SIGINT (Ctrl-C). On SIGINT: `stopAll()`, flush, print "stopped", exit 0. |
 
 - While running, print a concise line to **stdout** for each persisted event (e.g.
   `#<seq> <ts> <type> <short-data>`), and mirror full events to a rolling log file in
-  `.executiveOS/logs/watch-<date>.log`. Keep logging lightweight.
+  `.executive/logs/watch-<date>.log`. Keep logging lightweight.
 - Existing `init` / `emit` / `tail` / `--help` stay; update `--help` text to include `watch`.
 - `emit` continues to work and now also gets a `seq` (via the same `append`).
 
@@ -245,7 +245,7 @@ Isolate with `EXECUTIVE_HOME` = temp dir (as in Phase 1). Cover:
 
 - [ ] `bun run typecheck` passes (strict), zero errors.
 - [ ] `bun test` passes — all §9 tests green (GitWatcher integration included).
-- [ ] `init` now also creates `.executiveOS/meta.json` = `{"lastSeq":0}`; idempotent.
+- [ ] `init` now also creates `.executive/meta.json` = `{"lastSeq":0}`; idempotent.
 - [ ] `emit` events now carry an increasing `seq`; `tail` prints them in `seq` order.
 - [ ] A Phase 1 `config.json` **without** a `watch` key still loads (merged with defaults) — verify by
       hand-writing an old-style config then running a command.
@@ -253,7 +253,7 @@ Isolate with `EXECUTIVE_HOME` = temp dir (as in Phase 1). Cover:
       `watch.git.repoPath` — a real `git commit` produces a `git.commit` event line and a persisted
       event (Claude will drive this live). Ctrl-C stops cleanly (exit 0), timers cleared (process exits,
       doesn't hang).
-- [ ] Writing to `.executiveOS/` (the log itself) does NOT cause the FsWatcher to emit (no feedback loop).
+- [ ] Writing to `.executive/` (the log itself) does NOT cause the FsWatcher to emit (no feedback loop).
 - [ ] No out-of-scope features (no terminal/github/calendar watcher, no state builder, no planner, no
       LLM, no SQLite, no server).
 
@@ -262,5 +262,5 @@ Isolate with `EXECUTIVE_HOME` = temp dir (as in Phase 1). Cover:
 ## 11. Deliverable
 
 A commit adding `src/bus.ts`, `src/sink.ts`, `src/events/seq.ts`, `src/watchers/*`, the `seq`/config/CLI
-changes, and tests. Leave this doc in place. Do NOT commit `.executiveOS/` runtime data. Hand back for
+changes, and tests. Leave this doc in place. Do NOT commit `.executive/` runtime data. Hand back for
 review — Claude runs every item in §10, including a live `watch` session against a temp git repo.

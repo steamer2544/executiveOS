@@ -25,7 +25,7 @@ ExecutiveOS — event-driven personal assistant runtime
 Usage: bun run src/index.ts <command> [args]
 
 Commands:
-  init                                          Initialize .executiveOS/ directory
+  init                                          Initialize .executive/ directory
   emit <source> <type> [json-data]              Append an event
   tail [n] [source]                             Show last n events
   build-state                                   Build state.json and context.json

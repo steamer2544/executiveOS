@@ -41,7 +41,7 @@ Phase 1 uses **JSONL** for the event log; SQLite/Drizzle come in a later phase.
 ## Layout
 
 ```
-.executiveOS/            # runtime data (gitignored) — created by `init`, not committed
+.executive/            # runtime data (gitignored) — created by `init`, not committed
 ├── config.json
 ├── events/{git,terminal,editor,system}.jsonl
 └── logs/
@@ -52,7 +52,7 @@ docs/scopes/           # per-phase specs (the contract handed to the implementer
 ## Two "claude.md" files — don't confuse them
 
 - **`CLAUDE.md`** (this file, repo root) — context for Claude Code working *on* the repo.
-- **`.executiveOS/claude.md`** (does not exist yet) — the *product's* AI Worker identity. It is a
+- **`.executive/claude.md`** (does not exist yet) — the *product's* AI Worker identity. It is a
   **Phase 5** artifact; the vision doc explicitly says not to start there. Do not create it early.
 
 ## Phase status
@@ -61,9 +61,9 @@ docs/scopes/           # per-phase specs (the contract handed to the implementer
   idempotent `bootstrap`, config, hand-rolled CLI (`init`/`emit`/`tail`), 8 passing tests.
   Spec: `docs/scopes/phase-1-runtime.md`.
 - **Phase 2 — DONE** (qwen impl `687a034`, architect review+fixes `2bc3dfc`): monotonic **`seq`**
-  (in `.executiveOS/meta.json`) fixes `tail()` ordering; in-process **EventBus** + **StoreSink**;
+  (in `.executive/meta.json`) fixes `tail()` ordering; in-process **EventBus** + **StoreSink**;
   **Watcher/WatcherManager**; poll-based **GitWatcher** (`git.commit`/`git.branch_switch`) and
-  **FsWatcher** (`editor.save`, ignores `.git`/`node_modules`/`.executiveOS`); `watch` daemon.
+  **FsWatcher** (`editor.save`, ignores `.git`/`node_modules`/`.executive`); `watch` daemon.
   18 passing tests. Spec: `docs/scopes/phase-2-eventbus-watchers.md`. Reviewed live against a temp
   git repo. Fixes: rewrote GitWatcher (was `Bun.spawnAsync` + module state + `stop()` not clearing
   the interval), wired per-event stdout/log output through `attachStoreSink(onPersist)`, made the
@@ -100,7 +100,7 @@ docs/scopes/           # per-phase specs (the contract handed to the implementer
 ## Commands
 
 ```
-bun run src/index.ts init                          # create .executiveOS/ (+ meta.json)
+bun run src/index.ts init                          # create .executive/ (+ meta.json)
 bun run src/index.ts emit <source> <type> [json]   # append an event (gets a seq)
 bun run src/index.ts tail [n] [source]             # show last n events (seq order)
 bun run src/index.ts build-state                   # derive state.json + context.json from events

@@ -17,7 +17,7 @@ Phase 3 gives us a compact **`State`** ("what is true right now"). Phase 4 adds 
 > **"What is the highest-value action right now?"**
 
 It emits a **`Plan`** (a ranked list of *proposed* actions, each with a reason, priority, confidence,
-and an `act`/`ask` disposition) and writes it to **`.executiveOS/plan.json`**.
+and an `act`/`ask` disposition) and writes it to **`.executive/plan.json`**.
 
 **Critical boundaries:**
 
@@ -34,7 +34,7 @@ and an `act`/`ask` disposition) and writes it to **`.executiveOS/plan.json`**.
 1. `src/planner/types.ts` — `ActionKind`, `Disposition`, `ProposedAction`, `Plan` + constants.
 2. `src/planner/rules.ts` — the ordered rule set (pure `(state) => ProposedAction | null` functions).
 3. `src/planner/planner.ts` — `plan(state, context?)` (pure) + `writePlan(...)` (atomic persist to
-   `.executiveOS/plan.json`) + the exported `applyGuardrail(...)` helper.
+   `.executive/plan.json`) + the exported `applyGuardrail(...)` helper.
 4. A one-shot **`plan`** CLI command.
 5. Plan rebuild wired into the existing **`watch`** daemon — recomputed right after each state rebuild
    (startup + interval), so `plan.json` always tracks `state.json`.
@@ -50,7 +50,7 @@ and an `act`/`ask` disposition) and writes it to **`.executiveOS/plan.json`**.
   rebuild — the planner is a **pure, stateless, one-shot** function. No cron, no its own interval.
 - ❌ SQLite / Drizzle — **still JSONL** (and the planner doesn't even read the logs).
 - ❌ No web server, no HTTP, no Elysia, no VSCode extension.
-- ❌ Do NOT create `.executiveOS/claude.md` / `rules.md` / `planner.md`. Those are **product** config
+- ❌ Do NOT create `.executive/claude.md` / `rules.md` / `planner.md`. Those are **product** config
   artifacts for Phase 5. **Phase 4's rules live in CODE (`src/planner/rules.ts`), not in a `.md` file.**
 - ❌ No new `config.json` block. The plan piggybacks on the existing `state.intervalMs` cadence — do
   NOT add a `planner` config key.
@@ -170,9 +170,9 @@ export function writePlan(p: Plan): void;
    null. Pure function of the `Plan`.
 
 `writePlan(p)`:
-- Writes `.executiveOS/plan.json`, pretty-printed (`JSON.stringify(p, null, 2) + "\n"`), **atomically**
+- Writes `.executive/plan.json`, pretty-printed (`JSON.stringify(p, null, 2) + "\n"`), **atomically**
   (temp file in the same dir + `renameSync` — identical technique to `writeState` in
-  `src/state/builder.ts`). Ensure `.executiveOS/` exists first (mirror `writeState`).
+  `src/state/builder.ts`). Ensure `.executive/` exists first (mirror `writeState`).
 
 > Path: add `planPath()` to `src/paths.ts` = `execRoot() + "/plan.json"`, following the existing
 > forward-slash style and sitting next to `statePath()` / `contextPath()`.
@@ -239,7 +239,7 @@ writePlan(p);
 
 ## 8. Housekeeping
 
-- `.gitignore`: **no change needed.** The whole `.executiveOS/` tree is already ignored (Phase 3.5
+- `.gitignore`: **no change needed.** The whole `.executive/` tree is already ignored (Phase 3.5
   rename commit), so `plan.json` is covered automatically. Do **not** re-add per-file ignores.
 - `bootstrap()` does **not** need to pre-create `plan.json` (produced by `plan`/`watch`). Do not change
   bootstrap.
@@ -273,7 +273,7 @@ Construct `State` objects directly (a small `makeState(overrides)` helper is fin
 9. **`plan` reads only State**: assert `src/planner/rules.ts` and `planner.ts` do not import the event
    store / `read` / `tail` (grep-level check is acceptable in the review, but include an architectural
    comment). At minimum: `plan()` must produce a correct `Plan` from a hand-built `State` with **no**
-   `.executiveOS/` on disk.
+   `.executive/` on disk.
 10. **writePlan round-trip**: `writePlan(plan(state))` creates valid JSON at `planPath()`; re-read +
     `JSON.parse` succeeds; `basedOnState` matches the source state; `actions` is an array.
 
@@ -293,9 +293,9 @@ Construct `State` objects directly (a small `makeState(overrides)` helper is fin
 - [ ] `executive watch` writes `plan.json` at startup and refreshes it on the state interval alongside
       `state.json` (Claude drives live with a short `state.intervalMs`; a real change that flips state is
       reflected in a rebuilt `plan.json`). Ctrl-C still exits without hanging (no new timer added).
-- [ ] `plan.json` is gitignored (whole `.executiveOS/` tree — verify with `git check-ignore`).
+- [ ] `plan.json` is gitignored (whole `.executive/` tree — verify with `git check-ignore`).
 - [ ] No out-of-scope features: **no LLM/Claude call, no execution of any action** (no git/test/commit
-      shell-outs), no new watchers, no SQLite, no server, no new config block, no `.executiveOS/*.md`
+      shell-outs), no new watchers, no SQLite, no server, no new config block, no `.executive/*.md`
       artifacts, no extra scheduler/interval.
 
 ---
@@ -305,6 +305,6 @@ Construct `State` objects directly (a small `makeState(overrides)` helper is fin
 A commit adding `src/planner/types.ts`, `src/planner/rules.ts`, `src/planner/planner.ts`,
 `src/planner/planner.test.ts`, the `paths.ts` (`planPath`) and `index.ts` (`plan` command + daemon
 wiring) changes. No `.gitignore` / `config.ts` / `bootstrap.ts` changes. Leave this doc in place. Do NOT
-commit `.executiveOS/` runtime data (including `plan.json`). Hand back for review — Claude runs every
+commit `.executive/` runtime data (including `plan.json`). Hand back for review — Claude runs every
 item in §10, including a live `plan` (failing-tests state → `fix_tests`/`act`) and a live `watch`
 plan-refresh.

@@ -647,7 +647,7 @@ Phase 1 : Runtime
 
 ก่อนอื่นให้ Claude Code สร้างโครงสร้างแบบนี้
 
-.executiveOS/
+.executive/
 ├── claude.md
 ├── rules.md
 ├── planner.md

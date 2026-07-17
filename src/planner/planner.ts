@@ -74,7 +74,7 @@ function buildSummary(actions: ProposedAction[]): string {
 // ─── writePlan() ──────────────────────────────────────────────────────────────
 
 /**
- * Atomically write plan.json to .executiveOS/.
+ * Atomically write plan.json to .executive/.
  * Writes to temp file then renames (same pattern as writeState).
  */
 export function writePlan(p: Plan): void {
