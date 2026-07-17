@@ -6,7 +6,7 @@ import { bootstrap } from "./bootstrap.js";
 import { append, read, tail } from "./events/store.js";
 import type { EventSource } from "./events/types.js";
 import { isValidType } from "./events/types.js";
-import { execRoot, logsDir, statePath, contextPath, planPath } from "./paths.js";
+import { execRoot, logsDir, statePath, contextPath, planPath, proposalPath } from "./paths.js";
 import { EventBus } from "./bus.js";
 import { attachStoreSink } from "./sink.js";
 import { WatcherManager } from "./watchers/index.js";
@@ -15,6 +15,7 @@ import { createFsWatcher } from "./watchers/fs.js";
 import { loadConfig } from "./config.js";
 import { buildState, writeState } from "./state/builder.js";
 import { plan, writePlan } from "./planner/planner.js";
+import { runWorker, writeProposal } from "./worker/orchestrator.js";
 
 const VALID_SOURCES: EventSource[] = ["git", "terminal", "editor", "system"];
 
@@ -30,6 +31,7 @@ Commands:
   tail [n] [source]                             Show last n events
   build-state                                   Build state.json and context.json
   plan                                          Build state + plan.json
+  work                                          Build state + plan, then run the Worker if actionable
   watch                                         Start the watcher daemon
   --help                                        Show this help
 
@@ -179,6 +181,33 @@ async function main(): Promise<void> {
       break;
     }
 
+    case "work": {
+      await bootstrap();
+      try {
+        const config = loadConfig();
+        const built = buildState();
+        writeState(built);
+        const p = plan(built.state, built.context);
+        writePlan(p);
+        const proposal = await runWorker(built.context, p, config);
+        if (!proposal) {
+          process.stdout.write(
+            "No actionable topAction (nothing to do or disposition=ask).\n"
+          );
+          process.exit(0);
+        }
+        writeProposal(proposal);
+        process.stdout.write(
+          proposalPath() + " — [" + proposal.status + "] " + proposal.summary + "\n"
+        );
+        process.exit(0);
+      } catch (err) {
+        process.stderr.write("Error: " + (err as Error).message + "\n");
+        process.exit(1);
+      }
+      break;
+    }
+
     case "watch": {
       // Daemon mode: bootstrap → EventBus → StoreSink → Watchers → run until SIGINT.
       await bootstrap();
@@ -243,6 +272,17 @@ async function main(): Promise<void> {
         writeState(built);
         const p = plan(built.state, built.context);
         writePlan(p);
+        if (config.worker?.autoInvoke === true) {
+          try {
+            const proposal = await runWorker(built.context, p, config);
+            if (proposal) {
+              writeProposal(proposal);
+              process.stdout.write("Worker: [" + proposal.status + "] " + proposal.summary + "\n");
+            }
+          } catch (workerErr) {
+            process.stderr.write("Worker failed: " + (workerErr as Error).message + "\n");
+          }
+        }
         process.stdout.write(
           "State rebuild (interval: " + stateIntervalMs + "ms) — " + built.context.summary + " | Plan: " + p.summary + "\n"
         );
@@ -251,13 +291,24 @@ async function main(): Promise<void> {
       }
 
       // Rebuild every intervalMs.
-      const rebuildTimer = setInterval(() => {
+      const rebuildTimer = setInterval(async () => {
         try {
           const built = buildState();
           writeState(built);
           try {
             const p = plan(built.state, built.context);
             writePlan(p);
+            if (config.worker?.autoInvoke === true) {
+              try {
+                const proposal = await runWorker(built.context, p, config);
+                if (proposal) {
+                  writeProposal(proposal);
+                  process.stdout.write("Worker: [" + proposal.status + "] " + proposal.summary + "\n");
+                }
+              } catch (workerErr) {
+                process.stderr.write("Worker failed: " + (workerErr as Error).message + "\n");
+              }
+            }
           } catch (planErr) {
             // Plan failure never crashes the daemon.
             process.stderr.write("Plan rebuild failed: " + (planErr as Error).message + "\n");

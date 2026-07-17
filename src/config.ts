@@ -27,6 +27,16 @@ export interface Config {
   state?: {
     intervalMs?: number;
   };
+  /** Worker (LLM) configuration (defaults applied when absent). */
+  worker?: {
+    backend?: "mock" | "anthropic"; // which Worker to build
+    baseUrl?: string; // Anthropic-compatible gateway base (NO trailing /v1)
+    model?: string; // model name, e.g. "qwen3.6-35b-a3b"
+    apiKeyEnv?: string; // NAME of the env var holding the auth token
+    maxTokens?: number; // cap on completion length
+    timeoutMs?: number; // request timeout
+    autoInvoke?: boolean; // if true, the watch daemon calls the Worker automatically
+  };
 }
 
 /** Default configuration values. */
@@ -49,6 +59,15 @@ export function defaultConfig(): Config {
     },
     state: {
       intervalMs: 30000,
+    },
+    worker: {
+      backend: "anthropic",
+      baseUrl: "https://gateway.9arm.co",
+      model: "qwen3.6-35b-a3b",
+      apiKeyEnv: "EXECUTIVE_WORKER_KEY",
+      maxTokens: 1024,
+      timeoutMs: 30000,
+      autoInvoke: false,
     },
   };
 }
@@ -104,6 +123,18 @@ export function loadConfig(): Config {
     parsed.state = defaults.state!;
   }
   parsed.state.intervalMs = parsed.state.intervalMs ?? defaults.state!.intervalMs!;
+
+  // Merge missing worker fields with defaults.
+  if (!parsed.worker) {
+    parsed.worker = defaults.worker!;
+  }
+  parsed.worker.backend = parsed.worker.backend ?? defaults.worker!.backend!;
+  parsed.worker.baseUrl = parsed.worker.baseUrl ?? defaults.worker!.baseUrl!;
+  parsed.worker.model = parsed.worker.model ?? defaults.worker!.model!;
+  parsed.worker.apiKeyEnv = parsed.worker.apiKeyEnv ?? defaults.worker!.apiKeyEnv!;
+  parsed.worker.maxTokens = parsed.worker.maxTokens ?? defaults.worker!.maxTokens!;
+  parsed.worker.timeoutMs = parsed.worker.timeoutMs ?? defaults.worker!.timeoutMs!;
+  parsed.worker.autoInvoke = parsed.worker.autoInvoke ?? defaults.worker!.autoInvoke!;
 
   return parsed;
 }

@@ -44,3 +44,13 @@ export function contextPath(): string {
 export function planPath(): string {
   return execRoot() + "/plan.json";
 }
+
+/** Absolute path to .executive/proposals/ (proposal history). */
+export function proposalsDir(): string {
+  return execRoot() + "/proposals";
+}
+
+/** Absolute path to .executive/proposal.json (the latest proposal). */
+export function proposalPath(): string {
+  return execRoot() + "/proposal.json";
+}
