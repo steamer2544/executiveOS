@@ -162,7 +162,29 @@ docs/scopes/           # per-phase specs (the contract handed to the implementer
   actual reason) to the user — fixed by branching: print `report.messages` and exit early when
   `!report.changeSetWritten`, otherwise print the full validation/dry-run/changeset summary as before.
   Spec: `docs/scopes/phase-7-synthesizer.md`.
-- **Phase 8 — next**: not yet scoped.
+- **Phase 8 — DONE** (qwen impl + architect review, commit `a00fc0f`): **Autopilot** (`src/auto/`) —
+  a single `auto` command that chains the whole loop end-to-end (**plan → work → synth → execute**),
+  gated by the existing guardrails, so the human's job shrinks to reviewing/merging the isolated branch
+  it leaves. It is a **conductor, not a new brain**: `runAuto(opts)` reuses Phase 3/4/5/6/7 exactly
+  (no new LLM code, no new git code) and only decides whether to continue between stages. Order: plan →
+  **gate** (proceed only if `topAction.disposition === "act"`; `ask`/none → STOP at plan with
+  `needsHuman`, never calls the Worker/Synth/Executor) → `runWorker`+`writeProposal` → `runSynth`
+  (writes changeset, validates, dry-runs) → **apply gate** (only when validation ok + dry-run all-ops
+  succeed) → on `--apply` read `.executive/changeset.json` and `applyChangeSet({apply:true})` (Phase 6
+  isolated branch, never merges). **dry-run is default; `--apply` opt-in.** An unsafe changeset is never
+  applied even with `--apply` (validation blocks it → no branch). Failing tests → change parked on its
+  branch, `ok:false`+`needsHuman:true`. Emits `.executive/auto-report.json`. **No config change**
+  (reuses `config.worker`+`config.executor`). **NOT wired into the `watch` daemon** (autonomous
+  continuous execution is a later phase — the owner chose the manual `auto` command only). New `auto
+  [--apply] [--files a,b]` CLI. 142 passing tests (11 new, offline via MockWorker/MockSynthesizer).
+  Reviewed live against every §9 criterion (dry-run→no mutation, `--apply`→branch+commit+HEAD-back,
+  clean→nothing-to-do, blocked→ask/needs-human with Worker never called). Cleanup: removed a dead
+  `State`/`Context` import + unused `ctx` local. **No functional defects found.** Spec:
+  `docs/scopes/phase-8-autopilot.md`.
+- **Loop complete (manual trigger):** `auto --apply` runs the whole chain in one command; the human
+  reviews/merges the `executive/change-<id>` branch. **Phase 9 — not yet scoped.** Candidate: continuous
+  autonomy (wire `auto` into the `watch` daemon behind a config gate, default off), or the
+  `.executive/claude.md` product AI-identity artifact (still not created — do NOT create early).
 
 ## Commands
 
@@ -175,6 +197,7 @@ bun run src/index.ts plan                          # build state + derive plan.j
 bun run src/index.ts work                          # build state + plan, then run the Worker if actionable → proposal.json
 bun run src/index.ts execute <changeset.json> [--apply]  # apply a ChangeSet on an isolated branch (dry-run without --apply)
 bun run src/index.ts synth [--files a,b] [--proposal <id>]  # synthesize a ChangeSet from the latest Proposal (dry-run; does NOT apply)
+bun run src/index.ts auto [--apply] [--files a,b]   # run the whole chain plan→work→synth→execute (dry-run without --apply)
 bun run src/index.ts watch                          # start the watcher daemon (Ctrl-C to stop)
 bun run typecheck                                  # tsc --noEmit
 bun test                                           # unit tests
