@@ -24,7 +24,7 @@ That is Phase 4 (Planner) and Phase 5 (Worker). Phase 3 only *describes* the pre
 **In scope:**
 1. `src/state/types.ts` — `State` and `Context` interfaces.
 2. `src/state/builder.ts` — `buildState(now?)` (pure derivation from events) + `writeState(...)`
-   (atomic persist to `.executive/state.json` / `.executive/context.json`).
+   (atomic persist to `.executiveOS/state.json` / `.executiveOS/context.json`).
 3. A one-shot **`build-state`** CLI command.
 4. Periodic rebuild wired into the existing **`watch`** daemon (every `state.intervalMs`, default
    30000), plus one rebuild immediately at startup.
@@ -38,7 +38,7 @@ That is Phase 4 (Planner) and Phase 5 (Worker). Phase 3 only *describes* the pre
   already exist. Do not add event sources.
 - ❌ SQLite / Drizzle — **still JSONL**.
 - ❌ No web server, no HTTP, no Elysia.
-- ❌ Do NOT create `.executive/claude.md` / `rules.md` / `planner.md` (Phase 4/5 artifacts).
+- ❌ Do NOT create `.executiveOS/claude.md` / `rules.md` / `planner.md` (Phase 4/5 artifacts).
 
 If tempted to add any ❌ item: **STOP.**
 
@@ -144,9 +144,9 @@ export function buildState(now?: Date): { state: State; context: Context };
 export function writeState(built: { state: State; context: Context }): void;
 ```
 
-- Writes `.executive/state.json` and `.executive/context.json`, each pretty-printed
+- Writes `.executiveOS/state.json` and `.executiveOS/context.json`, each pretty-printed
   (`JSON.stringify(x, null, 2) + "\n"`), **atomically** (write to a temp file in the same dir, then
-  `renameSync` over the target — same technique as `seq.ts`). Ensure `.executive/` exists first.
+  `renameSync` over the target — same technique as `seq.ts`). Ensure `.executiveOS/` exists first.
 
 > Paths: add helpers to `src/paths.ts` — `statePath()` = `execRoot()/state.json`,
 > `contextPath()` = `execRoot()/context.json`. Follow the existing forward-slash style in that file.
@@ -213,8 +213,8 @@ In the `watch` command, after `manager.startAll()`:
 
 ## 8. Housekeeping
 
-- `.gitignore`: add `/.executive/state.json` and `/.executive/context.json` (derived runtime data,
-  like the event logs — never committed). Match the existing `.executive/...` ignore style.
+- `.gitignore`: add `/.executiveOS/state.json` and `/.executiveOS/context.json` (derived runtime data,
+  like the event logs — never committed). Match the existing `.executiveOS/...` ignore style.
 - `bootstrap()` does **not** need to pre-create `state.json`/`context.json` (they are produced by
   `build-state`/`watch`). Do not change bootstrap for this.
 
@@ -274,6 +274,6 @@ Use `append({ source, type, data, seq? })` directly to construct event histories
 
 A commit adding `src/state/types.ts`, `src/state/builder.ts`, `src/state/builder.test.ts`, the
 `paths.ts`/`config.ts`/`index.ts`/`.gitignore` changes, and the `build-state` command + daemon wiring.
-Leave this doc in place. Do NOT commit `.executive/` runtime data (including `state.json`/`context.json`).
+Leave this doc in place. Do NOT commit `.executiveOS/` runtime data (including `state.json`/`context.json`).
 Hand back for review — Claude runs every item in §10, including a live `build-state` and a live
 `watch` state-refresh against a temp git repo.

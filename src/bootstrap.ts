@@ -1,4 +1,4 @@
-// Ensure .executive/ directory structure exists.
+// Ensure .executiveOS/ directory structure exists.
 // Idempotent: running twice never errors or loses data.
 
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
@@ -10,7 +10,7 @@ import { defaultConfig } from "./config.js";
 const SOURCES: EventSource[] = ["git", "terminal", "editor", "system"];
 
 /**
- * Create .executive/, its subdirs, empty jsonl files, default config,
+ * Create .executiveOS/, its subdirs, empty jsonl files, default config,
  * and meta.json (seq counter) if they don't already exist.
  * Safe to call multiple times.
  */

@@ -1,4 +1,4 @@
-// Load and validate config.json from .executive/.
+// Load and validate config.json from .executiveOS/.
 
 import { readFileSync } from "node:fs";
 import { configPath } from "./paths.js";

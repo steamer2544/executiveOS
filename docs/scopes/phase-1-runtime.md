@@ -29,13 +29,13 @@ executive/
 ├── src/
 │   ├── index.ts            # CLI entry point
 │   ├── config.ts           # load/validate config.json (with defaults)
-│   ├── paths.ts            # resolves .executive/ paths
+│   ├── paths.ts            # resolves .executiveOS/ paths
 │   ├── events/
 │   │   ├── types.ts        # Event type definitions
 │   │   ├── store.ts        # EventStore: append + read events (JSONL)
 │   │   └── store.test.ts   # unit tests (bun test)
-│   └── bootstrap.ts        # ensures .executive/ dir structure exists
-└── .executive/             # created AT RUNTIME by `init`, NOT committed
+│   └── bootstrap.ts        # ensures .executiveOS/ dir structure exists
+└── .executiveOS/             # created AT RUNTIME by `init`, NOT committed
     ├── config.json
     ├── events/
     │   ├── git.jsonl
@@ -44,7 +44,7 @@ executive/
     │   └── system.jsonl
     └── logs/
 ```
-> `.executive/` runtime data is gitignored already. Do not commit it. Do commit `src/`, `package.json`, `tsconfig.json`.
+> `.executiveOS/` runtime data is gitignored already. Do not commit it. Do commit `src/`, `package.json`, `tsconfig.json`.
 
 ### package.json requirements
 - `"type": "module"`
@@ -87,8 +87,8 @@ Rules:
 
 ## 3. Paths (`src/paths.ts`)
 
-- Export a function `execRoot(): string` returning the absolute path to the `.executive/` directory.
-  - Default: `<current working directory>/.executive`.
+- Export a function `execRoot(): string` returning the absolute path to the `.executiveOS/` directory.
+  - Default: `<current working directory>/.executiveOS`.
   - Overridable via env var `EXECUTIVE_HOME` (absolute path). This is REQUIRED — tests rely on it to use a temp dir.
 - Export helpers: `configPath()`, `eventsDir()`, `logsDir()`, `eventLogPath(source: EventSource)` — all derived from `execRoot()`.
 
@@ -97,7 +97,7 @@ Rules:
 ## 4. Bootstrap (`src/bootstrap.ts`)
 
 - Export `async function bootstrap(): Promise<void>` that:
-  - Creates `.executive/`, `.executive/events/`, `.executive/logs/` if missing (recursive, idempotent).
+  - Creates `.executiveOS/`, `.executiveOS/events/`, `.executiveOS/logs/` if missing (recursive, idempotent).
   - Creates each of the 4 empty `events/*.jsonl` files if missing (empty file, do NOT overwrite existing).
   - Writes `config.json` with defaults **only if it does not already exist** (never clobber an existing config).
 - Idempotent: running it twice must not error or lose data.
@@ -160,7 +160,7 @@ Parse `process.argv`. Support exactly these commands:
 
 | Command | Behavior |
 |---|---|
-| `init` | Run `bootstrap()`. Print the resolved `.executive` path and "initialized". Idempotent. |
+| `init` | Run `bootstrap()`. Print the resolved `.executiveOS` path and "initialized". Idempotent. |
 | `emit <source> <type> [json-data]` | Append an event. `<source>` ∈ {git,terminal,editor,system}. `[json-data]` optional JSON string for `data` (default `{}`). Print the stored event as JSON. |
 | `tail [n] [source]` | Print last `n` events (default n=10). Optional source filter. One JSON object per line. |
 | `--help` / no args | Print usage. |
@@ -172,7 +172,7 @@ Parse `process.argv`. Support exactly these commands:
 Example session that MUST work:
 ```
 $ bun run src/index.ts init
-initialized: /abs/path/.executive
+initialized: /abs/path/.executiveOS
 
 $ bun run src/index.ts emit system system.note '{"msg":"hello"}'
 {"id":"...","ts":"2026-...Z","source":"system","type":"system.note","data":{"msg":"hello"}}
@@ -189,7 +189,7 @@ $ bun run src/index.ts tail 5
 
 ## 8. Tests (`src/events/store.test.ts`) — required, must pass with `bun test`
 
-Set `EXECUTIVE_HOME` to a fresh temp dir in `beforeEach` (and clean it up) so tests never touch the real `.executive/`. Cover at minimum:
+Set `EXECUTIVE_HOME` to a fresh temp dir in `beforeEach` (and clean it up) so tests never touch the real `.executiveOS/`. Cover at minimum:
 
 1. `bootstrap()` creates the full dir tree + 4 jsonl files + config.json; running twice is idempotent and doesn't clobber config.
 2. `append()` writes a valid event, fills id+ts, returns it; the file gains exactly one line.
@@ -215,4 +215,4 @@ Set `EXECUTIVE_HOME` to a fresh temp dir in `beforeEach` (and clean it up) so te
 
 ## 10. Deliverable
 
-A branch/commit containing `src/`, `package.json`, `tsconfig.json` (and this doc left in place). Do NOT commit `.executive/` runtime data. When done, hand back for review — Claude will run every item in §9.
+A branch/commit containing `src/`, `package.json`, `tsconfig.json` (and this doc left in place). Do NOT commit `.executiveOS/` runtime data. When done, hand back for review — Claude will run every item in §9.

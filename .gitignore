@@ -2,13 +2,9 @@
 node_modules/
 bun.lockb
 
-# Runtime data (event logs, state, db) — machine-local, not source
-.executive/logs/
-.executive/events/*.jsonl
-.executive/*.sqlite
-.executive/*.db
-.executive/state.json
-.executive/context.json
+# Runtime data (event logs, state, db) — machine-local, not source.
+# The whole .executiveOS/ tree is created by `init` and never committed.
+.executiveOS/
 
 # Build output
 dist/
