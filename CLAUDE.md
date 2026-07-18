@@ -343,6 +343,19 @@ docs/scopes/           # per-phase specs (the contract handed to the implementer
   `.executive/` to the repo's `.gitignore` when run inside a git repo (idempotent; never duplicates;
   never fails init). 236 passing tests (unchanged; the fix is in live-only paths). Files: `src/config.ts`,
   `src/worker/factory.ts`, `src/synth/factory.ts`, `src/infer/factory.ts`, `src/index.ts`.
+- **Phase 21 — DONE** (architect impl + self-review + live validation, this commit): **GUI polish** — the
+  two remaining nice-to-haves. (1) **Confirm buttons for LLM suggestions:** `Digest.suggestions` is now a
+  structured `Suggestion[]` (`{kind, text, emit:{type,data}}`) instead of `string[]`; the GUI renders a
+  **Confirm** button per suggestion that POSTs the exact `emit` (block guess → `system.blocked{reason}`,
+  deadline guess → `system.task{deadline}`) — one click turns a guess into a confirmed signal. Deadline
+  suggestions surface only when the model gave a concrete date (actionable). `renderDigest` uses
+  `s.text`. (2) **`ui` also runs the watchers:** the `ui` command now starts the git + fs watchers by
+  default (opt out with `--no-watch`) so activity is captured while the dashboard is open — one command
+  instead of `ui` + `watch`. 236 passing tests (suggestion tests updated to the structured shape).
+  Reviewed live (8/8): the page has the Confirm handler, `/api/state` returns structured suggestions with
+  the emit payload, confirming a block guess flips `now.blocked` and clears the suggestion, and a commit
+  made while `ui` runs is captured (project + branch appear). Files: `src/report/{types,digest}.ts`,
+  `src/report/digest.test.ts`, `src/ui/page.ts`, `src/index.ts`.
 - **Loop complete (manual trigger):** `auto --apply` runs the whole chain in one command; the human
   reviews/merges the `executive/change-<id>` branch.
 
@@ -361,7 +374,7 @@ bun run src/index.ts auto [--apply] [--files a,b]   # run the whole chain plan�
 bun run src/index.ts report                         # render a human-readable digest of the current state → digest.md
 bun run src/index.ts notifications [n]              # show the last n "Needs you" notifications (daemon-logged)
 bun run src/index.ts install-hooks [--test "<cmd>"] # install a git post-commit hook that auto-emits test results
-bun run src/index.ts ui [--port N]                  # local web dashboard (default port 4317; Ctrl-C to stop)
+bun run src/index.ts ui [--port N] [--no-watch]     # local web dashboard + git/file watchers (Ctrl-C to stop)
 bun run src/index.ts infer                          # LLM guesses block/deadline (suggestions only) → inferred.json
 bun run src/index.ts watch                          # start the watcher daemon (Ctrl-C to stop)
 bun run typecheck                                  # tsc --noEmit

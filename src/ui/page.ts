@@ -144,7 +144,12 @@ async function refresh() {
 
     const sug = dg.suggestions || [];
     $("suggestCard").style.display = sug.length ? "block" : "none";
-    $("suggestions").innerHTML = sug.map(s => \`<li>\${esc(s)} <span class="muted">— confirm with the buttons below</span></li>\`).join("");
+    window.__suggest = sug;
+    $("suggestions").innerHTML = sug.map((s, i) =>
+      \`<li style="display:flex;gap:10px;align-items:center;justify-content:space-between">
+         <span>\${esc(s.text)}</span>
+         <button class="btn" onclick="confirmSuggestion(\${i})">Confirm</button>
+       </li>\`).join("");
 
     const a = dg.lastAutopilot;
     $("autopilot").innerHTML = a.available ? rows([
@@ -163,6 +168,7 @@ async function emit(type, data) {
     toast("saved ✓"); await refresh();
   } catch (e) { toast("error: " + e.message); }
 }
+function confirmSuggestion(i) { const s = (window.__suggest || [])[i]; if (!s) return; emit(s.emit.type, s.emit.data); }
 function emitBlock() { const reason = $("blockReason").value.trim(); if (!reason) return toast("enter a reason"); emit("system.blocked", { reason }); $("blockReason").value=""; }
 function emitUnblock() { emit("system.unblocked", {}); }
 function emitDeadline() { const d = $("deadline").value; if (!d) return toast("pick a date"); emit("system.task", { deadline: d }); }

@@ -169,15 +169,24 @@ export function buildDigest(opts?: DigestOptions): Digest {
   // Shown only when they add NEW information vs. the deterministic state:
   //   - a block guess only if not already blocked;
   //   - a deadline guess only if no deadline is set.
-  const suggestions: string[] = [];
+  const suggestions: Digest["suggestions"] = [];
   const rawInfer = readJson<InferenceResult>(inferredPath());
   if (rawInfer && !rawInfer.error) {
     if (rawInfer.block?.likely && !(rawState?.blocked === true)) {
-      suggestions.push("Possible block — " + (rawInfer.block.reason || "confirm?"));
+      const reason = rawInfer.block.reason || "unspecified";
+      suggestions.push({
+        kind: "block",
+        text: "Possible block — " + reason,
+        emit: { type: "system.blocked", data: { reason } },
+      });
     }
-    if (rawInfer.deadline?.likely && !(rawState?.deadline)) {
-      const when = rawInfer.deadline.date ? " (" + rawInfer.deadline.date + ")" : "";
-      suggestions.push("Possible deadline" + when + " — " + (rawInfer.deadline.note || "confirm?"));
+    // Only actionable when the model gave a concrete date to confirm.
+    if (rawInfer.deadline?.likely && rawInfer.deadline.date && !(rawState?.deadline)) {
+      suggestions.push({
+        kind: "deadline",
+        text: "Possible deadline (" + rawInfer.deadline.date + ") — " + (rawInfer.deadline.note || "confirm?"),
+        emit: { type: "system.task", data: { deadline: rawInfer.deadline.date } },
+      });
     }
   }
 
@@ -297,7 +306,7 @@ export function renderDigest(d: Digest): string {
     lines.push("## Suggestions (unconfirmed — from the LLM)");
     lines.push("");
     for (const s of d.suggestions) {
-      lines.push("- " + s);
+      lines.push("- " + s.text);
     }
     lines.push("");
   }

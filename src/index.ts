@@ -52,7 +52,7 @@ Commands:
   report                                        Render a human-readable digest of the current state
   notifications [n]                             Show the last n "Needs you" notifications (default 10)
   install-hooks [--test "<cmd>"]                Install a git post-commit hook that auto-emits test results
-  ui [--port N]                                 Open a local web dashboard (default port 4317)
+  ui [--port N] [--no-watch]                    Open a local web dashboard (also watches git+files unless --no-watch)
   infer                                         Ask the LLM to guess block/deadline (suggestions only) → inferred.json
   --help                                        Show this help
 
@@ -766,18 +766,44 @@ async function main(): Promise<void> {
     case "ui": {
       await bootstrap();
       let port = 4317;
+      let noWatch = false;
       for (let i = 1; i < args.length; i++) {
         if (args[i] === "--port" && i + 1 < args.length) {
           const parsed = parseInt(args[++i]!, 10);
           if (!isNaN(parsed) && parsed > 0) port = parsed;
+        } else if (args[i] === "--no-watch") {
+          noWatch = true;
         }
       }
       try {
+        // Start the git + fs watchers so activity is captured while the dashboard
+        // is open (the dashboard itself rebuilds state on each poll). --no-watch skips this.
+        let manager: WatcherManager | null = null;
+        if (!noWatch) {
+          const config = loadConfig();
+          const bus = new EventBus();
+          attachStoreSink(bus, () => {});
+          const watchConfig = config.watch ?? { git: {}, fs: {} };
+          const gitConfig = watchConfig.git ?? {};
+          const fsConfig = watchConfig.fs ?? {};
+          const watchers = [];
+          if (gitConfig.enabled !== false) {
+            watchers.push(createGitWatcher({ repoPath: gitConfig.repoPath ?? process.cwd(), pollMs: gitConfig.pollMs ?? 5000 }));
+          }
+          if (fsConfig.enabled !== false) {
+            watchers.push(createFsWatcher({ paths: fsConfig.paths ?? [process.cwd() + "/src"], debounceMs: fsConfig.debounceMs ?? 300 }));
+          }
+          manager = new WatcherManager(bus, watchers);
+          await manager.startAll();
+        }
+
         const server = startUiServer({ port });
         process.stdout.write("ExecutiveOS dashboard: http://localhost:" + server.port + "\n");
+        process.stdout.write(manager ? "Watching git + files for activity.\n" : "Dashboard only (--no-watch).\n");
         process.stdout.write("(Ctrl-C to stop)\n");
-        process.on("SIGINT", () => {
+        process.on("SIGINT", async () => {
           server.stop();
+          if (manager) await manager.stopAll();
           process.stdout.write("\nstopped\n");
           process.exit(0);
         });

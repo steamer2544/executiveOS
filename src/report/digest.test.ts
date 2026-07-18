@@ -688,7 +688,9 @@ test("suggestions: surfaces a block guess when state is not blocked", () => {
       deadline: { likely: false, date: null, note: "" }, raw: "",
     }));
     const d = buildDigest();
-    expect(d.suggestions.some((s) => s.includes("Possible block"))).toBe(true);
+    expect(d.suggestions.some((s) => s.kind === "block" && s.text.includes("Possible block"))).toBe(true);
+    const blk = d.suggestions.find((s) => s.kind === "block");
+    expect(blk?.emit).toEqual({ type: "system.blocked", data: { reason: "waiting on vendor" } });
     expect(renderDigest(d)).toContain("Suggestions");
   } finally { cleanup(dir); unsetHome(); }
 });
@@ -704,7 +706,7 @@ test("suggestions: suppresses a block guess when already blocked", () => {
       deadline: { likely: false, date: null, note: "" }, raw: "",
     }));
     const d = buildDigest();
-    expect(d.suggestions.some((s) => s.includes("Possible block"))).toBe(false);
+    expect(d.suggestions.some((s) => s.kind === "block")).toBe(false);
   } finally { cleanup(dir); unsetHome(); }
 });
 
@@ -719,7 +721,9 @@ test("suggestions: deadline guess only when no deadline set", () => {
       deadline: { likely: true, date: "2026-08-01", note: "ship" }, raw: "",
     }));
     const d = buildDigest();
-    expect(d.suggestions.some((s) => s.includes("Possible deadline") && s.includes("2026-08-01"))).toBe(true);
+    expect(d.suggestions.some((s) => s.kind === "deadline" && s.text.includes("2026-08-01"))).toBe(true);
+    const dl = d.suggestions.find((s) => s.kind === "deadline");
+    expect(dl?.emit).toEqual({ type: "system.task", data: { deadline: "2026-08-01" } });
   } finally { cleanup(dir); unsetHome(); }
 });
 

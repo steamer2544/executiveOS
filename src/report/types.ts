@@ -57,8 +57,15 @@ export interface Digest {
   needsYou: NeedsYouItem[];          // aggregated across sources; [] when nothing pending
 
   /** LLM guesses to confirm (from .executive/inferred.json), shown only when they add info.
-   *  Empty unless the infer feature ran and produced a novel suggestion. */
-  suggestions: string[];
+   *  Empty unless the infer feature ran and produced a novel, actionable suggestion. */
+  suggestions: Suggestion[];
+}
+
+/** An LLM guess the owner can confirm with one click. `emit` is exactly what confirming sends. */
+export interface Suggestion {
+  kind: "block" | "deadline";
+  text: string; // human-readable line
+  emit: { type: string; data: Record<string, unknown> };
 }
 
 export interface DigestOptions {
