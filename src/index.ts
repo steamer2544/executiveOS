@@ -594,6 +594,20 @@ async function main(): Promise<void> {
     case "report": {
       await bootstrap();
       try {
+        // Freshen state + plan from the event log first (deterministic, no LLM),
+        // so `report` reflects the latest events even without a running daemon.
+        // If this fails (e.g. corrupt logs), fall through to a digest of whatever
+        // artifacts already exist — report must always render something.
+        try {
+          const built = buildState();
+          writeState(built);
+          const p = plan(built.state, built.context);
+          writePlan(p);
+        } catch (refreshErr) {
+          process.stderr.write(
+            "Warning: could not refresh state/plan (" + (refreshErr as Error).message + "); reporting existing artifacts\n"
+          );
+        }
         const digest = buildDigest();
         const md = renderDigest(digest);
         writeDigest(md);

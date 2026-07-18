@@ -67,6 +67,20 @@ bun run src/index.ts watch         # Ctrl-C to stop
 Nothing touches your repo history unless you explicitly run `execute … --apply` or `auto --apply`, and
 even then work only ever lands on an isolated `executive/change-*` branch that **you** merge.
 
+### Feeding it real signals
+
+The `watch` daemon auto-captures **git commits** and **file saves**. Richer signals (test results, a
+block, your current task, a deadline) are `emit`ted. To wire your test suite in without typing `emit` by
+hand, run it through the helper — it forwards output and emits `passing`/`failing` from the exit code:
+
+```bash
+scripts/exec-test.sh "bun test"      # bash
+pwsh scripts/exec-test.ps1 "bun test"  # PowerShell
+```
+
+`report` freshens `state.json`/`plan.json` from the event log before rendering, so `emit … → report`
+reflects your latest events even with no daemon running.
+
 ---
 
 ## Commands
