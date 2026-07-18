@@ -22,6 +22,39 @@ function str(data: Record<string, unknown>, key: string): string | undefined {
   return typeof data[key] === "string" ? data[key] : undefined;
 }
 
+/** Branch names that are not a "task" (you are not working on a ticket by being on main). */
+const DEFAULT_BRANCHES = new Set([
+  "main", "master", "develop", "dev", "trunk", "release", "staging", "prod", "production",
+]);
+
+/** Leading branch segments that are a type prefix, not part of the task name. */
+const BRANCH_TYPE_PREFIXES = new Set([
+  "feature", "feat", "fix", "bugfix", "hotfix", "chore", "wip", "task",
+  "story", "spike", "refactor", "test", "docs",
+]);
+
+/**
+ * Infer a human-readable task name from a git branch, or null when there's nothing
+ * meaningful (default branch, empty). Deterministic — no LLM.
+ * e.g. "feat/login-page" → "login page"; "fix/JIRA-12-null-crash" → "JIRA-12 null crash";
+ *      "main" → null; "experiment" → "experiment".
+ */
+export function taskFromBranch(branch: string | null): string | null {
+  if (!branch) return null;
+  const raw = branch.trim();
+  if (raw === "" || DEFAULT_BRANCHES.has(raw.toLowerCase())) return null;
+
+  // Strip a leading type prefix ("feat/…", "fix/…") but keep deeper segments.
+  let rest = raw;
+  const slash = rest.indexOf("/");
+  if (slash >= 0 && BRANCH_TYPE_PREFIXES.has(rest.slice(0, slash).toLowerCase())) {
+    rest = rest.slice(slash + 1);
+  }
+
+  const human = rest.replace(/[-_/]+/g, " ").replace(/\s+/g, " ").trim();
+  return human.length > 0 ? human : null;
+}
+
 // ─── readEventsSync ─────────────────────────────────────────────────────────
 
 /** Read all events from one source's JSONL log synchronously. */
@@ -154,6 +187,13 @@ export function buildState(now?: Date): { state: State; context: Context } {
     gitBranch = latestBranchSwitchTo;
   } else if (latestCommitBranchSeq > latestBranchSwitchSeq) {
     gitBranch = latestCommitBranch;
+  }
+
+  // Fallback: infer the current task from the branch name when no explicit
+  // system.task provided one. Explicit tasks always win; this only fills the gap
+  // so switching to a `feat/xyz` branch tells the system what you're working on.
+  if (currentTask === null) {
+    currentTask = taskFromBranch(gitBranch);
   }
 
   // --- tests (system.test_result) ---

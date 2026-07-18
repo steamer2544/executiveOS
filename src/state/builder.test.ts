@@ -14,7 +14,7 @@ import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import { bootstrap } from "../bootstrap.js";
 import { append, read } from "../events/store.js";
 import { execRoot, eventLogPath } from "../paths.js";
-import { buildState, writeState } from "./builder.js";
+import { buildState, writeState, taskFromBranch } from "./builder.js";
 import { statePath, contextPath } from "../paths.js";
 import type { EventSource } from "../events/types.js";
 
@@ -308,5 +308,56 @@ describe("writeState round-trips", () => {
     for (let i = 1; i < seqs.length; i++) {
       expect(seqs[i]).toBeGreaterThan(seqs[i - 1]);
     }
+  });
+});
+
+// ── taskFromBranch (Phase 15: auto-task from git branch) ──────────────────────
+
+describe("taskFromBranch", () => {
+  it("humanizes a prefixed branch", () => {
+    expect(taskFromBranch("feat/login-page")).toBe("login page");
+  });
+  it("strips only recognized type prefixes", () => {
+    expect(taskFromBranch("fix/JIRA-12-null-crash")).toBe("JIRA 12 null crash");
+    expect(taskFromBranch("yiw/experiment-thing")).toBe("yiw experiment thing");
+  });
+  it("returns null for default branches", () => {
+    for (const b of ["main", "master", "develop", "MAIN"]) {
+      expect(taskFromBranch(b)).toBeNull();
+    }
+  });
+  it("returns null for empty/null/prefix-only", () => {
+    expect(taskFromBranch(null)).toBeNull();
+    expect(taskFromBranch("")).toBeNull();
+    expect(taskFromBranch("feat/")).toBeNull();
+  });
+  it("keeps a plain non-default branch as the task", () => {
+    expect(taskFromBranch("experiment")).toBe("experiment");
+  });
+});
+
+describe("buildState — task inferred from branch", () => {
+  const DIR = "/tmp/executive-test-taskbranch-" + randomUUID();
+  beforeEach(() => setExecutiveHome(DIR));
+  afterEach(() => cleanup(DIR));
+
+  it("fills currentTask from branch when no system.task exists", () => {
+    writeRawEvent("git", 1, "git.branch_switch", { to: "feat/login-page" });
+    const { state } = buildState(new Date("2026-01-01T00:00:10.000Z"));
+    expect(state.git.branch).toBe("feat/login-page");
+    expect(state.currentTask).toBe("login page");
+  });
+
+  it("explicit system.task wins over the branch inference", () => {
+    writeRawEvent("git", 1, "git.branch_switch", { to: "feat/login-page" });
+    writeRawEvent("system", 2, "system.task", { task: "the real task" });
+    const { state } = buildState(new Date("2026-01-01T00:00:10.000Z"));
+    expect(state.currentTask).toBe("the real task");
+  });
+
+  it("stays null on a default branch", () => {
+    writeRawEvent("git", 1, "git.branch_switch", { to: "main" });
+    const { state } = buildState(new Date("2026-01-01T00:00:10.000Z"));
+    expect(state.currentTask).toBeNull();
   });
 });

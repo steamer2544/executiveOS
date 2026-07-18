@@ -268,6 +268,18 @@ docs/scopes/           # per-phase specs (the contract handed to the implementer
   `unblocked`→`[resolved]`, exactly 2 records (no spam), `notifications` reads them back, `report`
   appends nothing, empty log → "No notifications yet." **No qwen defects found.** Spec:
   `docs/scopes/phase-14-notification-log.md`.
+- **Phase 15 — DONE** (architect impl + self-review, this commit): **Auto-task from git branch** — the
+  first "sense it, don't ask for it" step to cut manual `emit`s. The State Builder set `currentTask` only
+  from explicit `system.task` events; now, when none is present, it **infers the task from the current
+  git branch** (already derived in state) via a new pure `taskFromBranch(branch)` in `src/state/builder.ts`:
+  strips a recognized type prefix (`feat/`, `fix/`, …), humanizes separators (`feat/login-page` →
+  "login page"), returns `null` for default branches (`main`/`master`/…) and empties. **Explicit
+  `system.task` always wins** (branch is a fallback only). Deterministic, no LLM, **no watcher/event
+  change** — the existing Phase 2 GitWatcher already emits `git.branch_switch{to}`, so in real use just
+  switching to a `feat/xyz` branch while `watch` runs tells the system what you're working on. 207
+  passing tests (8 new). Reviewed live: `git.branch_switch → feat/dark-mode` → `report` shows
+  `Task: dark mode` with zero manual emit. Implemented directly by the architect (qwen is relayed by the
+  owner, who is away). No scope doc (small, in-layer change).
 - **Loop complete (manual trigger):** `auto --apply` runs the whole chain in one command; the human
   reviews/merges the `executive/change-<id>` branch.
 
