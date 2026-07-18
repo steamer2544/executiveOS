@@ -18,6 +18,7 @@ const ALLOWED_EMIT_TYPES = new Set([
   "system.unblocked",
   "system.task",
   "system.test_result",
+  "system.note", // dictated/typed captures from the dashboard's listening mode
 ]);
 
 /** Build the current digest, freshening state + plan first (deterministic). */
@@ -47,6 +48,15 @@ export function startUiServer(opts: UiServerOptions) {
         return new Response(renderPage(), {
           headers: { "content-type": "text/html; charset=utf-8" },
         });
+      }
+
+      if (req.method === "GET" && url.pathname === "/api/config") {
+        try {
+          const cfg = loadConfig();
+          return Response.json({ capture: cfg.capture });
+        } catch (err) {
+          return Response.json({ error: (err as Error).message }, { status: 500 });
+        }
       }
 
       if (req.method === "GET" && url.pathname === "/api/state") {

@@ -88,4 +88,36 @@ describe("ui server", () => {
     const res = await fetch("http://127.0.0.1:" + server.port + "/nope");
     expect(res.status).toBe(404);
   });
+
+  it("serves capture config at /api/config", async () => {
+    // bootstrap writes a default config with the capture block
+    await (await import("../bootstrap.js")).bootstrap();
+    server = startUiServer({ port: 0 });
+    const j = await (await fetch("http://127.0.0.1:" + server.port + "/api/config")).json();
+    expect(j.capture).toBeDefined();
+    expect(typeof j.capture.from).toBe("string");
+    expect(typeof j.capture.to).toBe("string");
+  });
+
+  it("accepts a dictated note (system.note) via /api/emit", async () => {
+    server = startUiServer({ port: 0 });
+    const base = "http://127.0.0.1:" + server.port;
+    const res = await fetch(base + "/api/emit", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ type: "system.note", data: { msg: "blocked on the webhook", via: "voice" } }),
+    });
+    expect((await res.json()).ok).toBe(true);
+    const events = await read("system");
+    expect(events.some((e) => e.type === "system.note" && e.data.msg === "blocked on the webhook")).toBe(true);
+  });
+});
+
+describe("renderPage — listening UI", () => {
+  it("includes the listening card + speech wiring + proposals", () => {
+    const html = renderPage();
+    expect(html).toContain("Listening");
+    expect(html).toContain("SpeechRecognition");
+    expect(html).toContain("Decisions for you");
+    expect(html).toContain("toggleListen");
+  });
 });

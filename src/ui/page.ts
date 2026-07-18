@@ -66,6 +66,16 @@ export function renderPage(): string {
 </header>
 
 <main>
+  <section class="card" id="listenCard">
+    <h2 style="display:flex;justify-content:space-between;align-items:center">
+      <span>Listening</span>
+      <button class="btn" id="micBtn" onclick="toggleListen()">Start listening</button>
+    </h2>
+    <div id="listenStatus" class="muted">Off. This listens to <b>you</b> (your dictated notes) — nothing is recorded without this being visibly on.</div>
+    <div id="listenInterim" class="mono" style="margin-top:8px;min-height:1.2em;color:var(--accent)"></div>
+    <div id="listenSchedule" class="muted" style="margin-top:6px;font-size:12.5px"></div>
+  </section>
+
   <section class="card" id="proposalsCard">
     <h2 style="display:flex;justify-content:space-between;align-items:center">
       <span>Decisions for you</span>
@@ -226,6 +236,63 @@ function emitUnblock() { emit("system.unblocked", {}); }
 function emitDeadline() { const d = $("deadline").value; if (!d) return toast("pick a date"); emit("system.task", { deadline: d }); }
 function emitTask() { const t = $("task").value.trim(); if (!t) return toast("enter a task"); emit("system.task", { task: t }); $("task").value=""; }
 
+// ── Listening (Web Speech API; listens to YOU, shows status visibly) ──────────
+let capture = { enabled: false, from: "09:00", to: "18:00" };
+let recog = null, listening = false, userStopped = false;
+const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+
+function hhmmNow() { const d = new Date(); return d.getHours() * 60 + d.getMinutes(); }
+function toMin(s) { const m = /^(\\d{1,2}):(\\d{2})/.exec(s || ""); return m ? (+m[1]) * 60 + (+m[2]) : null; }
+function withinHours() { const a = toMin(capture.from), b = toMin(capture.to), n = hhmmNow(); return a != null && b != null && n >= a && n < b; }
+
+function setListenUI() {
+  const on = listening;
+  $("micBtn").textContent = on ? "Stop listening" : "Start listening";
+  $("listenStatus").innerHTML = on
+    ? '<span style="color:var(--danger);font-weight:700">🔴 Listening…</span> speak a quick note and I\\'ll capture it.'
+    : 'Off. This listens to <b>you</b> (your dictated notes) — nothing is recorded without this being visibly on.';
+  const sched = capture.enabled ? ("Auto-on during work hours " + capture.from + "–" + capture.to + (withinHours() ? " (now)" : "")) : "Auto-schedule off (manual only).";
+  $("listenSchedule").textContent = SR ? sched : "Voice capture needs Chrome or Edge; you can still type notes below.";
+}
+
+function startListen() {
+  if (!SR || listening) return;
+  userStopped = false;
+  try {
+    recog = new SR();
+    recog.continuous = true; recog.interimResults = true;
+    recog.onresult = (e) => {
+      let interim = "";
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        const r = e.results[i];
+        if (r.isFinal) {
+          const text = r[0].transcript.trim();
+          if (text) emit("system.note", { msg: text, via: "voice" });
+        } else interim += r[0].transcript;
+      }
+      $("listenInterim").textContent = interim;
+    };
+    recog.onend = () => { $("listenInterim").textContent = ""; if (listening && !userStopped) { try { recog.start(); } catch {} } };
+    recog.onerror = (e) => { if (e.error === "not-allowed" || e.error === "service-not-allowed") { listening = false; setListenUI(); toast("mic permission needed"); } };
+    recog.start();
+    listening = true; setListenUI();
+  } catch (e) { toast("could not start listening"); }
+}
+function stopListen(manual) { if (manual) userStopped = true; listening = false; try { recog && recog.stop(); } catch {} setListenUI(); }
+function toggleListen() { listening ? stopListen(true) : startListen(); }
+
+async function loadCaptureConfig() {
+  try { const r = await fetch("/api/config"); const j = await r.json(); if (j.capture) capture = j.capture; } catch {}
+  setListenUI();
+}
+// Schedule tick: auto-start within work hours (once enabled + mic granted), auto-stop outside.
+setInterval(() => {
+  if (!SR || !capture.enabled) return;
+  if (withinHours() && !listening && !userStopped) startListen();
+  else if (!withinHours() && listening) { listening = false; try { recog && recog.stop(); } catch {} setListenUI(); }
+}, 20000);
+
+loadCaptureConfig();
 refresh();
 loadProposals();
 setInterval(refresh, 5000);

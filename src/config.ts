@@ -68,6 +68,13 @@ export interface Config {
     cooldownMs?: number; // minimum ms between two advisor calls in the daemon. Default 600000 (10 min).
     maxOpen?: number;    // cap on pending proposals in the queue. Default 8.
   };
+  /** Voice/text capture (defaults applied when absent). The dashboard listens to YOU (your own
+   *  dictated notes) and, during work hours, can start listening automatically. OFF by default. */
+  capture?: {
+    enabled?: boolean; // if true, the dashboard auto-starts listening during work hours (once mic is granted). Default false.
+    from?: string;     // work-hours start "HH:MM". Default "09:00".
+    to?: string;       // work-hours end "HH:MM". Default "18:00".
+  };
 }
 
 /** Default configuration values. */
@@ -124,6 +131,11 @@ export function defaultConfig(): Config {
       enabled: false,
       cooldownMs: 600000,
       maxOpen: 8,
+    },
+    capture: {
+      enabled: false,
+      from: "09:00",
+      to: "18:00",
     },
   };
 }
@@ -235,6 +247,14 @@ export function loadConfig(): Config {
   parsed.advisor.enabled = parsed.advisor.enabled ?? defaults.advisor!.enabled!;
   parsed.advisor.cooldownMs = parsed.advisor.cooldownMs ?? defaults.advisor!.cooldownMs!;
   parsed.advisor.maxOpen = parsed.advisor.maxOpen ?? defaults.advisor!.maxOpen!;
+
+  // Merge missing capture fields with defaults.
+  if (!parsed.capture) {
+    parsed.capture = defaults.capture!;
+  }
+  parsed.capture.enabled = parsed.capture.enabled ?? defaults.capture!.enabled!;
+  parsed.capture.from = parsed.capture.from ?? defaults.capture!.from!;
+  parsed.capture.to = parsed.capture.to ?? defaults.capture!.to!;
 
   return parsed;
 }

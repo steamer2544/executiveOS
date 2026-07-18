@@ -373,6 +373,20 @@ docs/scopes/           # per-phase specs (the contract handed to the implementer
   / Health: 5-min break / Admin: log debugging attempts), each small + reversible; GUI round-trip
   (propose→list→approve-with-note→pending shrinks) verified offline. Files: `src/advisor/*`,
   `src/config.ts`, `src/paths.ts`, `src/ui/{server,page}.ts`, `src/index.ts`.
+- **Phase 23 — DONE** (architect impl + self-review + live, this commit): **Voice/text capture (own-voice,
+  visible).** A `capture <note>` CLI emits `system.note{msg,via}` (fed to the Advisor's context), and the
+  dashboard gains a **Listening** card: a user-initiated Web Speech push-to-talk that transcribes **the
+  owner's own dictation** and posts each final utterance as `system.note`. `system.note` added to the
+  GUI emit whitelist; new `GET /api/config` serves the `config.capture` block; `config.capture`
+  (`enabled`/`from`/`to`, default off, 09:00–18:00) with an optional auto-start during work hours.
+  **Ethical boundary (held, and re-affirmed when the owner asked to make it covert):** the listening state
+  is **always shown on screen (“🔴 Listening…”)** and off by default — the runtime will **not** ship a
+  hidden/always-on ambient recorder, because in a shared workplace that captures **coworkers who never
+  consented**, and an on-screen indicator on the owner's laptop does not inform those third parties. The
+  supported use is intentional self-dictation, not covert room capture. 250 passing tests (3 new — config
+  endpoint, `system.note` emit, page has the listening/proposals UI; Web Speech itself is browser-only).
+  `capture` verified live (Thai note logged). Files: `src/config.ts`, `src/ui/{server,page}.ts`,
+  `src/index.ts`.
 - **Loop complete (manual trigger):** `auto --apply` runs the whole chain in one command; the human
   reviews/merges the `executive/change-<id>` branch.
 
@@ -395,6 +409,7 @@ bun run src/index.ts ui [--port N] [--no-watch]     # local web dashboard + git/
 bun run src/index.ts infer                          # LLM guesses block/deadline (suggestions only) → inferred.json
 bun run src/index.ts propose                        # Advisor proposes proactive actions → advisor.json queue
 bun run src/index.ts proposals                      # list pending proposals awaiting approval
+bun run src/index.ts capture <note>                 # capture a quick note (feeds the Advisor); GUI also does this by voice
 bun run src/index.ts watch                          # start the watcher daemon (Ctrl-C to stop)
 bun run typecheck                                  # tsc --noEmit
 bun test                                           # unit tests

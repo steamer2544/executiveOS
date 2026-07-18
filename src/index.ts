@@ -58,6 +58,7 @@ Commands:
   infer                                         Ask the LLM to guess block/deadline (suggestions only) → inferred.json
   propose                                       Ask the Advisor for proactive proposals (adds to the queue)
   proposals                                     List the pending proposals awaiting your approval
+  capture <note>                                Capture a quick note (feeds the Advisor); the dashboard also does this by voice
   --help                                        Show this help
 
 Sources: git, terminal, editor, system
@@ -786,6 +787,19 @@ async function main(): Promise<void> {
         process.stderr.write("Error: " + (err as Error).message + "\n");
         process.exit(1);
       }
+      break;
+    }
+
+    case "capture": {
+      const note = args.slice(1).join(" ").trim();
+      if (!note) {
+        process.stderr.write('Error: capture requires a note, e.g. capture "blocked on the Stripe webhook again"\n');
+        process.exit(1);
+      }
+      await bootstrap();
+      const ev = await append({ source: "system", type: "system.note", data: { msg: note, via: "text" } });
+      process.stdout.write("captured (#" + ev.seq + "). The Advisor will factor it in.\n");
+      process.exit(0);
       break;
     }
 
