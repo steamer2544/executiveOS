@@ -62,6 +62,12 @@ export interface Config {
     enabled?: boolean;   // if true, the watch daemon periodically asks the LLM to GUESS block/deadline. Default false.
     cooldownMs?: number; // minimum ms between two inference calls in the daemon. Default 300000 (5 min).
   };
+  /** Proactive Advisor / proposal queue (defaults applied when absent). OFF by default. */
+  advisor?: {
+    enabled?: boolean;   // if true, the watch daemon periodically asks the LLM to PROPOSE actions. Default false.
+    cooldownMs?: number; // minimum ms between two advisor calls in the daemon. Default 600000 (10 min).
+    maxOpen?: number;    // cap on pending proposals in the queue. Default 8.
+  };
 }
 
 /** Default configuration values. */
@@ -113,6 +119,11 @@ export function defaultConfig(): Config {
     infer: {
       enabled: false,
       cooldownMs: 300000,
+    },
+    advisor: {
+      enabled: false,
+      cooldownMs: 600000,
+      maxOpen: 8,
     },
   };
 }
@@ -216,6 +227,14 @@ export function loadConfig(): Config {
   }
   parsed.infer.enabled = parsed.infer.enabled ?? defaults.infer!.enabled!;
   parsed.infer.cooldownMs = parsed.infer.cooldownMs ?? defaults.infer!.cooldownMs!;
+
+  // Merge missing advisor fields with defaults.
+  if (!parsed.advisor) {
+    parsed.advisor = defaults.advisor!;
+  }
+  parsed.advisor.enabled = parsed.advisor.enabled ?? defaults.advisor!.enabled!;
+  parsed.advisor.cooldownMs = parsed.advisor.cooldownMs ?? defaults.advisor!.cooldownMs!;
+  parsed.advisor.maxOpen = parsed.advisor.maxOpen ?? defaults.advisor!.maxOpen!;
 
   return parsed;
 }

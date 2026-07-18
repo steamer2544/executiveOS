@@ -29,6 +29,8 @@ import { installHooks } from "./hooks/install.js";
 import { startUiServer } from "./ui/server.js";
 import { runInference, writeInference } from "./infer/infer.js";
 import { inferredPath } from "./paths.js";
+import { runAdvisor } from "./advisor/advisor.js";
+import { readStore, pending } from "./advisor/store.js";
 
 const VALID_SOURCES: EventSource[] = ["git", "terminal", "editor", "system"];
 
@@ -54,6 +56,8 @@ Commands:
   install-hooks [--test "<cmd>"]                Install a git post-commit hook that auto-emits test results
   ui [--port N] [--no-watch]                    Open a local web dashboard (also watches git+files unless --no-watch)
   infer                                         Ask the LLM to guess block/deadline (suggestions only) → inferred.json
+  propose                                       Ask the Advisor for proactive proposals (adds to the queue)
+  proposals                                     List the pending proposals awaiting your approval
   --help                                        Show this help
 
 Sources: git, terminal, editor, system
@@ -317,6 +321,10 @@ async function main(): Promise<void> {
       let inferRunning = false;
       let lastInferAt: number | null = null;
 
+      // ── Advisor (proactive proposals) state ───────────────────────────────
+      let advisorRunning = false;
+      let lastAdvisorAt: number | null = null;
+
       // ── Needs-you alert state ─────────────────────────────────────────────
       let lastNeedsSignature: string | null = null;
       let lastNeedsItems: NeedsYouItem[] = [];
@@ -434,6 +442,24 @@ async function main(): Promise<void> {
                   })
                   .catch((e) => process.stderr.write("Infer failed: " + (e as Error).message + "\n"))
                   .finally(() => { inferRunning = false; });
+              }
+            }
+
+            // ── Advisor (proactive proposals; behind config.advisor.enabled) ──
+            if (config.advisor?.enabled === true && !advisorRunning) {
+              const advisorCooldown = config.advisor.cooldownMs ?? 600000;
+              const nowMs = Date.now();
+              if (lastAdvisorAt === null || nowMs - lastAdvisorAt >= advisorCooldown) {
+                advisorRunning = true;
+                lastAdvisorAt = nowMs;
+                runAdvisor(built.context, { config })
+                  .then((result) => {
+                    if (result.added.length > 0) {
+                      process.stdout.write("Advisor: +" + result.added.length + " proposal(s) — review in `ui`\n");
+                    }
+                  })
+                  .catch((e) => process.stderr.write("Advisor failed: " + (e as Error).message + "\n"))
+                  .finally(() => { advisorRunning = false; });
               }
             }
           } catch (planErr) {
@@ -760,6 +786,51 @@ async function main(): Promise<void> {
         process.stderr.write("Error: " + (err as Error).message + "\n");
         process.exit(1);
       }
+      break;
+    }
+
+    case "propose": {
+      await bootstrap();
+      try {
+        const config = loadConfig();
+        const built = buildState();
+        writeState(built);
+        const result = await runAdvisor(built.context, { config });
+        if (result.error) {
+          process.stdout.write("advisor error: " + result.error + "\n");
+          process.exit(1);
+        }
+        if (result.added.length === 0) {
+          process.stdout.write("No new proposals right now.\n");
+        } else {
+          process.stdout.write("Added " + result.added.length + " proposal(s):\n");
+          for (const p of result.added) {
+            process.stdout.write("  • [" + p.category + "] " + p.title + "\n");
+          }
+        }
+        process.stdout.write("Review + approve them in `proposals` or the dashboard (`ui`).\n");
+        process.exit(0);
+      } catch (err) {
+        process.stderr.write("Error: " + (err as Error).message + "\n");
+        process.exit(1);
+      }
+      break;
+    }
+
+    case "proposals": {
+      await bootstrap();
+      const items = pending(readStore());
+      if (items.length === 0) {
+        process.stdout.write("No pending proposals. Run `propose` to get some.\n");
+        process.exit(0);
+      }
+      for (const p of items) {
+        process.stdout.write("\n[" + p.category + "] " + p.title + "  (" + p.id.slice(0, 8) + ")\n");
+        process.stdout.write("  " + p.detail + "\n");
+        process.stdout.write("  → " + p.action + "\n");
+      }
+      process.stdout.write("\nApprove/dismiss in the dashboard (`ui`).\n");
+      process.exit(0);
       break;
     }
 

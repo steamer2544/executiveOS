@@ -356,6 +356,23 @@ docs/scopes/           # per-phase specs (the contract handed to the implementer
   the emit payload, confirming a block guess flips `now.blocked` and clears the suggestion, and a commit
   made while `ui` runs is captured (project + branch appear). Files: `src/report/{types,digest}.ts`,
   `src/report/digest.test.ts`, `src/ui/page.ts`, `src/index.ts`.
+- **Phase 22 — DONE** (architect impl + self-review + live validation, this commit): **Proactive Advisor
+  / proposal queue** — the "chief of staff" turn: instead of only answering, the system **proposes** small
+  reversible actions (work AND life) for the owner to **approve / dismiss** (optionally editing first).
+  `src/advisor/`: `Advisor` (mock offline | anthropic, reusing `config.worker` + the Phase-20 token
+  headroom), a `Proposal` queue persisted to **`.executive/advisor.json`** with add-dedup-by-title + a
+  `maxOpen` cap, and `runAdvisor` (generate → enqueue) + `decideProposal` (approve/reject, applies the
+  owner's edit/note, and logs approvals to the notification log). **Guardrail: PROPOSES ONLY** — approval
+  is always a human click; the LLM prompt forbids proposing relationships/morality/large-spending/
+  life-goal changes; approving records the decision (it has no hands for irreversible real-world actions).
+  New CLI `propose` + `proposals`; GUI **"Decisions for you"** cards (Approve/Dismiss + editable action &
+  note) via `/api/proposals`, `/api/propose`, `/api/proposal/decide`; daemon wiring behind
+  **`config.advisor.enabled`** (default false) + cooldown + in-flight lock. `config.advisor` block
+  (backward-compatible). 247 passing tests (11 new, offline via MockAdvisor). **Validated live against the
+  real 9arm Qwen gateway:** `propose` returned 3 concrete cross-domain proposals (Work: run failing tests
+  / Health: 5-min break / Admin: log debugging attempts), each small + reversible; GUI round-trip
+  (propose→list→approve-with-note→pending shrinks) verified offline. Files: `src/advisor/*`,
+  `src/config.ts`, `src/paths.ts`, `src/ui/{server,page}.ts`, `src/index.ts`.
 - **Loop complete (manual trigger):** `auto --apply` runs the whole chain in one command; the human
   reviews/merges the `executive/change-<id>` branch.
 
@@ -376,6 +393,8 @@ bun run src/index.ts notifications [n]              # show the last n "Needs you
 bun run src/index.ts install-hooks [--test "<cmd>"] # install a git post-commit hook that auto-emits test results
 bun run src/index.ts ui [--port N] [--no-watch]     # local web dashboard + git/file watchers (Ctrl-C to stop)
 bun run src/index.ts infer                          # LLM guesses block/deadline (suggestions only) → inferred.json
+bun run src/index.ts propose                        # Advisor proposes proactive actions → advisor.json queue
+bun run src/index.ts proposals                      # list pending proposals awaiting approval
 bun run src/index.ts watch                          # start the watcher daemon (Ctrl-C to stop)
 bun run typecheck                                  # tsc --noEmit
 bun test                                           # unit tests

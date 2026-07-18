@@ -7,6 +7,9 @@ import { buildState, writeState } from "../state/builder.js";
 import { plan, writePlan } from "../planner/planner.js";
 import { buildDigest } from "../report/digest.js";
 import { append } from "../events/store.js";
+import { loadConfig } from "../config.js";
+import { readStore, pending } from "../advisor/store.js";
+import { runAdvisor, decideProposal } from "../advisor/advisor.js";
 import { renderPage } from "./page.js";
 
 /** The only system event types the GUI is allowed to emit (safe, human-in-head signals). */
@@ -64,6 +67,41 @@ export function startUiServer(opts: UiServerOptions) {
           }
           const event = await append({ source: "system", type, data });
           return Response.json({ ok: true, seq: event.seq });
+        } catch (err) {
+          return Response.json({ ok: false, error: (err as Error).message }, { status: 400 });
+        }
+      }
+
+      // ── Proposals (the Advisor queue) ────────────────────────────────────
+      if (req.method === "GET" && url.pathname === "/api/proposals") {
+        try {
+          return Response.json({ proposals: pending(readStore()) });
+        } catch (err) {
+          return Response.json({ error: (err as Error).message }, { status: 500 });
+        }
+      }
+
+      if (req.method === "POST" && url.pathname === "/api/propose") {
+        // Generate fresh proposals (LLM — may take a while).
+        try {
+          const built = buildState();
+          writeState(built);
+          const result = await runAdvisor(built.context, { config: loadConfig() });
+          return Response.json({ ok: result.error === null, added: result.added.length, error: result.error });
+        } catch (err) {
+          return Response.json({ ok: false, error: (err as Error).message }, { status: 500 });
+        }
+      }
+
+      if (req.method === "POST" && url.pathname === "/api/proposal/decide") {
+        try {
+          const body = (await req.json()) as { id?: string; decision?: string; action?: string; note?: string };
+          if (!body.id || (body.decision !== "approve" && body.decision !== "reject")) {
+            return Response.json({ ok: false, error: "need { id, decision: approve|reject }" }, { status: 400 });
+          }
+          const p = decideProposal(body.id, body.decision, { action: body.action, note: body.note });
+          if (!p) return Response.json({ ok: false, error: "unknown proposal id" }, { status: 404 });
+          return Response.json({ ok: true, proposal: p });
         } catch (err) {
           return Response.json({ ok: false, error: (err as Error).message }, { status: 400 });
         }

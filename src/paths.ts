@@ -90,6 +90,11 @@ export function inferredPath(): string {
   return execRoot() + "/inferred.json";
 }
 
+/** Absolute path to .executive/advisor.json (the proactive proposal queue). */
+export function advisorPath(): string {
+  return execRoot() + "/advisor.json";
+}
+
 /** Absolute path to .executive/notifications.jsonl (durable "Needs you" history). */
 export function notificationsPath(): string {
   return execRoot() + "/notifications.jsonl";

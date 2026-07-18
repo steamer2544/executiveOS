@@ -44,6 +44,13 @@ export function renderPage(): string {
   button.danger { background:var(--danger); color:#fff; }
   button:active { transform:translateY(1px); }
   .muted { color:var(--muted); } .mono { font-family:ui-monospace, Menlo, Consolas, monospace; }
+  .prop { border:1px solid var(--line); border-radius:10px; padding:12px 14px; margin-bottom:10px; }
+  .prop .cat { font-size:10.5px; text-transform:uppercase; letter-spacing:.06em; color:var(--accent); font-weight:700; }
+  .prop .title { font-weight:650; margin:2px 0 4px; }
+  .prop .detail { color:var(--muted); margin-bottom:8px; }
+  .prop input { margin-bottom:8px; }
+  .prop .acts { display:flex; gap:8px; }
+  .prop .empty { color:var(--muted); }
   #toast { position:fixed; bottom:18px; left:50%; transform:translateX(-50%); background:var(--card); border:1px solid var(--line); padding:9px 16px; border-radius:9px; opacity:0; transition:opacity .2s; pointer-events:none; }
   #toast.show { opacity:1; }
 </style>
@@ -59,6 +66,14 @@ export function renderPage(): string {
 </header>
 
 <main>
+  <section class="card" id="proposalsCard">
+    <h2 style="display:flex;justify-content:space-between;align-items:center">
+      <span>Decisions for you</span>
+      <button class="btn ghost" id="askBtn" onclick="askProposals()">Ask for proposals</button>
+    </h2>
+    <div id="proposals"></div>
+  </section>
+
   <section class="card">
     <h2>Now</h2>
     <div id="now"></div>
@@ -168,6 +183,43 @@ async function emit(type, data) {
     toast("saved ✓"); await refresh();
   } catch (e) { toast("error: " + e.message); }
 }
+async function loadProposals() {
+  try {
+    const r = await fetch("/api/proposals"); const d = await r.json();
+    const items = d.proposals || [];
+    $("proposals").innerHTML = items.length ? items.map(p => \`
+      <div class="prop" id="prop-\${p.id}">
+        <div class="cat">\${esc(p.category)}</div>
+        <div class="title">\${esc(p.title)}</div>
+        <div class="detail">\${esc(p.detail)}</div>
+        <input type="text" id="act-\${p.id}" value="\${esc(p.action)}" />
+        <input type="text" id="note-\${p.id}" placeholder="Add a note (optional)…" />
+        <div class="acts">
+          <button class="btn" onclick="decideProp('\${p.id}','approve')">Approve</button>
+          <button class="btn ghost" onclick="decideProp('\${p.id}','reject')">Dismiss</button>
+        </div>
+      </div>\`).join("") : "<div class='prop empty'>No open proposals. Hit “Ask for proposals” and I’ll suggest a few.</div>";
+  } catch (e) { /* leave as-is */ }
+}
+async function decideProp(id, decision) {
+  try {
+    const action = ($("act-"+id)||{}).value; const note = ($("note-"+id)||{}).value;
+    const r = await fetch("/api/proposal/decide", { method:"POST", headers:{"content-type":"application/json"}, body: JSON.stringify({ id, decision, action, note }) });
+    const j = await r.json(); if (!j.ok) throw new Error(j.error||"failed");
+    toast(decision === "approve" ? "approved ✓" : "dismissed");
+    await loadProposals();
+  } catch (e) { toast("error: " + e.message); }
+}
+async function askProposals() {
+  const b = $("askBtn"); b.disabled = true; b.textContent = "Thinking…";
+  try {
+    const r = await fetch("/api/propose", { method:"POST" }); const j = await r.json();
+    if (!j.ok) throw new Error(j.error||"failed");
+    toast(j.added ? ("added " + j.added + " proposal(s)") : "nothing new right now");
+    await loadProposals();
+  } catch (e) { toast("error: " + e.message); }
+  finally { b.disabled = false; b.textContent = "Ask for proposals"; }
+}
 function confirmSuggestion(i) { const s = (window.__suggest || [])[i]; if (!s) return; emit(s.emit.type, s.emit.data); }
 function emitBlock() { const reason = $("blockReason").value.trim(); if (!reason) return toast("enter a reason"); emit("system.blocked", { reason }); $("blockReason").value=""; }
 function emitUnblock() { emit("system.unblocked", {}); }
@@ -175,7 +227,9 @@ function emitDeadline() { const d = $("deadline").value; if (!d) return toast("p
 function emitTask() { const t = $("task").value.trim(); if (!t) return toast("enter a task"); emit("system.task", { task: t }); $("task").value=""; }
 
 refresh();
+loadProposals();
 setInterval(refresh, 5000);
+setInterval(loadProposals, 5000);
 </script>
 </body>
 </html>`;
