@@ -75,6 +75,14 @@ export interface Config {
     from?: string;     // work-hours start "HH:MM". Default "09:00".
     to?: string;       // work-hours end "HH:MM". Default "18:00".
   };
+  /** Whisper transcription for the dashboard mic (multilingual/code-switching). OFF by default. */
+  transcribe?: {
+    enabled?: boolean;  // if true, the dashboard records audio and sends it to a Whisper endpoint. Default false.
+    baseUrl?: string;   // Whisper host (no trailing /v1). Default "" (must be set to use).
+    model?: string;     // e.g. "whisper-1". Default "whisper-1".
+    apiKeyEnv?: string; // env var holding the key (read server-side only). Default "EXECUTIVE_TRANSCRIBE_KEY".
+    language?: string | null; // hint ("th") or null to auto-detect (best for mixed). Default null.
+  };
 }
 
 /** Default configuration values. */
@@ -136,6 +144,13 @@ export function defaultConfig(): Config {
       enabled: false,
       from: "09:00",
       to: "18:00",
+    },
+    transcribe: {
+      enabled: false,
+      baseUrl: "",
+      model: "whisper-1",
+      apiKeyEnv: "EXECUTIVE_TRANSCRIBE_KEY",
+      language: null,
     },
   };
 }
@@ -255,6 +270,16 @@ export function loadConfig(): Config {
   parsed.capture.enabled = parsed.capture.enabled ?? defaults.capture!.enabled!;
   parsed.capture.from = parsed.capture.from ?? defaults.capture!.from!;
   parsed.capture.to = parsed.capture.to ?? defaults.capture!.to!;
+
+  // Merge missing transcribe fields with defaults.
+  if (!parsed.transcribe) {
+    parsed.transcribe = defaults.transcribe!;
+  }
+  parsed.transcribe.enabled = parsed.transcribe.enabled ?? defaults.transcribe!.enabled!;
+  parsed.transcribe.baseUrl = parsed.transcribe.baseUrl ?? defaults.transcribe!.baseUrl!;
+  parsed.transcribe.model = parsed.transcribe.model ?? defaults.transcribe!.model!;
+  parsed.transcribe.apiKeyEnv = parsed.transcribe.apiKeyEnv ?? defaults.transcribe!.apiKeyEnv!;
+  parsed.transcribe.language = parsed.transcribe.language ?? defaults.transcribe!.language ?? null;
 
   return parsed;
 }

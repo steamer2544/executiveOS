@@ -53,9 +53,46 @@ export function startUiServer(opts: UiServerOptions) {
       if (req.method === "GET" && url.pathname === "/api/config") {
         try {
           const cfg = loadConfig();
-          return Response.json({ capture: cfg.capture });
+          // Never leak the transcription baseUrl/key to the page — only whether it's on.
+          return Response.json({ capture: cfg.capture, transcribe: { enabled: cfg.transcribe?.enabled === true } });
         } catch (err) {
           return Response.json({ error: (err as Error).message }, { status: 500 });
+        }
+      }
+
+      if (req.method === "POST" && url.pathname === "/api/transcribe") {
+        try {
+          const cfg = loadConfig();
+          const t = cfg.transcribe;
+          if (!t?.enabled || !t.baseUrl) {
+            return Response.json({ ok: false, error: "transcription not configured" }, { status: 400 });
+          }
+          const audio = await req.blob();
+          const key = t.apiKeyEnv ? (process.env[t.apiKeyEnv] ?? "") : "";
+          const form = new FormData();
+          form.append("file", audio, "audio.webm");
+          form.append("model", t.model ?? "whisper-1");
+          if (t.language) form.append("language", t.language);
+          const controller = new AbortController();
+          const timer = setTimeout(() => controller.abort(), 60000);
+          try {
+            const res = await fetch(t.baseUrl.replace(/\/+$/, "") + "/v1/audio/transcriptions", {
+              method: "POST",
+              headers: key ? { Authorization: "Bearer " + key } : {},
+              body: form,
+              signal: controller.signal,
+            });
+            if (!res.ok) {
+              const bt = await res.text();
+              return Response.json({ ok: false, error: "transcribe HTTP " + res.status + ": " + bt.slice(0, 200) }, { status: 502 });
+            }
+            const j = (await res.json()) as { text?: string };
+            return Response.json({ ok: true, text: (j.text ?? "").trim() });
+          } finally {
+            clearTimeout(timer);
+          }
+        } catch (err) {
+          return Response.json({ ok: false, error: (err as Error).message }, { status: 500 });
         }
       }
 

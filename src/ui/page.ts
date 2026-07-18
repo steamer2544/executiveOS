@@ -249,7 +249,31 @@ function emitTask() { const t = $("task").value.trim(); if (!t) return toast("en
 let capture = { enabled: false, from: "09:00", to: "18:00" };
 let recog = null, listening = false, userStopped = false;
 let lang = localStorage.getItem("execLang") || "th-TH";
+let useWhisper = false, mediaRec = null, chunks = [];
 const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+const canListen = () => useWhisper ? !!(navigator.mediaDevices && window.MediaRecorder) : !!SR;
+
+async function startWhisper() {
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    mediaRec = new MediaRecorder(stream); chunks = [];
+    mediaRec.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data); };
+    mediaRec.onstop = async () => {
+      try { stream.getTracks().forEach((t) => t.stop()); } catch {}
+      const blob = new Blob(chunks, { type: "audio/webm" });
+      $("listenInterim").textContent = "";
+      if (blob.size < 1200) return; // too short to bother
+      try {
+        const r = await fetch("/api/transcribe", { method: "POST", headers: { "content-type": "audio/webm" }, body: blob });
+        const j = await r.json();
+        if (j.ok && j.text) emit("system.note", { msg: j.text, via: "voice" });
+        else toast("transcribe: " + (j.error || "failed"));
+      } catch { toast("transcribe error"); }
+    };
+    mediaRec.start(); listening = true; $("listenInterim").textContent = "● recording…"; setListenUI();
+  } catch { toast("mic permission needed"); }
+}
+function stopWhisper() { listening = false; try { if (mediaRec && mediaRec.state !== "inactive") mediaRec.stop(); } catch {} setListenUI(); }
 
 function onLangChange() {
   lang = $("lang").value; localStorage.setItem("execLang", lang);
@@ -268,12 +292,14 @@ function setListenUI() {
     ? '<span style="color:var(--danger);font-weight:700">🔴 Listening…</span> speak a quick note and I\\'ll capture it.'
     : 'Off. This listens to <b>you</b> (your dictated notes) — nothing is recorded without this being visibly on.';
   const sched = capture.enabled ? ("Auto-on during work hours " + capture.from + "–" + capture.to + (withinHours() ? " (now)" : "")) : "Auto-schedule off (manual only).";
-  $("listenSchedule").textContent = SR ? sched : "Voice capture needs Chrome or Edge; you can still type notes below.";
+  $("listenSchedule").textContent = canListen() ? sched : "Voice capture needs Chrome or Edge; you can still type notes below.";
 }
 
 function startListen() {
-  if (!SR || listening) return;
+  if (listening) return;
   userStopped = false;
+  if (useWhisper) { startWhisper(); return; }
+  if (!SR) return;
   try {
     recog = new SR();
     recog.continuous = true; recog.interimResults = true; recog.lang = lang;
@@ -294,17 +320,17 @@ function startListen() {
     listening = true; setListenUI();
   } catch (e) { toast("could not start listening"); }
 }
-function stopListen(manual) { if (manual) userStopped = true; listening = false; try { recog && recog.stop(); } catch {} setListenUI(); }
+function stopListen(manual) { if (manual) userStopped = true; if (useWhisper) { stopWhisper(); return; } listening = false; try { recog && recog.stop(); } catch {} setListenUI(); }
 function toggleListen() { listening ? stopListen(true) : startListen(); }
 
 async function loadCaptureConfig() {
-  try { const r = await fetch("/api/config"); const j = await r.json(); if (j.capture) capture = j.capture; } catch {}
+  try { const r = await fetch("/api/config"); const j = await r.json(); if (j.capture) capture = j.capture; useWhisper = !!(j.transcribe && j.transcribe.enabled); } catch {}
   const sel = $("lang"); if (sel) sel.value = lang;
   setListenUI();
 }
 // Schedule tick: auto-start within work hours (once enabled + mic granted), auto-stop outside.
 setInterval(() => {
-  if (!SR || !capture.enabled) return;
+  if (!canListen() || !capture.enabled) return;
   if (withinHours() && !listening && !userStopped) startListen();
   else if (!withinHours() && listening) { listening = false; try { recog && recog.stop(); } catch {} setListenUI(); }
 }, 20000);
@@ -315,7 +341,7 @@ function isTyping(el) { const t = ((el && el.tagName) || "").toLowerCase(); retu
 let spaceHeld = false;
 document.addEventListener("keydown", (e) => {
   if (e.code === "Space" && !spaceHeld && !isTyping(e.target)) {
-    e.preventDefault(); spaceHeld = true; if (SR && !listening) startListen();
+    e.preventDefault(); spaceHeld = true; if (canListen() && !listening) startListen();
   }
 });
 document.addEventListener("keyup", (e) => {

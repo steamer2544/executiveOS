@@ -89,14 +89,24 @@ describe("ui server", () => {
     expect(res.status).toBe(404);
   });
 
-  it("serves capture config at /api/config", async () => {
+  it("serves capture config at /api/config (transcribe exposes only enabled, never the key/url)", async () => {
     // bootstrap writes a default config with the capture block
     await (await import("../bootstrap.js")).bootstrap();
     server = startUiServer({ port: 0 });
     const j = await (await fetch("http://127.0.0.1:" + server.port + "/api/config")).json();
     expect(j.capture).toBeDefined();
     expect(typeof j.capture.from).toBe("string");
-    expect(typeof j.capture.to).toBe("string");
+    expect(j.transcribe).toEqual({ enabled: false });
+    expect(JSON.stringify(j)).not.toContain("apiKeyEnv");
+    expect(JSON.stringify(j)).not.toContain("baseUrl");
+  });
+
+  it("/api/transcribe returns a clear error when not configured", async () => {
+    await (await import("../bootstrap.js")).bootstrap();
+    server = startUiServer({ port: 0 });
+    const res = await fetch("http://127.0.0.1:" + server.port + "/api/transcribe", { method: "POST", body: "x" });
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toContain("not configured");
   });
 
   it("accepts a dictated note (system.note) via /api/emit", async () => {
