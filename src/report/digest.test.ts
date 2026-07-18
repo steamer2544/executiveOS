@@ -5,7 +5,8 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node
 import { randomUUID } from "node:crypto";
 import { test, expect } from "bun:test";
 import { statePath, planPath, autoReportPath, execReportPath, proposalPath, digestPath, execRoot } from "../paths.js";
-import { buildDigest, renderDigest } from "./digest.js";
+import { buildDigest, renderDigest, needsYouSignature } from "./digest.js";
+import type { NeedsYouItem } from "./types.js";
 import type { State } from "../state/types.js";
 import type { Plan } from "../planner/types.js";
 import type { AutoReport } from "../auto/types.js";
@@ -509,4 +510,45 @@ test("GeneratedAt set correctly", () => {
     cleanup(dir);
     unsetHome();
   }
+});
+
+// ── needsYouSignature tests ───────────────────────────────────────────────────
+
+test("needsYouSignature: empty queue → empty string", () => {
+  expect(needsYouSignature([] as NeedsYouItem[])).toBe("");
+});
+
+test("needsYouSignature: stable for same set in different order", () => {
+  const a: NeedsYouItem[] = [
+    { source: "plan", summary: "Planner needs your call: fix_tests" },
+    { source: "autopilot", summary: "Autopilot stopped and needs you" },
+  ];
+  const b: NeedsYouItem[] = [
+    { source: "autopilot", summary: "Autopilot stopped and needs you" },
+    { source: "plan", summary: "Planner needs your call: fix_tests" },
+  ];
+  expect(needsYouSignature(a)).toBe(needsYouSignature(b));
+});
+
+test("needsYouSignature: changes when an item is added", () => {
+  const a: NeedsYouItem[] = [];
+  const b: NeedsYouItem[] = [{ source: "plan", summary: "Planner needs your call: fix_tests" }];
+  expect(needsYouSignature(b)).not.toBe(needsYouSignature(a));
+});
+
+test("needsYouSignature: changes when an item is removed", () => {
+  const a: NeedsYouItem[] = [{ source: "executor", summary: "A change is parked on main with FAILING tests" }];
+  expect(needsYouSignature([])).not.toBe(needsYouSignature(a));
+});
+
+test("needsYouSignature: ignores detail — same source+summary → same signature", () => {
+  const a: NeedsYouItem[] = [{ source: "plan", summary: "Planner needs your call: fix_tests", detail: "reason A" }];
+  const b: NeedsYouItem[] = [{ source: "plan", summary: "Planner needs your call: fix_tests", detail: "reason B" }];
+  expect(needsYouSignature(a)).toBe(needsYouSignature(b));
+});
+
+test("needsYouSignature: distinguishes source — same summary, different source → different signature", () => {
+  const a: NeedsYouItem[] = [{ source: "plan", summary: "Something needs you" }];
+  const b: NeedsYouItem[] = [{ source: "autopilot", summary: "Something needs you" }];
+  expect(needsYouSignature(a)).not.toBe(needsYouSignature(b));
 });

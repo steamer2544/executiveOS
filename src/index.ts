@@ -21,7 +21,7 @@ import { runSynth, writeSynthReport } from "./synth/synth.js";
 import { changeSetPath, autoReportPath } from "./paths.js";
 import { runAuto, writeAutoReport } from "./auto/auto.js";
 import { shouldRunAutopilot, freshGuardState } from "./auto/guard.js";
-import { buildDigest, renderDigest, writeDigest } from "./report/digest.js";
+import { buildDigest, renderDigest, writeDigest, needsYouSignature } from "./report/digest.js";
 import { digestPath } from "./paths.js";
 
 const VALID_SOURCES: EventSource[] = ["git", "terminal", "editor", "system"];
@@ -287,6 +287,9 @@ async function main(): Promise<void> {
       const autopilotGuard = freshGuardState();
       let autopilotRunning = false;
 
+      // ── Needs-you alert state ─────────────────────────────────────────────
+      let lastNeedsSignature: string | null = null;
+
       // ── Periodic state rebuild ───────────────────────────────────────────
       const stateIntervalMs = config.state?.intervalMs ?? 30000;
 
@@ -351,6 +354,26 @@ async function main(): Promise<void> {
               process.stdout.write(
                 "State rebuild (interval: " + stateIntervalMs + "ms) — " + built.context.summary + " | Plan: " + p.summary + "\n"
               );
+            }
+
+            // ── Digest refresh + Needs-you alert (read-only; never acts) ──
+            try {
+              const digest = buildDigest();
+              writeDigest(renderDigest(digest));
+              const sig = needsYouSignature(digest.needsYou);
+              if (sig !== lastNeedsSignature) {
+                if (digest.needsYou.length > 0) {
+                  process.stdout.write("⚠️  Needs you (" + digest.needsYou.length + "):\n");
+                  for (const item of digest.needsYou) {
+                    process.stdout.write("   - " + item.summary + "\n");
+                  }
+                } else if (lastNeedsSignature !== null) {
+                  process.stdout.write("✓ Needs-you queue cleared.\n");
+                }
+                lastNeedsSignature = sig;
+              }
+            } catch (digestErr) {
+              process.stderr.write("Digest refresh failed: " + (digestErr as Error).message + "\n");
             }
           } catch (planErr) {
             // Plan failure never crashes the daemon.

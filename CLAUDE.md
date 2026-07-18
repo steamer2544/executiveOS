@@ -220,6 +220,22 @@ docs/scopes/           # per-phase specs (the contract handed to the implementer
   emit→plan→report shows `fix_tests (act)`, needs-you aggregation per source, gitignored, out-of-scope
   diff empty. **One cosmetic qwen defect found + fixed by the architect:** an unbalanced `)` in the
   confidence line (`… total)_` → `… total_`). Spec: `docs/scopes/phase-11-digest-report.md`.
+- **Phase 12 — DONE** (qwen impl + architect review, this commit): **Watch Digest** — wires the Phase 11
+  digest into the `watch` daemon so the owner sees "what needs me" live, without running `report` by
+  hand. On every rebuild tick, **after the autopilot block**, the daemon refreshes `.executive/digest.md`
+  (pure read-only derivation, like `state.json`/`plan.json`) and prints a **concise "Needs you" alert
+  only when the queue changes** — quiet by design (same dedup-by-signature discipline as Phase 9). New
+  pure helper `needsYouSignature(items)` in `src/report/digest.ts` (order-independent — sorts
+  `source|summary` pairs, ignores `detail`; empty queue → `""`). Daemon holds an in-memory
+  `lastNeedsSignature`; prints `⚠️  Needs you (N):` + one line per item when the signature goes to a new
+  non-empty set, and `✓ Needs-you queue cleared.` on a non-empty→empty transition (the `!== null` guard
+  means a queue that *starts* empty prints neither). **Read-only, no LLM, no git, acts on nothing**; the
+  digest step is wrapped so any error logs to stderr and the daemon keeps ticking. **No config gate**
+  (consistent with state/plan being refreshed unconditionally); `src/config.ts` unchanged. The standalone
+  `report` command and the existing `buildDigest`/`renderDigest`/`writeDigest` are unchanged (only
+  `needsYouSignature` added). 186 passing tests (6 new). Reviewed live: digest.md refreshed each tick,
+  alert printed exactly once across 6 ticks (no spam), `cleared` printed once on unblock, clean start
+  silent, out-of-scope diff empty. **No qwen defects found.** Spec: `docs/scopes/phase-12-watch-digest.md`.
 - **Loop complete (manual trigger):** `auto --apply` runs the whole chain in one command; the human
   reviews/merges the `executive/change-<id>` branch.
 

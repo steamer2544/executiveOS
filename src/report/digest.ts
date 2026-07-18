@@ -283,6 +283,20 @@ export function writeDigest(md: string): void {
   renameSync(tmpPath, digestPath());
 }
 
+// ── Signature helper ──────────────────────────────────────────────────────────
+
+/**
+ * A stable, order-independent signature of the "Needs you" queue.
+ * Two queues with the same set of {source, summary} pairs produce the same string,
+ * regardless of insertion order. Used by the watch daemon to alert only on change.
+ */
+export function needsYouSignature(items: NeedsYouItem[]): string {
+  return items
+    .map((i) => i.source + "|" + i.summary)
+    .sort()
+    .join("\n");
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 /** Render a field value or "—" if null/undefined. */
