@@ -196,6 +196,22 @@ export function buildState(now?: Date): { state: State; context: Context } {
     currentTask = taskFromBranch(gitBranch);
   }
 
+  // Fallback: infer the project from the newest git event carrying a repo name
+  // (the GitWatcher tags commits/branch switches with the repo folder name).
+  // Explicit system.task project always wins; this only fills the gap.
+  if (currentProject === null) {
+    let latestRepoSeq = -1;
+    for (const e of allEvents) {
+      if (e.type === "git.commit" || e.type === "git.branch_switch") {
+        const r = str(e.data ?? {}, "repo");
+        if (r && r.length > 0 && e.seq > latestRepoSeq) {
+          latestRepoSeq = e.seq;
+          currentProject = r;
+        }
+      }
+    }
+  }
+
   // --- tests (system.test_result) ---
   let tests: "passing" | "failing" | "unknown" = "unknown";
   for (const e of allEvents) {

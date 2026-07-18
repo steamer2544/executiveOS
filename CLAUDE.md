@@ -280,6 +280,13 @@ docs/scopes/           # per-phase specs (the contract handed to the implementer
   passing tests (8 new). Reviewed live: `git.branch_switch → feat/dark-mode` → `report` shows
   `Task: dark mode` with zero manual emit. Implemented directly by the architect (qwen is relayed by the
   owner, who is away). No scope doc (small, in-layer change).
+- **Phase 16 — DONE** (architect impl + self-review, this commit): **Auto project from git repo** — like
+  Phase 15 but for `currentProject`. The GitWatcher now tags every `git.commit`/`git.branch_switch` event
+  with `repo` (the repo folder basename, via a new `repoName()` helper). The State Builder infers
+  `currentProject` from the newest git event carrying a `repo` when no explicit `system.task` project
+  exists (explicit still wins). Deterministic, no LLM. 210 passing tests (3 new). Reviewed live: one
+  `git.commit{repo:"myshi",branch:"feat/dark-mode"}` → `report` shows Project: myshi + Task: dark mode +
+  Branch, zero manual emit. Files: `src/watchers/git.ts`, `src/state/builder.ts`, `builder.test.ts`.
 - **Loop complete (manual trigger):** `auto --apply` runs the whole chain in one command; the human
   reviews/merges the `executive/change-<id>` branch.
 

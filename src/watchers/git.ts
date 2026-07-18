@@ -31,8 +31,15 @@ function runGit(repoPath: string, args: string[]): string {
   return new TextDecoder().decode(result.stdout).trim();
 }
 
+/** Last path segment of a repo path — used as the project name. */
+function repoName(repoPath: string): string {
+  const cleaned = repoPath.replace(/[\\/]+$/, "");
+  return cleaned.split(/[\\/]/).pop() ?? "";
+}
+
 export function createGitWatcher(cfg: GitWatcherConfig): Watcher {
   const repoPath = cfg.repoPath;
+  const repo = repoName(repoPath);
 
   let lastSha: string | null = null;
   let lastBranch: string | null = null;
@@ -91,7 +98,7 @@ export function createGitWatcher(cfg: GitWatcherConfig): Watcher {
         currentBus.publish({
           source: "git",
           type: "git.commit",
-          data: { sha, subject, branch },
+          data: { sha, subject, branch, repo },
         });
       }
 
@@ -100,7 +107,7 @@ export function createGitWatcher(cfg: GitWatcherConfig): Watcher {
         currentBus.publish({
           source: "git",
           type: "git.branch_switch",
-          data: { from: lastBranch, to: branch },
+          data: { from: lastBranch, to: branch, repo },
         });
       }
 

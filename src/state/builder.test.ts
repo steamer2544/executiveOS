@@ -361,3 +361,29 @@ describe("buildState — task inferred from branch", () => {
     expect(state.currentTask).toBeNull();
   });
 });
+
+describe("buildState — project inferred from git repo", () => {
+  const DIR = "/tmp/executive-test-project-" + randomUUID();
+  beforeEach(() => setExecutiveHome(DIR));
+  afterEach(() => cleanup(DIR));
+
+  it("fills currentProject from a git.commit repo tag when no system.task", () => {
+    writeRawEvent("git", 1, "git.commit", { sha: "abc", subject: "x", branch: "main", repo: "myshi" });
+    const { state } = buildState(new Date("2026-01-01T00:00:10.000Z"));
+    expect(state.currentProject).toBe("myshi");
+  });
+
+  it("uses the newest git event's repo", () => {
+    writeRawEvent("git", 1, "git.commit", { sha: "a", subject: "x", branch: "main", repo: "old-repo" });
+    writeRawEvent("git", 2, "git.branch_switch", { from: "main", to: "feat/x", repo: "new-repo" });
+    const { state } = buildState(new Date("2026-01-01T00:00:10.000Z"));
+    expect(state.currentProject).toBe("new-repo");
+  });
+
+  it("explicit system.task project wins over the repo inference", () => {
+    writeRawEvent("git", 1, "git.commit", { sha: "a", subject: "x", branch: "main", repo: "myshi" });
+    writeRawEvent("system", 2, "system.task", { project: "explicit-project" });
+    const { state } = buildState(new Date("2026-01-01T00:00:10.000Z"));
+    expect(state.currentProject).toBe("explicit-project");
+  });
+});
