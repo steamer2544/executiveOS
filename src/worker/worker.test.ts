@@ -345,7 +345,7 @@ describe("buildRequestBody", () => {
       action: makeAction({ kind: "fix_tests" }),
       context: makeContext(makeState()),
     };
-    const body = buildRequestBody(input, "m", 512);
+    const body = buildRequestBody(input, "m", 512, "test identity");
     const obj = body as Record<string, unknown>;
 
     expect(obj.model).toBe("m");
@@ -407,10 +407,25 @@ describe("parseAnthropicResponse", () => {
 
 describe("buildSystemPrompt", () => {
   it("returns a non-empty string about being a Worker CPU", () => {
-    const prompt = buildSystemPrompt();
+    const prompt = buildSystemPrompt("You are the Worker of ExecutiveOS.");
     expect(prompt.length).toBeGreaterThan(0);
     expect(prompt).toContain("Worker");
     expect(prompt).toContain("do NOT execute");
+  });
+
+  it("contains the identity text before the operational contract", () => {
+    const prompt = buildSystemPrompt("MY IDENTITY");
+    expect(prompt).toContain("MY IDENTITY");
+    expect(prompt).toContain("do NOT execute");
+    const identityIdx = prompt.indexOf("MY IDENTITY");
+    const contractIdx = prompt.indexOf("do NOT execute");
+    expect(identityIdx).toBeLessThan(contractIdx);
+  });
+
+  it("operational contract is present even with empty identity", () => {
+    const prompt = buildSystemPrompt("");
+    expect(prompt).toContain("do NOT execute");
+    expect(prompt).toContain("Propose concrete, actionable steps");
   });
 });
 

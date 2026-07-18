@@ -5,6 +5,7 @@ import type { Config } from "../config.js";
 import type { Worker } from "./types.js";
 import { MockWorker } from "./mock.js";
 import { AnthropicWorker } from "./anthropic.js";
+import { loadWorkerIdentity } from "./identity.js";
 
 export function createWorker(config: Config): Worker {
   const w = config.worker!; // loadConfig() guarantees this is populated
@@ -17,5 +18,6 @@ export function createWorker(config: Config): Worker {
     apiKey,
     maxTokens: w.maxTokens!,
     timeoutMs: w.timeoutMs!,
+    identity: loadWorkerIdentity(),
   });
 }

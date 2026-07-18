@@ -52,8 +52,11 @@ docs/scopes/           # per-phase specs (the contract handed to the implementer
 ## Two "claude.md" files — don't confuse them
 
 - **`CLAUDE.md`** (this file, repo root) — context for Claude Code working *on* the repo.
-- **`.executive/claude.md`** (does not exist yet) — the *product's* AI Worker identity. It is a
-  **Phase 5** artifact; the vision doc explicitly says not to start there. Do not create it early.
+- **`.executive/claude.md`** (created by `init`, gitignored) — the *product's* AI Worker identity,
+  owner-editable Markdown that becomes the **identity portion** of the Worker's system prompt. Added in
+  **Phase 10** (deliberately deferred until the OS brain existed — the vision doc says not to *start*
+  there). Default content lives in source (`src/worker/identity.ts` `DEFAULT_IDENTITY`); it is advisory
+  to the Worker's reasoning and can never weaken the code-level guardrails.
 
 ## Phase status
 
@@ -182,6 +185,23 @@ docs/scopes/           # per-phase specs (the contract handed to the implementer
   `State`/`Context` import + unused `ctx` local. **No functional defects found.** Spec:
   `docs/scopes/phase-8-autopilot.md`.
 - **Phase 9 — DONE** (architect impl + review, this commit): **Continuous Autopilot** — the `watch` daemon runs the Autopilot continuously, behind two default-OFF config gates (`config.autopilot.enabled`, `config.autopilot.apply`). It reuses `runAuto` (Phase 8) verbatim: no new LLM/git/plan/proposal/changeset code. New files: `src/auto/guard.ts` (pure guard logic: `computeSignature`, `shouldRunAutopilot`, `AutopilotGuardState` + dedup by signature + cooldown) and `src/auto/guard.test.ts` (16 offline tests). Edits: `src/config.ts` (backward-compatible `autopilot` block + defaults), `src/index.ts` (`watch` case: guard state + in-flight lock, `maybeRunAutopilot` helper called after existing plan/autoInvoke, startup banner). Guard order: disabled check → signature → non-actionable skip → dedup → cooldown → run. Any `runAuto` throw is caught, logged to stderr, daemon keeps ticking. 158 passing tests (16 new). Spec: `docs/scopes/phase-9-continuous-autopilot.md`.
+- **Phase 10 — DONE** (qwen impl + architect review, this commit): **Worker Identity**
+  (`.executive/claude.md`) — the artifact the vision doc deliberately deferred (build the OS brain first,
+  not the LLM's personality). An owner-editable Markdown file becomes the **identity portion** of the
+  Worker's system prompt. New `src/worker/identity.ts`: `DEFAULT_IDENTITY` (version-controlled default
+  text) + `loadWorkerIdentity()` (reads `.executive/claude.md`, falls back to the default when missing or
+  blank-after-trim). `bootstrap()` writes `claude.md` from `DEFAULT_IDENTITY` **only if absent** (never
+  overwrites owner edits, same idempotent pattern as `config.json`). `buildSystemPrompt(identity)` now
+  composes **identity first, then a fixed `OPERATIONAL_CONTRACT` in code** ("propose, never execute;
+  concise steps") — the contract is appended last so a mangled/adversarial `claude.md` can never remove
+  it; `buildRequestBody`/`AnthropicWorker` thread `identity` through; `createWorker` loads it for the
+  anthropic backend. **`claude.md` is advisory to reasoning ONLY — it cannot weaken any code-level
+  guardrail** (`runWorker` gate, Planner `forbidden`, Executor path-safety all stay in code). **Synth
+  untouched** (Worker identity only; personality would corrupt its strict-JSON output). No config change,
+  no CLI change, MockWorker unchanged. New `claudeMdPath()` in `src/paths.ts`. 165 passing tests (11 new).
+  Reviewed live: `init`→`claude.md`=DEFAULT, edit+re-init preserved, end-to-end custom identity appears in
+  the system prompt before the contract, gitignored, out-of-scope diff empty. **No qwen defects found.**
+  Spec: `docs/scopes/phase-10-worker-identity.md`.
 - **Loop complete (manual trigger):** `auto --apply` runs the whole chain in one command; the human
   reviews/merges the `executive/change-<id>` branch.
 

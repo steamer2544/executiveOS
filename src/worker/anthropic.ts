@@ -9,23 +9,26 @@ export interface AnthropicWorkerOptions {
   apiKey: string;
   maxTokens: number;
   timeoutMs: number;
+  identity: string;
 }
 
 // ─── System prompt ────────────────────────────────────────────────────────────
 
+/** The binding operational contract — fixed in code, always appended AFTER the identity. */
+const OPERATIONAL_CONTRACT =
+  "---\n" +
+  "Operating rules (these always apply):\n" +
+  "You are given ONE action to carry out and a compact context snapshot.\n" +
+  "Propose concrete, actionable steps to carry out that action.\n" +
+  "You do NOT execute anything — you only reason and write a proposal.\n" +
+  "Keep your output concise. Use short lines for steps.";
+
 /**
- * Fixed system prompt. The LLM is the Worker (CPU) of an OS —
- * it reasons about ONE action and proposes concrete steps.
- * It does NOT execute anything.
+ * Compose the Worker system prompt: the owner's identity (from .executive/claude.md,
+ * or the built-in default) followed by the fixed, non-overridable operational contract.
  */
-export function buildSystemPrompt(): string {
-  return (
-    "You are the Worker (reasoning engine) of ExecutiveOS, an event-driven personal assistant runtime.\n" +
-    "You are given ONE action to carry out and a compact context snapshot.\n" +
-    "Propose concrete, actionable steps to carry out that action.\n" +
-    "You do NOT execute anything — you only reason and write a proposal.\n" +
-    "Keep your output concise. Use short lines for steps."
-  );
+export function buildSystemPrompt(identity: string): string {
+  return identity.trim() + "\n\n" + OPERATIONAL_CONTRACT;
 }
 
 // ─── User message ─────────────────────────────────────────────────────────────
@@ -56,13 +59,14 @@ export function buildUserMessage(input: WorkerInput): string {
 export function buildRequestBody(
   input: WorkerInput,
   model: string,
-  maxTokens: number
+  maxTokens: number,
+  identity: string
 ): object {
   return {
     model,
     max_tokens: maxTokens,
     temperature: 0,
-    system: buildSystemPrompt(),
+    system: buildSystemPrompt(identity),
     messages: [
       {
         role: "user",
@@ -129,6 +133,7 @@ export class AnthropicWorker implements Worker {
   private readonly apiKey: string;
   private readonly maxTokens: number;
   private readonly timeoutMs: number;
+  private readonly identity: string;
 
   constructor(opts: AnthropicWorkerOptions) {
     this.baseUrl = opts.baseUrl.replace(/\/+$/, "");
@@ -136,12 +141,13 @@ export class AnthropicWorker implements Worker {
     this.apiKey = opts.apiKey;
     this.maxTokens = opts.maxTokens;
     this.timeoutMs = opts.timeoutMs;
+    this.identity = opts.identity;
     this.name = "anthropic:" + opts.model;
   }
 
   async run(input: WorkerInput): Promise<WorkerOutput> {
     const url = this.baseUrl + "/v1/messages";
-    const body = buildRequestBody(input, this.model, this.maxTokens);
+    const body = buildRequestBody(input, this.model, this.maxTokens, this.identity);
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeoutMs);
 

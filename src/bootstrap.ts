@@ -2,9 +2,10 @@
 // Idempotent: running twice never errors or loses data.
 
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
-import { execRoot, eventsDir, logsDir, configPath } from "./paths.js";
+import { execRoot, eventsDir, logsDir, configPath, claudeMdPath } from "./paths.js";
 import type { EventSource } from "./events/types.js";
 import { defaultConfig } from "./config.js";
+import { DEFAULT_IDENTITY } from "./worker/identity.js";
 
 /** The four event sources that get their own jsonl file. */
 const SOURCES: EventSource[] = ["git", "terminal", "editor", "system"];
@@ -38,5 +39,11 @@ export async function bootstrap(): Promise<void> {
   const metaPath = execRoot() + "/meta.json";
   if (!existsSync(metaPath)) {
     writeFileSync(metaPath, JSON.stringify({ lastSeq: 0 }) + "\n");
+  }
+
+  // Write claude.md (Worker identity) only if it does not already exist.
+  const idPath = claudeMdPath();
+  if (!existsSync(idPath)) {
+    writeFileSync(idPath, DEFAULT_IDENTITY);
   }
 }

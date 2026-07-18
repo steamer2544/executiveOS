@@ -74,3 +74,8 @@ export function synthReportPath(): string {
 export function autoReportPath(): string {
   return execRoot() + "/auto-report.json";
 }
+
+/** Absolute path to .executive/claude.md (the Worker identity). */
+export function claudeMdPath(): string {
+  return execRoot() + "/claude.md";
+}
