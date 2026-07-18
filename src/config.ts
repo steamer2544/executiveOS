@@ -57,6 +57,11 @@ export interface Config {
   hooks?: {
     testCommand?: string | null; // the project's test command; `install-hooks` runs it post-commit and emits the result. Default null.
   };
+  /** LLM signal inference (defaults applied when absent). OFF by default — departs from the deterministic core. */
+  infer?: {
+    enabled?: boolean;   // if true, the watch daemon periodically asks the LLM to GUESS block/deadline. Default false.
+    cooldownMs?: number; // minimum ms between two inference calls in the daemon. Default 300000 (5 min).
+  };
 }
 
 /** Default configuration values. */
@@ -104,6 +109,10 @@ export function defaultConfig(): Config {
     },
     hooks: {
       testCommand: null,
+    },
+    infer: {
+      enabled: false,
+      cooldownMs: 300000,
     },
   };
 }
@@ -200,6 +209,13 @@ export function loadConfig(): Config {
     parsed.hooks = defaults.hooks!;
   }
   parsed.hooks.testCommand = parsed.hooks.testCommand ?? defaults.hooks!.testCommand!;
+
+  // Merge missing infer fields with defaults.
+  if (!parsed.infer) {
+    parsed.infer = defaults.infer!;
+  }
+  parsed.infer.enabled = parsed.infer.enabled ?? defaults.infer!.enabled!;
+  parsed.infer.cooldownMs = parsed.infer.cooldownMs ?? defaults.infer!.cooldownMs!;
 
   return parsed;
 }

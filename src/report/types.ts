@@ -55,6 +55,10 @@ export interface Digest {
   };
 
   needsYou: NeedsYouItem[];          // aggregated across sources; [] when nothing pending
+
+  /** LLM guesses to confirm (from .executive/inferred.json), shown only when they add info.
+   *  Empty unless the infer feature ran and produced a novel suggestion. */
+  suggestions: string[];
 }
 
 export interface DigestOptions {

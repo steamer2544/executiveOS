@@ -27,6 +27,8 @@ import { diffNeedsYou, appendNotifications, readNotifications } from "./report/n
 import type { NeedsYouItem } from "./report/types.js";
 import { installHooks } from "./hooks/install.js";
 import { startUiServer } from "./ui/server.js";
+import { runInference, writeInference } from "./infer/infer.js";
+import { inferredPath } from "./paths.js";
 
 const VALID_SOURCES: EventSource[] = ["git", "terminal", "editor", "system"];
 
@@ -51,6 +53,7 @@ Commands:
   notifications [n]                             Show the last n "Needs you" notifications (default 10)
   install-hooks [--test "<cmd>"]                Install a git post-commit hook that auto-emits test results
   ui [--port N]                                 Open a local web dashboard (default port 4317)
+  infer                                         Ask the LLM to guess block/deadline (suggestions only) → inferred.json
   --help                                        Show this help
 
 Sources: git, terminal, editor, system
@@ -294,6 +297,10 @@ async function main(): Promise<void> {
       const autopilotGuard = freshGuardState();
       let autopilotRunning = false;
 
+      // ── Inference (LLM guesses) state ─────────────────────────────────────
+      let inferRunning = false;
+      let lastInferAt: number | null = null;
+
       // ── Needs-you alert state ─────────────────────────────────────────────
       let lastNeedsSignature: string | null = null;
       let lastNeedsItems: NeedsYouItem[] = [];
@@ -392,6 +399,26 @@ async function main(): Promise<void> {
               }
             } catch (digestErr) {
               process.stderr.write("Digest refresh failed: " + (digestErr as Error).message + "\n");
+            }
+
+            // ── LLM inference (guesses only; behind config.infer.enabled) ──
+            if (config.infer?.enabled === true && !inferRunning) {
+              const inferCooldown = config.infer.cooldownMs ?? 300000;
+              const nowMs = Date.now();
+              if (lastInferAt === null || nowMs - lastInferAt >= inferCooldown) {
+                inferRunning = true;
+                lastInferAt = nowMs;
+                // Fire-and-forget: never block the tick on a network call.
+                runInference(built.context, { config })
+                  .then((result) => {
+                    writeInference(result);
+                    if (!result.error && (result.block?.likely || result.deadline?.likely)) {
+                      process.stdout.write("Infer: block=" + (result.block?.likely ? "?" : "no") + " deadline=" + (result.deadline?.likely ? "?" : "no") + " (see suggestions in report)\n");
+                    }
+                  })
+                  .catch((e) => process.stderr.write("Infer failed: " + (e as Error).message + "\n"))
+                  .finally(() => { inferRunning = false; });
+              }
             }
           } catch (planErr) {
             // Plan failure never crashes the daemon.
@@ -682,6 +709,39 @@ async function main(): Promise<void> {
         process.exit(0);
       } else {
         process.stderr.write("install-hooks failed: " + result.message + "\n");
+        process.exit(1);
+      }
+      break;
+    }
+
+    case "infer": {
+      await bootstrap();
+      try {
+        const config = loadConfig();
+        const built = buildState();
+        writeState(built);
+        const result = await runInference(built.context, { config });
+        writeInference(result);
+        process.stdout.write("backend: " + result.backend + "\n");
+        if (result.error) {
+          process.stdout.write("error: " + result.error + "\n");
+        } else {
+          process.stdout.write(
+            "block: " + (result.block?.likely ? "LIKELY — " + result.block.reason : "no") + "\n"
+          );
+          process.stdout.write(
+            "deadline: " +
+              (result.deadline?.likely
+                ? "LIKELY — " + (result.deadline.date ? result.deadline.date + " " : "") + result.deadline.note
+                : "no") +
+              "\n"
+          );
+        }
+        process.stdout.write("(written to " + inferredPath() + ")\n");
+        process.stdout.write("These are GUESSES — confirm with `emit` or the dashboard buttons.\n");
+        process.exit(0);
+      } catch (err) {
+        process.stderr.write("Error: " + (err as Error).message + "\n");
         process.exit(1);
       }
       break;

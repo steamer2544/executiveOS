@@ -74,6 +74,11 @@ export function renderPage(): string {
     <ul class="needs" id="needs"></ul>
   </section>
 
+  <section class="card" id="suggestCard" style="display:none">
+    <h2>Suggestions · unconfirmed (from the LLM)</h2>
+    <ul class="needs" id="suggestions"></ul>
+  </section>
+
   <section class="card">
     <h2>Tell it something</h2>
     <div class="controls">
@@ -136,6 +141,10 @@ async function refresh() {
     $("needs").innerHTML = needs.length
       ? needs.map(i => \`<li><div class="src">\${esc(i.source)}</div><div><b>\${esc(i.summary)}</b></div>\${i.detail?\`<div class="muted">\${esc(i.detail)}</div>\`:""}</li>\`).join("")
       : "<li class='empty'>Nothing needs you right now. ✓</li>";
+
+    const sug = dg.suggestions || [];
+    $("suggestCard").style.display = sug.length ? "block" : "none";
+    $("suggestions").innerHTML = sug.map(s => \`<li>\${esc(s)} <span class="muted">— confirm with the buttons below</span></li>\`).join("");
 
     const a = dg.lastAutopilot;
     $("autopilot").innerHTML = a.available ? rows([

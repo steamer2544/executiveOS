@@ -4,7 +4,7 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { test, expect } from "bun:test";
-import { statePath, planPath, autoReportPath, execReportPath, proposalPath, digestPath, execRoot } from "../paths.js";
+import { statePath, planPath, autoReportPath, execReportPath, proposalPath, digestPath, inferredPath, execRoot } from "../paths.js";
 import { buildDigest, renderDigest, needsYouSignature } from "./digest.js";
 import type { NeedsYouItem } from "./types.js";
 import type { State } from "../state/types.js";
@@ -673,4 +673,66 @@ test("needsYouSignature: distinguishes source — same summary, different source
   const a: NeedsYouItem[] = [{ source: "plan", summary: "Something needs you" }];
   const b: NeedsYouItem[] = [{ source: "autopilot", summary: "Something needs you" }];
   expect(needsYouSignature(a)).not.toBe(needsYouSignature(b));
+});
+
+// ── Suggestions from inferred.json (Phase 19) ─────────────────────────────────
+
+test("suggestions: surfaces a block guess when state is not blocked", () => {
+  const dir = createTempHome();
+  try {
+    setHome(dir);
+    seedState({ blocked: false });
+    writeFileSync(inferredPath(), JSON.stringify({
+      generatedAt: "x", backend: "mock", error: null,
+      block: { likely: true, reason: "waiting on vendor" },
+      deadline: { likely: false, date: null, note: "" }, raw: "",
+    }));
+    const d = buildDigest();
+    expect(d.suggestions.some((s) => s.includes("Possible block"))).toBe(true);
+    expect(renderDigest(d)).toContain("Suggestions");
+  } finally { cleanup(dir); unsetHome(); }
+});
+
+test("suggestions: suppresses a block guess when already blocked", () => {
+  const dir = createTempHome();
+  try {
+    setHome(dir);
+    seedState({ blocked: true, blockedReason: "known" });
+    writeFileSync(inferredPath(), JSON.stringify({
+      generatedAt: "x", backend: "mock", error: null,
+      block: { likely: true, reason: "waiting" },
+      deadline: { likely: false, date: null, note: "" }, raw: "",
+    }));
+    const d = buildDigest();
+    expect(d.suggestions.some((s) => s.includes("Possible block"))).toBe(false);
+  } finally { cleanup(dir); unsetHome(); }
+});
+
+test("suggestions: deadline guess only when no deadline set", () => {
+  const dir = createTempHome();
+  try {
+    setHome(dir);
+    seedState({ deadline: null });
+    writeFileSync(inferredPath(), JSON.stringify({
+      generatedAt: "x", backend: "mock", error: null,
+      block: { likely: false, reason: "" },
+      deadline: { likely: true, date: "2026-08-01", note: "ship" }, raw: "",
+    }));
+    const d = buildDigest();
+    expect(d.suggestions.some((s) => s.includes("Possible deadline") && s.includes("2026-08-01"))).toBe(true);
+  } finally { cleanup(dir); unsetHome(); }
+});
+
+test("suggestions: none when inferred has an error", () => {
+  const dir = createTempHome();
+  try {
+    setHome(dir);
+    seedState({ blocked: false });
+    writeFileSync(inferredPath(), JSON.stringify({
+      generatedAt: "x", backend: "anthropic", error: "network down",
+      block: null, deadline: null, raw: "",
+    }));
+    const d = buildDigest();
+    expect(d.suggestions).toEqual([]);
+  } finally { cleanup(dir); unsetHome(); }
 });

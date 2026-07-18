@@ -314,6 +314,22 @@ docs/scopes/           # per-phase specs (the contract handed to the implementer
   live: `ui --port 4399` → `GET /` serves the page, `/api/state` returns the digest, `POST /api/emit`
   block → `blocked:true`, a non-whitelisted type → HTTP 400. Files: `src/ui/page.ts`, `src/ui/server.ts`,
   `src/ui/ui.test.ts`, `src/index.ts`.
+- **Phase 19 — DONE** (architect impl + self-review, this commit): **LLM signal inference** — the first
+  feature that **deliberately departs from the deterministic core** (behind a default-OFF toggle), so the
+  two un-sensable signals (**blocked**, **deadline**) can be *guessed*. `src/infer/` mirrors the Worker
+  shape: `Inferer` (`mock` keyword-scan, offline | `anthropic` HTTP, reusing `config.worker`), factory,
+  and `runInference(context)` → **`.executive/inferred.json`**. **Guardrail: SUGGESTIONS ONLY** — it never
+  emits events or mutates real state; the digest surfaces guesses in a separate **"Suggestions
+  (unconfirmed)"** section (and the GUI card), shown **only when they add info** (block guess suppressed
+  if already blocked; deadline guess suppressed if a deadline is set), and the owner confirms via the
+  existing `emit`/GUI buttons. New `infer` CLI; wired into the `watch` daemon behind **`config.infer.enabled`**
+  (default false) + `cooldownMs` + in-flight lock, fire-and-forget so a slow/failed call never blocks the
+  tick. `config.infer` block (backward-compatible). 236 passing tests (15 new, offline via MockInferer +
+  parse tests). **First phase VALIDATED LIVE against the real 9arm Qwen gateway:** discovered Qwen3.6's
+  "thinking" consumes the token budget → `content:[]`/`stop:max_tokens` at 1024; fixed by an inference
+  max_tokens floor of 3072 (+60s timeout) in the factory — then a real `infer` correctly guessed
+  `block: waiting on Stripe API key` + `deadline: 2026-08-01`, surfaced in `report`. Files: `src/infer/*`,
+  `src/config.ts`, `src/paths.ts`, `src/report/{types,digest}.ts`, `src/ui/page.ts`, `src/index.ts`.
 - **Loop complete (manual trigger):** `auto --apply` runs the whole chain in one command; the human
   reviews/merges the `executive/change-<id>` branch.
 
@@ -333,6 +349,7 @@ bun run src/index.ts report                         # render a human-readable di
 bun run src/index.ts notifications [n]              # show the last n "Needs you" notifications (daemon-logged)
 bun run src/index.ts install-hooks [--test "<cmd>"] # install a git post-commit hook that auto-emits test results
 bun run src/index.ts ui [--port N]                  # local web dashboard (default port 4317; Ctrl-C to stop)
+bun run src/index.ts infer                          # LLM guesses block/deadline (suggestions only) → inferred.json
 bun run src/index.ts watch                          # start the watcher daemon (Ctrl-C to stop)
 bun run typecheck                                  # tsc --noEmit
 bun test                                           # unit tests

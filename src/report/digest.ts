@@ -9,7 +9,8 @@ import type { Plan } from "../planner/types.js";
 import type { AutoReport } from "../auto/types.js";
 import type { ExecReport } from "../executor/types.js";
 import type { Proposal } from "../worker/types.js";
-import { statePath, planPath, autoReportPath, execReportPath, proposalPath, digestPath, execRoot } from "../paths.js";
+import { statePath, planPath, autoReportPath, execReportPath, proposalPath, digestPath, inferredPath, execRoot } from "../paths.js";
+import type { InferenceResult } from "../infer/types.js";
 import type { Digest, DigestOptions, NeedsYouItem } from "./types.js";
 
 // ── Defensive JSON reader ────────────────────────────────────────────────────
@@ -164,12 +165,29 @@ export function buildDigest(opts?: DigestOptions): Digest {
     });
   }
 
+  // ── Suggestions (LLM guesses, unconfirmed) ─────────────────────────────────
+  // Shown only when they add NEW information vs. the deterministic state:
+  //   - a block guess only if not already blocked;
+  //   - a deadline guess only if no deadline is set.
+  const suggestions: string[] = [];
+  const rawInfer = readJson<InferenceResult>(inferredPath());
+  if (rawInfer && !rawInfer.error) {
+    if (rawInfer.block?.likely && !(rawState?.blocked === true)) {
+      suggestions.push("Possible block — " + (rawInfer.block.reason || "confirm?"));
+    }
+    if (rawInfer.deadline?.likely && !(rawState?.deadline)) {
+      const when = rawInfer.deadline.date ? " (" + rawInfer.deadline.date + ")" : "";
+      suggestions.push("Possible deadline" + when + " — " + (rawInfer.deadline.note || "confirm?"));
+    }
+  }
+
   return {
     generatedAt,
     now,
     recommended,
     lastAutopilot,
     needsYou,
+    suggestions,
   };
 }
 
@@ -273,6 +291,16 @@ export function renderDigest(d: Digest): string {
     }
   }
   lines.push("");
+
+  // ── Suggestions (LLM guesses — unconfirmed) ────────────────────────────────
+  if (d.suggestions.length > 0) {
+    lines.push("## Suggestions (unconfirmed — from the LLM)");
+    lines.push("");
+    for (const s of d.suggestions) {
+      lines.push("- " + s);
+    }
+    lines.push("");
+  }
 
   return lines.join("\n");
 }
