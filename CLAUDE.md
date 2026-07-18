@@ -202,6 +202,24 @@ docs/scopes/           # per-phase specs (the contract handed to the implementer
   Reviewed live: `init`→`claude.md`=DEFAULT, edit+re-init preserved, end-to-end custom identity appears in
   the system prompt before the contract, gitignored, out-of-scope diff empty. **No qwen defects found.**
   Spec: `docs/scopes/phase-10-worker-identity.md`.
+- **Phase 11 — DONE** (qwen impl + architect review, this commit): **Digest / Report layer**
+  (`src/report/`) — a single `report` command that reads the existing `.executive/` artifacts and renders
+  one concise, human-readable **`.executive/digest.md`** (also printed to stdout), directly serving the
+  product goal of cutting decision fatigue. **Pure presentation layer — 100% deterministic, rule-based,
+  NO LLM** (same family as State/Planner). `buildDigest(opts?)` reads `state.json` (→ **Now**),
+  `plan.json` (→ **Recommended action**), `auto-report.json` (→ **Last Autopilot run**), and
+  `exec-report.json`/`proposal.json` (signals for **Needs you**) — **every input optional + untrusted**
+  via a defensive `readJson` (missing/malformed → per-section "no data yet", **never throws**).
+  `renderDigest(d)` → Markdown; `writeDigest(md)` atomic temp+rename. The **Needs you** section is the
+  high-value part: it aggregates four scattered signals into one queue — plan `disposition:"ask"`,
+  autopilot `needsHuman`, a parked change (`mode:"apply"`+`committed`+`testPassed:false`), and a worker
+  `status:"error"` — deduped by summary. **Read-only:** writes only `digest.md`; no git/LLM/network/
+  process; **not wired into the `watch` daemon**; **no external delivery** (email/Slack deliberately
+  deferred — outward-facing). No config change. New `report` CLI + `digestPath()` in `src/paths.ts`. 180
+  passing tests (15 new, offline). Reviewed live: fresh `init`→placeholder digest, end-to-end
+  emit→plan→report shows `fix_tests (act)`, needs-you aggregation per source, gitignored, out-of-scope
+  diff empty. **One cosmetic qwen defect found + fixed by the architect:** an unbalanced `)` in the
+  confidence line (`… total)_` → `… total_`). Spec: `docs/scopes/phase-11-digest-report.md`.
 - **Loop complete (manual trigger):** `auto --apply` runs the whole chain in one command; the human
   reviews/merges the `executive/change-<id>` branch.
 
@@ -217,6 +235,7 @@ bun run src/index.ts work                          # build state + plan, then ru
 bun run src/index.ts execute <changeset.json> [--apply]  # apply a ChangeSet on an isolated branch (dry-run without --apply)
 bun run src/index.ts synth [--files a,b] [--proposal <id>]  # synthesize a ChangeSet from the latest Proposal (dry-run; does NOT apply)
 bun run src/index.ts auto [--apply] [--files a,b]   # run the whole chain plan→work→synth→execute (dry-run without --apply)
+bun run src/index.ts report                         # render a human-readable digest of the current state → digest.md
 bun run src/index.ts watch                          # start the watcher daemon (Ctrl-C to stop)
 bun run typecheck                                  # tsc --noEmit
 bun test                                           # unit tests

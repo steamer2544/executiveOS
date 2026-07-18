@@ -21,6 +21,8 @@ import { runSynth, writeSynthReport } from "./synth/synth.js";
 import { changeSetPath, autoReportPath } from "./paths.js";
 import { runAuto, writeAutoReport } from "./auto/auto.js";
 import { shouldRunAutopilot, freshGuardState } from "./auto/guard.js";
+import { buildDigest, renderDigest, writeDigest } from "./report/digest.js";
+import { digestPath } from "./paths.js";
 
 const VALID_SOURCES: EventSource[] = ["git", "terminal", "editor", "system"];
 
@@ -41,6 +43,7 @@ Commands:
   execute <changeset.json> [--apply]            Apply a ChangeSet on an isolated branch (dry-run without --apply)
   synth [--files a,b] [--proposal <id>]         Synthesize a ChangeSet from the latest Proposal (dry-run; does NOT apply)
   auto [--apply] [--files a,b]                  Run the whole chain (plan→work→synth→execute); dry-run unless --apply
+  report                                        Render a human-readable digest of the current state
   --help                                        Show this help
 
 Sources: git, terminal, editor, system
@@ -544,6 +547,22 @@ async function main(): Promise<void> {
         process.stdout.write("report: " + autoReportPath() + "\n");
 
         process.exit(report.ok ? 0 : 1);
+      } catch (err) {
+        process.stderr.write("Error: " + (err as Error).message + "\n");
+        process.exit(1);
+      }
+      break;
+    }
+
+    case "report": {
+      await bootstrap();
+      try {
+        const digest = buildDigest();
+        const md = renderDigest(digest);
+        writeDigest(md);
+        process.stdout.write(md + "\n");
+        process.stdout.write("\n(written to " + digestPath() + ")\n");
+        process.exit(0);
       } catch (err) {
         process.stderr.write("Error: " + (err as Error).message + "\n");
         process.exit(1);

@@ -79,3 +79,8 @@ export function autoReportPath(): string {
 export function claudeMdPath(): string {
   return execRoot() + "/claude.md";
 }
+
+/** Absolute path to .executive/digest.md (the latest human-readable digest). */
+export function digestPath(): string {
+  return execRoot() + "/digest.md";
+}
