@@ -302,6 +302,18 @@ docs/scopes/           # per-phase specs (the contract handed to the implementer
 - **Auto-sensing (Phase 15–17):** running `watch` now senses **project + task + branch + files +
   commits** automatically, and `install-hooks` adds **test results** on each commit. Only **blocked** and
   **deadline** still need an explicit `emit` (external facts no watcher can know).
+- **Phase 18 — DONE** (architect impl + self-review, this commit): **Local web GUI** — a `ui [--port N]`
+  command (default 4317) starts a `Bun.serve` dashboard bound to **127.0.0.1 only**, so the owner can see
+  everything and click instead of typing. `src/ui/page.ts` `renderPage()` is a single **self-contained**
+  HTML page (inline CSS+JS, no external resources) showing Now / Recommended / Needs you / Last Autopilot,
+  auto-refreshing every 5s. `src/ui/server.ts` `startUiServer()` serves `GET /` (page), `GET /api/state`
+  (freshens state+plan, returns the Digest + summary), and `POST /api/emit` (**whitelisted** to
+  `system.blocked`/`unblocked`/`task`/`test_result` only) — the block/deadline/task buttons emit these, so
+  even the un-sensable signals need no typing. Deterministic, no LLM, reuses buildState/plan/buildDigest/
+  append. 221 passing tests (6 new; server exercised over a real localhost port with `port: 0`). Reviewed
+  live: `ui --port 4399` → `GET /` serves the page, `/api/state` returns the digest, `POST /api/emit`
+  block → `blocked:true`, a non-whitelisted type → HTTP 400. Files: `src/ui/page.ts`, `src/ui/server.ts`,
+  `src/ui/ui.test.ts`, `src/index.ts`.
 - **Loop complete (manual trigger):** `auto --apply` runs the whole chain in one command; the human
   reviews/merges the `executive/change-<id>` branch.
 
@@ -320,6 +332,7 @@ bun run src/index.ts auto [--apply] [--files a,b]   # run the whole chain plan�
 bun run src/index.ts report                         # render a human-readable digest of the current state → digest.md
 bun run src/index.ts notifications [n]              # show the last n "Needs you" notifications (daemon-logged)
 bun run src/index.ts install-hooks [--test "<cmd>"] # install a git post-commit hook that auto-emits test results
+bun run src/index.ts ui [--port N]                  # local web dashboard (default port 4317; Ctrl-C to stop)
 bun run src/index.ts watch                          # start the watcher daemon (Ctrl-C to stop)
 bun run typecheck                                  # tsc --noEmit
 bun test                                           # unit tests

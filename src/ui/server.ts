@@ -1,0 +1,75 @@
+// Local web dashboard server (Phase 18).
+// Binds to 127.0.0.1 only. Reads .executive/ state and lets you emit the
+// signals a watcher can't sense (block/unblock/deadline/task) via buttons.
+// Deterministic, no LLM. Reuses the existing State/Planner/Digest/EventStore.
+
+import { buildState, writeState } from "../state/builder.js";
+import { plan, writePlan } from "../planner/planner.js";
+import { buildDigest } from "../report/digest.js";
+import { append } from "../events/store.js";
+import { renderPage } from "./page.js";
+
+/** The only system event types the GUI is allowed to emit (safe, human-in-head signals). */
+const ALLOWED_EMIT_TYPES = new Set([
+  "system.blocked",
+  "system.unblocked",
+  "system.task",
+  "system.test_result",
+]);
+
+/** Build the current digest, freshening state + plan first (deterministic). */
+function currentState(): { digest: ReturnType<typeof buildDigest>; summary: string } {
+  const built = buildState();
+  writeState(built);
+  const p = plan(built.state, built.context);
+  writePlan(p);
+  const digest = buildDigest();
+  return { digest, summary: built.context.summary };
+}
+
+export interface UiServerOptions {
+  port: number;
+  hostname?: string; // default 127.0.0.1 (localhost only)
+}
+
+/** Start the dashboard server. Returns the Bun Server (call .stop() to close). */
+export function startUiServer(opts: UiServerOptions) {
+  return Bun.serve({
+    port: opts.port,
+    hostname: opts.hostname ?? "127.0.0.1",
+    async fetch(req): Promise<Response> {
+      const url = new URL(req.url);
+
+      if (req.method === "GET" && url.pathname === "/") {
+        return new Response(renderPage(), {
+          headers: { "content-type": "text/html; charset=utf-8" },
+        });
+      }
+
+      if (req.method === "GET" && url.pathname === "/api/state") {
+        try {
+          return Response.json(currentState());
+        } catch (err) {
+          return Response.json({ error: (err as Error).message }, { status: 500 });
+        }
+      }
+
+      if (req.method === "POST" && url.pathname === "/api/emit") {
+        try {
+          const body = (await req.json()) as { type?: string; data?: Record<string, unknown> };
+          const type = body.type ?? "";
+          const data = body.data ?? {};
+          if (!ALLOWED_EMIT_TYPES.has(type)) {
+            return Response.json({ ok: false, error: "type not allowed: " + type }, { status: 400 });
+          }
+          const event = await append({ source: "system", type, data });
+          return Response.json({ ok: true, seq: event.seq });
+        } catch (err) {
+          return Response.json({ ok: false, error: (err as Error).message }, { status: 400 });
+        }
+      }
+
+      return new Response("not found", { status: 404 });
+    },
+  });
+}

@@ -26,6 +26,7 @@ import { digestPath } from "./paths.js";
 import { diffNeedsYou, appendNotifications, readNotifications } from "./report/notify.js";
 import type { NeedsYouItem } from "./report/types.js";
 import { installHooks } from "./hooks/install.js";
+import { startUiServer } from "./ui/server.js";
 
 const VALID_SOURCES: EventSource[] = ["git", "terminal", "editor", "system"];
 
@@ -49,6 +50,7 @@ Commands:
   report                                        Render a human-readable digest of the current state
   notifications [n]                             Show the last n "Needs you" notifications (default 10)
   install-hooks [--test "<cmd>"]                Install a git post-commit hook that auto-emits test results
+  ui [--port N]                                 Open a local web dashboard (default port 4317)
   --help                                        Show this help
 
 Sources: git, terminal, editor, system
@@ -680,6 +682,34 @@ async function main(): Promise<void> {
         process.exit(0);
       } else {
         process.stderr.write("install-hooks failed: " + result.message + "\n");
+        process.exit(1);
+      }
+      break;
+    }
+
+    case "ui": {
+      await bootstrap();
+      let port = 4317;
+      for (let i = 1; i < args.length; i++) {
+        if (args[i] === "--port" && i + 1 < args.length) {
+          const parsed = parseInt(args[++i]!, 10);
+          if (!isNaN(parsed) && parsed > 0) port = parsed;
+        }
+      }
+      try {
+        const server = startUiServer({ port });
+        process.stdout.write("ExecutiveOS dashboard: http://localhost:" + server.port + "\n");
+        process.stdout.write("(Ctrl-C to stop)\n");
+        process.on("SIGINT", () => {
+          server.stop();
+          process.stdout.write("\nstopped\n");
+          process.exit(0);
+        });
+        await new Promise<void>(() => {
+          // Keep alive; rely on SIGINT to exit.
+        });
+      } catch (err) {
+        process.stderr.write("Error: " + (err as Error).message + "\n");
         process.exit(1);
       }
       break;
