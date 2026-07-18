@@ -20,6 +20,7 @@ import { applyChangeSet, writeReport } from "./executor/executor.js";
 import { runSynth, writeSynthReport } from "./synth/synth.js";
 import { changeSetPath, autoReportPath } from "./paths.js";
 import { runAuto, writeAutoReport } from "./auto/auto.js";
+import { shouldRunAutopilot, freshGuardState } from "./auto/guard.js";
 
 const VALID_SOURCES: EventSource[] = ["git", "terminal", "editor", "system"];
 
@@ -270,35 +271,24 @@ async function main(): Promise<void> {
       process.stdout.write("ExecutiveOS watch started. Active watchers: " + activeNames.join(", ") + "\n");
       process.stdout.write("Runtime root: " + execRoot() + "\n");
 
+      // ── Autopilot banner ─────────────────────────────────────────────────
+      if (config.autopilot?.enabled !== true) {
+        process.stdout.write("Autopilot: OFF (observe + rebuild only)\n");
+      } else if (config.autopilot.apply !== true) {
+        process.stdout.write("Autopilot: ON — dry-run (proposes, never commits)\n");
+      } else {
+        process.stdout.write("Autopilot: ON — APPLY (commits to executive/change-* branches)\n");
+      }
+
+      // ── Autopilot guard state + in-flight lock ────────────────────────────
+      const autopilotGuard = freshGuardState();
+      let autopilotRunning = false;
+
       // ── Periodic state rebuild ───────────────────────────────────────────
       const stateIntervalMs = config.state?.intervalMs ?? 30000;
 
-      // One rebuild immediately at startup.
-      try {
-        const built = buildState();
-        writeState(built);
-        const p = plan(built.state, built.context);
-        writePlan(p);
-        if (config.worker?.autoInvoke === true) {
-          try {
-            const proposal = await runWorker(built.context, p, config);
-            if (proposal) {
-              writeProposal(proposal);
-              process.stdout.write("Worker: [" + proposal.status + "] " + proposal.summary + "\n");
-            }
-          } catch (workerErr) {
-            process.stderr.write("Worker failed: " + (workerErr as Error).message + "\n");
-          }
-        }
-        process.stdout.write(
-          "State rebuild (interval: " + stateIntervalMs + "ms) — " + built.context.summary + " | Plan: " + p.summary + "\n"
-        );
-      } catch (err) {
-        process.stderr.write("State rebuild failed at startup: " + (err as Error).message + "\n");
-      }
-
-      // Rebuild every intervalMs.
-      const rebuildTimer = setInterval(async () => {
+      // Shared rebuild + autopilot helper (called at startup and on each interval).
+      async function runRebuild(): Promise<void> {
         try {
           const built = buildState();
           writeState(built);
@@ -316,6 +306,49 @@ async function main(): Promise<void> {
                 process.stderr.write("Worker failed: " + (workerErr as Error).message + "\n");
               }
             }
+
+            // ── Autopilot ──────────────────────────────────────────────
+            if (config.autopilot?.enabled === true && !autopilotRunning) {
+              const latestSeq = built.context.recentEvents.length > 0
+                ? built.context.recentEvents[built.context.recentEvents.length - 1]!.seq
+                : 0;
+              const now = Date.now();
+              const decision = shouldRunAutopilot({
+                config, state: built.state, plan: p, latestSeq, guard: autopilotGuard, now,
+              });
+              if (!decision.run) {
+                process.stdout.write("Autopilot: skip — " + decision.reason + "\n");
+              } else {
+                autopilotRunning = true;
+                try {
+                  const report = await runAuto({
+                    repoRoot: process.cwd(),
+                    config,
+                    apply: config.autopilot.apply === true,
+                  });
+                  writeAutoReport(report);
+                  let summary = "Autopilot: " + report.stage + " ok=" + report.ok + " needsHuman=" + report.needsHuman;
+                  if (report.applied) {
+                    summary += " branch=" + report.branch + " commit=" + report.commitSha + " testPassed=" + (report.testPassed ?? "n/a");
+                  }
+                  process.stdout.write(summary + "\n");
+                } catch (err) {
+                  process.stderr.write("Autopilot failed: " + (err as Error).message + "\n");
+                } finally {
+                  autopilotGuard.lastActedSignature = decision.signature;
+                  autopilotGuard.lastActedAt = now;
+                  autopilotRunning = false;
+                }
+              }
+
+              process.stdout.write(
+                "State rebuild (interval: " + stateIntervalMs + "ms) — " + built.context.summary + " | Plan: " + p.summary + "\n"
+              );
+            } else {
+              process.stdout.write(
+                "State rebuild (interval: " + stateIntervalMs + "ms) — " + built.context.summary + " | Plan: " + p.summary + "\n"
+              );
+            }
           } catch (planErr) {
             // Plan failure never crashes the daemon.
             process.stderr.write("Plan rebuild failed: " + (planErr as Error).message + "\n");
@@ -323,7 +356,13 @@ async function main(): Promise<void> {
         } catch (err) {
           process.stderr.write("State rebuild failed: " + (err as Error).message + "\n");
         }
-      }, stateIntervalMs);
+      }
+
+      // One rebuild immediately at startup.
+      await runRebuild();
+
+      // Rebuild every intervalMs.
+      const rebuildTimer = setInterval(runRebuild, stateIntervalMs);
 
       // ── Wait for SIGINT ──────────────────────────────────────────────────
       process.on("SIGINT", async () => {

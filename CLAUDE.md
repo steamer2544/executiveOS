@@ -181,10 +181,9 @@ docs/scopes/           # per-phase specs (the contract handed to the implementer
   clean→nothing-to-do, blocked→ask/needs-human with Worker never called). Cleanup: removed a dead
   `State`/`Context` import + unused `ctx` local. **No functional defects found.** Spec:
   `docs/scopes/phase-8-autopilot.md`.
+- **Phase 9 — DONE** (architect impl + review, this commit): **Continuous Autopilot** — the `watch` daemon runs the Autopilot continuously, behind two default-OFF config gates (`config.autopilot.enabled`, `config.autopilot.apply`). It reuses `runAuto` (Phase 8) verbatim: no new LLM/git/plan/proposal/changeset code. New files: `src/auto/guard.ts` (pure guard logic: `computeSignature`, `shouldRunAutopilot`, `AutopilotGuardState` + dedup by signature + cooldown) and `src/auto/guard.test.ts` (16 offline tests). Edits: `src/config.ts` (backward-compatible `autopilot` block + defaults), `src/index.ts` (`watch` case: guard state + in-flight lock, `maybeRunAutopilot` helper called after existing plan/autoInvoke, startup banner). Guard order: disabled check → signature → non-actionable skip → dedup → cooldown → run. Any `runAuto` throw is caught, logged to stderr, daemon keeps ticking. 158 passing tests (16 new). Spec: `docs/scopes/phase-9-continuous-autopilot.md`.
 - **Loop complete (manual trigger):** `auto --apply` runs the whole chain in one command; the human
-  reviews/merges the `executive/change-<id>` branch. **Phase 9 — not yet scoped.** Candidate: continuous
-  autonomy (wire `auto` into the `watch` daemon behind a config gate, default off), or the
-  `.executive/claude.md` product AI-identity artifact (still not created — do NOT create early).
+  reviews/merges the `executive/change-<id>` branch.
 
 ## Commands
 

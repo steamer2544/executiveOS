@@ -47,6 +47,12 @@ export interface Config {
     maxFileBytes?: number; // skip any single file larger than this (token bound); default 100000
     maxFiles?: number;     // cap on number of files fed to the LLM; default 10
   };
+  /** Continuous-autopilot configuration (defaults applied when absent). OFF by default. */
+  autopilot?: {
+    enabled?: boolean; // master switch: if true, the watch daemon runs the Autopilot each rebuild. Default false.
+    apply?: boolean;   // if true (AND enabled), the daemon lets the Executor commit to an isolated branch. Default false.
+    cooldownMs?: number; // minimum ms between two Autopilot runs. Default 300000 (5 min).
+  };
 }
 
 /** Default configuration values. */
@@ -86,6 +92,11 @@ export function defaultConfig(): Config {
     synth: {
       maxFileBytes: 100000,
       maxFiles: 10,
+    },
+    autopilot: {
+      enabled: false,
+      apply: false,
+      cooldownMs: 300000,
     },
   };
 }
@@ -168,6 +179,14 @@ export function loadConfig(): Config {
   }
   parsed.synth.maxFileBytes = parsed.synth.maxFileBytes ?? defaults.synth!.maxFileBytes!;
   parsed.synth.maxFiles = parsed.synth.maxFiles ?? defaults.synth!.maxFiles!;
+
+  // Merge missing autopilot fields with defaults.
+  if (!parsed.autopilot) {
+    parsed.autopilot = defaults.autopilot!;
+  }
+  parsed.autopilot.enabled = parsed.autopilot.enabled ?? defaults.autopilot!.enabled!;
+  parsed.autopilot.apply = parsed.autopilot.apply ?? defaults.autopilot!.apply!;
+  parsed.autopilot.cooldownMs = parsed.autopilot.cooldownMs ?? defaults.autopilot!.cooldownMs!;
 
   return parsed;
 }
