@@ -82,6 +82,7 @@ export function renderPage(): string {
       </select>
     </div>
     <div id="listenSchedule" class="muted" style="margin-top:6px;font-size:12.5px"></div>
+    <div class="muted" style="margin-top:4px;font-size:12.5px">Tip: hold <b>Space</b> to talk (walkie-talkie), release to stop.</div>
   </section>
 
   <section class="card" id="proposalsCard">
@@ -307,6 +308,19 @@ setInterval(() => {
   if (withinHours() && !listening && !userStopped) startListen();
   else if (!withinHours() && listening) { listening = false; try { recog && recog.stop(); } catch {} setListenUI(); }
 }, 20000);
+
+// Hold-to-talk: press & hold Space to dictate (walkie-talkie), release to stop.
+// Ignored while typing in a field so it never hijacks the inputs.
+function isTyping(el) { const t = ((el && el.tagName) || "").toLowerCase(); return t === "input" || t === "textarea" || t === "select"; }
+let spaceHeld = false;
+document.addEventListener("keydown", (e) => {
+  if (e.code === "Space" && !spaceHeld && !isTyping(e.target)) {
+    e.preventDefault(); spaceHeld = true; if (SR && !listening) startListen();
+  }
+});
+document.addEventListener("keyup", (e) => {
+  if (e.code === "Space" && spaceHeld) { e.preventDefault(); spaceHeld = false; if (listening) stopListen(true); }
+});
 
 loadCaptureConfig();
 refresh();
