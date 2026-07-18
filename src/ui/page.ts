@@ -39,6 +39,7 @@ export function renderPage(): string {
   .controls { display:grid; gap:10px; }
   .field { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
   input[type=text], input[type=date] { flex:1; min-width:160px; background:var(--bg); border:1px solid var(--line); color:var(--fg); border-radius:8px; padding:8px 10px; font:inherit; }
+  select { background:var(--bg); border:1px solid var(--line); color:var(--fg); border-radius:8px; padding:6px 10px; font:inherit; }
   button { background:var(--accent); color:#04121f; border:0; border-radius:8px; padding:8px 14px; font:inherit; font-weight:650; cursor:pointer; }
   button.ghost { background:transparent; color:var(--fg); border:1px solid var(--line); }
   button.danger { background:var(--danger); color:#fff; }
@@ -73,6 +74,13 @@ export function renderPage(): string {
     </h2>
     <div id="listenStatus" class="muted">Off. This listens to <b>you</b> (your dictated notes) — nothing is recorded without this being visibly on.</div>
     <div id="listenInterim" class="mono" style="margin-top:8px;min-height:1.2em;color:var(--accent)"></div>
+    <div style="margin-top:8px;display:flex;gap:8px;align-items:center">
+      <span class="muted" style="font-size:12.5px">Language</span>
+      <select id="lang" onchange="onLangChange()">
+        <option value="th-TH">ไทย</option>
+        <option value="en-US">English</option>
+      </select>
+    </div>
     <div id="listenSchedule" class="muted" style="margin-top:6px;font-size:12.5px"></div>
   </section>
 
@@ -239,7 +247,14 @@ function emitTask() { const t = $("task").value.trim(); if (!t) return toast("en
 // ── Listening (Web Speech API; listens to YOU, shows status visibly) ──────────
 let capture = { enabled: false, from: "09:00", to: "18:00" };
 let recog = null, listening = false, userStopped = false;
+let lang = localStorage.getItem("execLang") || "th-TH";
 const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+
+function onLangChange() {
+  lang = $("lang").value; localStorage.setItem("execLang", lang);
+  toast("language: " + (lang === "th-TH" ? "ไทย" : "English"));
+  if (listening && recog) { try { recog.lang = lang; recog.stop(); } catch {} } // onend restarts with new lang
+}
 
 function hhmmNow() { const d = new Date(); return d.getHours() * 60 + d.getMinutes(); }
 function toMin(s) { const m = /^(\\d{1,2}):(\\d{2})/.exec(s || ""); return m ? (+m[1]) * 60 + (+m[2]) : null; }
@@ -260,7 +275,7 @@ function startListen() {
   userStopped = false;
   try {
     recog = new SR();
-    recog.continuous = true; recog.interimResults = true;
+    recog.continuous = true; recog.interimResults = true; recog.lang = lang;
     recog.onresult = (e) => {
       let interim = "";
       for (let i = e.resultIndex; i < e.results.length; i++) {
@@ -283,6 +298,7 @@ function toggleListen() { listening ? stopListen(true) : startListen(); }
 
 async function loadCaptureConfig() {
   try { const r = await fetch("/api/config"); const j = await r.json(); if (j.capture) capture = j.capture; } catch {}
+  const sel = $("lang"); if (sel) sel.value = lang;
   setListenUI();
 }
 // Schedule tick: auto-start within work hours (once enabled + mic granted), auto-stop outside.
