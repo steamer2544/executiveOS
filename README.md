@@ -69,17 +69,25 @@ even then work only ever lands on an isolated `executive/change-*` branch that *
 
 ### Feeding it real signals
 
-The `watch` daemon auto-captures **git commits** and **file saves**. Richer signals (test results, a
-block, your current task, a deadline) are `emit`ted. To wire your test suite in without typing `emit` by
-hand, run it through the helper — it forwards output and emits `passing`/`failing` from the exit code:
+Running `watch` senses most of your situation on its own — **git commits, current branch → task, project
+(repo name), and file saves** — with no `emit` at all. To sense **test results** automatically too,
+install the git hook once; every commit then runs your tests and records pass/fail:
 
 ```bash
-scripts/exec-test.sh "bun test"      # bash
-pwsh scripts/exec-test.ps1 "bun test"  # PowerShell
+executive install-hooks --test "bun test"   # writes .git/hooks/post-commit
+```
+
+The only signals that still need an explicit `emit` are the ones no watcher can know — **a block** and a
+**deadline** (external facts in your head):
+
+```bash
+executive emit system system.blocked '{"reason":"waiting on vendor API key"}'
+executive emit system system.unblocked '{}'
 ```
 
 `report` freshens `state.json`/`plan.json` from the event log before rendering, so `emit … → report`
-reflects your latest events even with no daemon running.
+reflects your latest events even with no daemon running. (There's also a standalone
+`scripts/exec-test.{sh,ps1}` wrapper if you prefer sensing tests per-run instead of per-commit.)
 
 ---
 

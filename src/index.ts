@@ -25,6 +25,7 @@ import { buildDigest, renderDigest, writeDigest, needsYouSignature } from "./rep
 import { digestPath } from "./paths.js";
 import { diffNeedsYou, appendNotifications, readNotifications } from "./report/notify.js";
 import type { NeedsYouItem } from "./report/types.js";
+import { installHooks } from "./hooks/install.js";
 
 const VALID_SOURCES: EventSource[] = ["git", "terminal", "editor", "system"];
 
@@ -47,6 +48,7 @@ Commands:
   auto [--apply] [--files a,b]                  Run the whole chain (plan→work→synth→execute); dry-run unless --apply
   report                                        Render a human-readable digest of the current state
   notifications [n]                             Show the last n "Needs you" notifications (default 10)
+  install-hooks [--test "<cmd>"]                Install a git post-commit hook that auto-emits test results
   --help                                        Show this help
 
 Sources: git, terminal, editor, system
@@ -645,6 +647,39 @@ async function main(): Promise<void> {
         process.exit(0);
       } catch (err) {
         process.stderr.write("Error: " + (err as Error).message + "\n");
+        process.exit(1);
+      }
+      break;
+    }
+
+    case "install-hooks": {
+      await bootstrap();
+      const config = loadConfig();
+      // Parse --test "<cmd>" (its value may contain spaces → single argv element).
+      let testCommand: string | null = config.hooks?.testCommand ?? null;
+      for (let i = 1; i < args.length; i++) {
+        if (args[i] === "--test" && i + 1 < args.length) {
+          testCommand = args[++i]!;
+        }
+      }
+      if (!testCommand || testCommand.trim() === "") {
+        process.stderr.write(
+          'Error: no test command. Pass --test "<cmd>" (e.g. --test "bun test") ' +
+            "or set hooks.testCommand in .executive/config.json\n"
+        );
+        process.exit(1);
+      }
+      const result = installHooks({
+        repoRoot: process.cwd(),
+        testCommand: testCommand.trim(),
+        runtimeEntry: Bun.main,
+      });
+      if (result.ok) {
+        process.stdout.write(result.message + "\n");
+        process.stdout.write("hook: " + result.path + "\n");
+        process.exit(0);
+      } else {
+        process.stderr.write("install-hooks failed: " + result.message + "\n");
         process.exit(1);
       }
       break;

@@ -287,6 +287,21 @@ docs/scopes/           # per-phase specs (the contract handed to the implementer
   exists (explicit still wins). Deterministic, no LLM. 210 passing tests (3 new). Reviewed live: one
   `git.commit{repo:"myshi",branch:"feat/dark-mode"}` → `report` shows Project: myshi + Task: dark mode +
   Branch, zero manual emit. Files: `src/watchers/git.ts`, `src/state/builder.ts`, `builder.test.ts`.
+- **Phase 17 — DONE** (architect impl + self-review, this commit): **Auto test results via git hook** —
+  the last big auto-sensor, so `tests` is captured without manual `emit`. New `install-hooks [--test
+  "<cmd>"]` command (`src/hooks/install.ts`) writes a POSIX-sh **`.git/hooks/post-commit`** that runs the
+  project's test command and emits `system.test_result` passing/failing from its exit code. Pure
+  `renderPostCommitHook(cmd, runtimeEntry)` + `installHooks()` which **refuses to clobber a pre-existing
+  non-managed hook** (marker-gated) and overwrites only its own. Test command from `--test` or new
+  `config.hooks.testCommand` (default null, backward-compatible merge). Runtime path resolved via
+  `Bun.main`. Local/deterministic, no LLM. 215 passing tests (5 new). Reviewed live in a temp git repo:
+  `install-hooks --test "true"` → real commit → `report` shows `Tests: passing`; `--test "false"` →
+  commit → `Tests: failing` — fully automatic. **Note:** post-commit runs tests synchronously (commit
+  already made); fine for fast suites, opt-in by design. Files: `src/hooks/install.ts` + `install.test.ts`,
+  `src/config.ts`, `src/index.ts`.
+- **Auto-sensing (Phase 15–17):** running `watch` now senses **project + task + branch + files +
+  commits** automatically, and `install-hooks` adds **test results** on each commit. Only **blocked** and
+  **deadline** still need an explicit `emit` (external facts no watcher can know).
 - **Loop complete (manual trigger):** `auto --apply` runs the whole chain in one command; the human
   reviews/merges the `executive/change-<id>` branch.
 
@@ -304,6 +319,7 @@ bun run src/index.ts synth [--files a,b] [--proposal <id>]  # synthesize a Chang
 bun run src/index.ts auto [--apply] [--files a,b]   # run the whole chain plan→work→synth→execute (dry-run without --apply)
 bun run src/index.ts report                         # render a human-readable digest of the current state → digest.md
 bun run src/index.ts notifications [n]              # show the last n "Needs you" notifications (daemon-logged)
+bun run src/index.ts install-hooks [--test "<cmd>"] # install a git post-commit hook that auto-emits test results
 bun run src/index.ts watch                          # start the watcher daemon (Ctrl-C to stop)
 bun run typecheck                                  # tsc --noEmit
 bun test                                           # unit tests

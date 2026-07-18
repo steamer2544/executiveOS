@@ -53,6 +53,10 @@ export interface Config {
     apply?: boolean;   // if true (AND enabled), the daemon lets the Executor commit to an isolated branch. Default false.
     cooldownMs?: number; // minimum ms between two Autopilot runs. Default 300000 (5 min).
   };
+  /** Git-hook integration (defaults applied when absent). */
+  hooks?: {
+    testCommand?: string | null; // the project's test command; `install-hooks` runs it post-commit and emits the result. Default null.
+  };
 }
 
 /** Default configuration values. */
@@ -97,6 +101,9 @@ export function defaultConfig(): Config {
       enabled: false,
       apply: false,
       cooldownMs: 300000,
+    },
+    hooks: {
+      testCommand: null,
     },
   };
 }
@@ -187,6 +194,12 @@ export function loadConfig(): Config {
   parsed.autopilot.enabled = parsed.autopilot.enabled ?? defaults.autopilot!.enabled!;
   parsed.autopilot.apply = parsed.autopilot.apply ?? defaults.autopilot!.apply!;
   parsed.autopilot.cooldownMs = parsed.autopilot.cooldownMs ?? defaults.autopilot!.cooldownMs!;
+
+  // Merge missing hooks fields with defaults.
+  if (!parsed.hooks) {
+    parsed.hooks = defaults.hooks!;
+  }
+  parsed.hooks.testCommand = parsed.hooks.testCommand ?? defaults.hooks!.testCommand!;
 
   return parsed;
 }
