@@ -512,6 +512,128 @@ test("GeneratedAt set correctly", () => {
   }
 });
 
+// ── Phase 13: Full ask-queue (masking fix) ────────────────────────────────────
+
+test("act top action does NOT mask a lower-priority ask", () => {
+  const dir = createTempHome();
+  try {
+    setHome(dir);
+    seedState({ currentProject: "test" });
+    seedPlan({
+      topAction: {
+        kind: "fix_tests",
+        reason: "tests are failing",
+        priority: 100,
+        confidence: 0.97,
+        forbidden: false,
+        disposition: "act",
+      },
+      actions: [
+        { kind: "fix_tests", reason: "tests are failing", priority: 100, confidence: 0.97, forbidden: false, disposition: "act" },
+        { kind: "resolve_block", reason: "blocked on external API", priority: 90, confidence: 0.7, forbidden: false, disposition: "ask" },
+      ],
+    });
+    const digest = buildDigest();
+    // Recommended still points to topAction (fix_tests/act)
+    expect(digest.recommended.topActionKind).toBe("fix_tests");
+    expect(digest.recommended.disposition).toBe("act");
+    // But needsYou surfaces the masked ask
+    const planItems = digest.needsYou.filter((n) => n.source === "plan");
+    expect(planItems.length).toBe(1);
+    expect(planItems[0]!.summary).toBe("Planner needs your call: resolve_block");
+    expect(planItems[0]!.detail).toBe("blocked on external API");
+  } finally {
+    cleanup(dir);
+    unsetHome();
+  }
+});
+
+test("Multiple ask actions all surface in priority order", () => {
+  const dir = createTempHome();
+  try {
+    setHome(dir);
+    seedState({ currentProject: "test" });
+    seedPlan({
+      topAction: {
+        kind: "fix_tests",
+        reason: "tests fail",
+        priority: 100,
+        confidence: 0.97,
+        forbidden: false,
+        disposition: "act",
+      },
+      actions: [
+        { kind: "fix_tests", reason: "tests fail", priority: 100, confidence: 0.97, forbidden: false, disposition: "act" },
+        { kind: "resolve_block", reason: "blocked", priority: 90, confidence: 0.7, forbidden: false, disposition: "ask" },
+        { kind: "review_deadline", reason: "deadline approaching", priority: 70, confidence: 0.6, forbidden: false, disposition: "ask" },
+      ],
+    });
+    const digest = buildDigest();
+    const planItems = digest.needsYou.filter((n) => n.source === "plan");
+    expect(planItems.length).toBe(2);
+    expect(planItems[0]!.summary).toBe("Planner needs your call: resolve_block");
+    expect(planItems[1]!.summary).toBe("Planner needs your call: review_deadline");
+  } finally {
+    cleanup(dir);
+    unsetHome();
+  }
+});
+
+test("All-act plan → no plan item in needsYou", () => {
+  const dir = createTempHome();
+  try {
+    setHome(dir);
+    seedState({ currentProject: "test" });
+    seedPlan({
+      topAction: {
+        kind: "fix_tests",
+        reason: "tests fail",
+        priority: 100,
+        confidence: 0.97,
+        forbidden: false,
+        disposition: "act",
+      },
+      actions: [
+        { kind: "fix_tests", reason: "tests fail", priority: 100, confidence: 0.97, forbidden: false, disposition: "act" },
+        { kind: "resume_task", reason: "idle", priority: 40, confidence: 0.5, forbidden: false, disposition: "act" },
+      ],
+    });
+    const digest = buildDigest();
+    const planItems = digest.needsYou.filter((n) => n.source === "plan");
+    expect(planItems.length).toBe(0);
+  } finally {
+    cleanup(dir);
+    unsetHome();
+  }
+});
+
+test("Fallback: actions empty but topAction is ask → still surfaces", () => {
+  const dir = createTempHome();
+  try {
+    setHome(dir);
+    seedState({ currentProject: "test" });
+    seedPlan({
+      topAction: {
+        kind: "resolve_block",
+        reason: "blocked",
+        priority: 90,
+        confidence: 0.7,
+        forbidden: false,
+        disposition: "ask",
+      },
+      actions: [],
+    });
+    const digest = buildDigest();
+    const planItems = digest.needsYou.filter((n) => n.source === "plan");
+    expect(planItems.length).toBe(1);
+    expect(planItems[0]!.summary).toBe("Planner needs your call: resolve_block");
+    expect(planItems[0]!.detail).toBe("blocked");
+  } finally {
+    cleanup(dir);
+    unsetHome();
+  }
+});
+
 // ── needsYouSignature tests ───────────────────────────────────────────────────
 
 test("needsYouSignature: empty queue → empty string", () => {

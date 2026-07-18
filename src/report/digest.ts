@@ -115,13 +115,24 @@ export function buildDigest(opts?: DigestOptions): Digest {
     }
   }
 
-  // 1. Plan: ask disposition
-  if (rawPlan?.topAction && rawPlan.topAction.disposition === "ask") {
-    pushIfNew({
-      source: "plan",
-      summary: "Planner needs your call: " + rawPlan.topAction.kind,
-      detail: rawPlan.topAction.reason ?? undefined,
-    });
+  // 1. Plan: every fired action the Planner will NOT do autonomously (disposition "ask").
+  //    Iterate the whole actions list (priority-desc), not just topAction, so a lower-priority
+  //    "ask" (e.g. a block) is never masked by a higher-priority "act" top action.
+  //    Fall back to [topAction] when actions is empty/absent (degenerate/malformed plan).
+  const firedActions =
+    rawPlan?.actions && rawPlan.actions.length > 0
+      ? rawPlan.actions
+      : rawPlan?.topAction
+        ? [rawPlan.topAction]
+        : [];
+  for (const a of firedActions) {
+    if (a.disposition === "ask") {
+      pushIfNew({
+        source: "plan",
+        summary: "Planner needs your call: " + a.kind,
+        detail: a.reason ?? undefined,
+      });
+    }
   }
 
   // 2. Autopilot: needsHuman

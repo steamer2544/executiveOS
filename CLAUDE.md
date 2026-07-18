@@ -236,6 +236,20 @@ docs/scopes/           # per-phase specs (the contract handed to the implementer
   `needsYouSignature` added). 186 passing tests (6 new). Reviewed live: digest.md refreshed each tick,
   alert printed exactly once across 6 ticks (no spam), `cleared` printed once on unblock, clean start
   silent, out-of-scope diff empty. **No qwen defects found.** Spec: `docs/scopes/phase-12-watch-digest.md`.
+- **Phase 13 — DONE** (qwen impl + architect review, this commit): **Full ask-queue in "Needs you"** — a
+  surgical correctness fix in the Digest. The "Needs you" plan rule read `plan.topAction` only, so when a
+  state was **both** failing-tests (`fix_tests`/`act`, p100) **and** blocked (`resolve_block`/`ask`, p90),
+  the top action was `act` and the block was **masked** ("Nothing needs you"). Now `buildDigest` iterates
+  **every fired `plan.actions` entry with `disposition:"ask"`** (priority-desc order preserved, dedup by
+  summary kept), with a **`[topAction]` fallback** when `actions` is empty/absent (degenerate/malformed
+  plan — keeps the existing "Multiple needsYou sources" fixture green and never regresses an `ask` into
+  silence). **Recommended action still uses `topAction`** (a different projection — "if I do ONE thing,
+  what?"). Only the plan aggregation in `buildDigest` changed; `renderDigest`/`writeDigest`/
+  `needsYouSignature`/the `now`/`recommended`/`lastAutopilot` sections/`types.ts`/planner/watch are all
+  unchanged (the daemon alert benefits automatically). Still pure/deterministic/NO-LLM/read-only. 190
+  passing tests (4 new). Reviewed live end-to-end: failing+blocked → Recommended `fix_tests (act)` **and**
+  Needs you lists `resolve_block`; after `unblocked` the item disappears. **No qwen defects found.** Spec:
+  `docs/scopes/phase-13-full-ask-queue.md`.
 - **Loop complete (manual trigger):** `auto --apply` runs the whole chain in one command; the human
   reviews/merges the `executive/change-<id>` branch.
 
