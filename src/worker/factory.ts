@@ -2,6 +2,7 @@
 // Reads the auth token from the named env var.
 
 import type { Config } from "../config.js";
+import { llmMaxTokens, llmTimeoutMs } from "../config.js";
 import type { Worker } from "./types.js";
 import { MockWorker } from "./mock.js";
 import { AnthropicWorker } from "./anthropic.js";
@@ -16,8 +17,8 @@ export function createWorker(config: Config): Worker {
     baseUrl: w.baseUrl!,
     model: w.model!,
     apiKey,
-    maxTokens: w.maxTokens!,
-    timeoutMs: w.timeoutMs!,
+    maxTokens: llmMaxTokens(config),
+    timeoutMs: llmTimeoutMs(config),
     identity: loadWorkerIdentity(),
   });
 }

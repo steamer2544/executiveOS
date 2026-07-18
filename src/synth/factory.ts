@@ -2,6 +2,7 @@
 // Reuses the Phase 5 worker config (same gateway, same token).
 
 import type { Config } from "../config.js";
+import { llmMaxTokens, llmTimeoutMs } from "../config.js";
 import type { Synthesizer } from "./types.js";
 import { MockSynthesizer } from "./mock.js";
 import { AnthropicSynthesizer } from "./anthropic.js";
@@ -15,7 +16,7 @@ export function createSynthesizer(config: Config): Synthesizer {
     baseUrl: w.baseUrl!,
     model: w.model!,
     apiKey,
-    maxTokens: w.maxTokens!,
-    timeoutMs: w.timeoutMs!,
+    maxTokens: llmMaxTokens(config),
+    timeoutMs: llmTimeoutMs(config),
   });
 }

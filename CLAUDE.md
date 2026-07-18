@@ -330,6 +330,19 @@ docs/scopes/           # per-phase specs (the contract handed to the implementer
   max_tokens floor of 3072 (+60s timeout) in the factory — then a real `infer` correctly guessed
   `block: waiting on Stripe API key` + `deadline: 2026-08-01`, surfaced in `report`. Files: `src/infer/*`,
   `src/config.ts`, `src/paths.ts`, `src/report/{types,digest}.ts`, `src/ui/page.ts`, `src/index.ts`.
+- **Phase 20 — DONE** (architect impl + self-review + live validation, this commit): **Reasoning-model
+  headroom fix + polish.** (1) **Latent bug fixed:** the Worker (Phase 5) and Synthesizer (Phase 7) used
+  `config.worker.maxTokens` (was 1024) — too small for a reasoning model (Qwen) that spends output tokens
+  "thinking" before the answer, so a real call returned `content:[]`/`stop:max_tokens` and errored. Both
+  were only ever run against the mock backend, so this was never caught. Added shared `llmMaxTokens(config,
+  floor=4096)` + `llmTimeoutMs(config, floor=120000)` in `src/config.ts`, used by the worker, synth, and
+  infer factories; bumped `defaultConfig` worker `maxTokens 1024→4096`, `timeoutMs 30000→120000`.
+  **Validated LIVE against the real 9arm Qwen gateway:** `work` now returns a real multi-step proposal;
+  `synth` calls the gateway, parses a ChangeSet, and validation runs (a toy fixture produced an empty-ops
+  changeset, correctly rejected — model-quality, not the token bug). (2) **Polish:** `init` now adds
+  `.executive/` to the repo's `.gitignore` when run inside a git repo (idempotent; never duplicates;
+  never fails init). 236 passing tests (unchanged; the fix is in live-only paths). Files: `src/config.ts`,
+  `src/worker/factory.ts`, `src/synth/factory.ts`, `src/infer/factory.ts`, `src/index.ts`.
 - **Loop complete (manual trigger):** `auto --apply` runs the whole chain in one command; the human
   reviews/merges the `executive/change-<id>` branch.
 

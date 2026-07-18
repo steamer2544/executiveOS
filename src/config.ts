@@ -90,8 +90,8 @@ export function defaultConfig(): Config {
       baseUrl: "https://gateway.9arm.co",
       model: "qwen3.6-35b-a3b",
       apiKeyEnv: "EXECUTIVE_WORKER_KEY",
-      maxTokens: 1024,
-      timeoutMs: 30000,
+      maxTokens: 4096, // headroom for reasoning models that "think" before answering
+      timeoutMs: 120000, // thinking latency is variable and occasionally >1 min
       autoInvoke: false,
     },
     executor: {
@@ -218,4 +218,21 @@ export function loadConfig(): Config {
   parsed.infer.cooldownMs = parsed.infer.cooldownMs ?? defaults.infer!.cooldownMs!;
 
   return parsed;
+}
+
+/**
+ * Effective LLM output cap. Reasoning models (e.g. the default Qwen) spend tokens
+ * "thinking" BEFORE the answer, and that counts toward max_tokens — too small a cap
+ * truncates mid-thought and returns empty content. Enforce a generous floor so real
+ * responses complete. The gateway is flat-rate, so headroom costs nothing.
+ */
+export function llmMaxTokens(config: Config, floor = 4096): number {
+  return Math.max(config.worker?.maxTokens ?? 1024, floor);
+}
+
+/** Effective request timeout. Reasoning models "think" for a highly variable time
+ *  (often seconds, occasionally >1 min), so floor the timeout generously to avoid
+ *  aborting a slow-but-valid answer mid-flight. */
+export function llmTimeoutMs(config: Config, floor = 120000): number {
+  return Math.max(config.worker?.timeoutMs ?? 30000, floor);
 }

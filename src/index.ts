@@ -90,6 +90,22 @@ async function main(): Promise<void> {
     case "init": {
       await bootstrap();
       process.stdout.write("initialized: " + execRoot() + "\n");
+      // In a git repo, make sure .executive/ (runtime data) is gitignored.
+      try {
+        const cwd = process.cwd();
+        if (existsSync(cwd + "/.git")) {
+          const giPath = cwd + "/.gitignore";
+          const existing = existsSync(giPath) ? readFileSync(giPath, "utf-8") : "";
+          const hasEntry = existing.split(/\r?\n/).some((l) => l.trim() === ".executive/" || l.trim() === ".executive");
+          if (!hasEntry) {
+            const prefix = existing.length > 0 && !existing.endsWith("\n") ? "\n" : "";
+            writeFileSync(giPath, existing + prefix + ".executive/\n");
+            process.stdout.write("added .executive/ to .gitignore\n");
+          }
+        }
+      } catch {
+        // Never fail init over .gitignore housekeeping.
+      }
       process.exit(0);
       break;
     }
