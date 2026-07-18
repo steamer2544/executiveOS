@@ -23,6 +23,8 @@ import { runAuto, writeAutoReport } from "./auto/auto.js";
 import { shouldRunAutopilot, freshGuardState } from "./auto/guard.js";
 import { buildDigest, renderDigest, writeDigest, needsYouSignature } from "./report/digest.js";
 import { digestPath } from "./paths.js";
+import { diffNeedsYou, appendNotifications, readNotifications } from "./report/notify.js";
+import type { NeedsYouItem } from "./report/types.js";
 
 const VALID_SOURCES: EventSource[] = ["git", "terminal", "editor", "system"];
 
@@ -44,6 +46,7 @@ Commands:
   synth [--files a,b] [--proposal <id>]         Synthesize a ChangeSet from the latest Proposal (dry-run; does NOT apply)
   auto [--apply] [--files a,b]                  Run the whole chain (plan→work→synth→execute); dry-run unless --apply
   report                                        Render a human-readable digest of the current state
+  notifications [n]                             Show the last n "Needs you" notifications (default 10)
   --help                                        Show this help
 
 Sources: git, terminal, editor, system
@@ -289,6 +292,7 @@ async function main(): Promise<void> {
 
       // ── Needs-you alert state ─────────────────────────────────────────────
       let lastNeedsSignature: string | null = null;
+      let lastNeedsItems: NeedsYouItem[] = [];
 
       // ── Periodic state rebuild ───────────────────────────────────────────
       const stateIntervalMs = config.state?.intervalMs ?? 30000;
@@ -371,6 +375,16 @@ async function main(): Promise<void> {
                   process.stdout.write("✓ Needs-you queue cleared.\n");
                 }
                 lastNeedsSignature = sig;
+
+                // Durable notification log (append-only; local only).
+                const { added, removed } = diffNeedsYou(lastNeedsItems, digest.needsYou);
+                const nowTs = new Date().toISOString();
+                const records = [
+                  ...added.map((i) => ({ ts: nowTs, event: "added" as const, source: i.source, summary: i.summary, detail: i.detail })),
+                  ...removed.map((i) => ({ ts: nowTs, event: "resolved" as const, source: i.source, summary: i.summary, detail: i.detail })),
+                ];
+                appendNotifications(records);
+                lastNeedsItems = digest.needsYou;
               }
             } catch (digestErr) {
               process.stderr.write("Digest refresh failed: " + (digestErr as Error).message + "\n");
@@ -585,6 +599,35 @@ async function main(): Promise<void> {
         writeDigest(md);
         process.stdout.write(md + "\n");
         process.stdout.write("\n(written to " + digestPath() + ")\n");
+        process.exit(0);
+      } catch (err) {
+        process.stderr.write("Error: " + (err as Error).message + "\n");
+        process.exit(1);
+      }
+      break;
+    }
+
+    case "notifications": {
+      await bootstrap();
+      const nArg = args[1] ? parseInt(args[1], 10) : 10;
+      if (isNaN(nArg) || nArg < 1) {
+        process.stderr.write("Error: n must be a positive integer\n");
+        process.exit(1);
+      }
+      try {
+        const all = readNotifications();
+        const lastN = nArg >= all.length ? all : all.slice(all.length - nArg);
+        if (lastN.length === 0) {
+          process.stdout.write("No notifications yet.\n");
+          process.exit(0);
+        }
+        for (const r of lastN) {
+          process.stdout.write(r.ts + "  [" + r.event + "] " + r.source + ": " + r.summary);
+          if (r.detail) {
+            process.stdout.write("\n  — " + r.detail);
+          }
+          process.stdout.write("\n");
+        }
         process.exit(0);
       } catch (err) {
         process.stderr.write("Error: " + (err as Error).message + "\n");

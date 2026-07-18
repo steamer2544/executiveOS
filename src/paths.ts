@@ -84,3 +84,8 @@ export function claudeMdPath(): string {
 export function digestPath(): string {
   return execRoot() + "/digest.md";
 }
+
+/** Absolute path to .executive/notifications.jsonl (durable "Needs you" history). */
+export function notificationsPath(): string {
+  return execRoot() + "/notifications.jsonl";
+}

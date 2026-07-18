@@ -250,6 +250,24 @@ docs/scopes/           # per-phase specs (the contract handed to the implementer
   passing tests (4 new). Reviewed live end-to-end: failing+blocked → Recommended `fix_tests (act)` **and**
   Needs you lists `resolve_block`; after `unblocked` the item disappears. **No qwen defects found.** Spec:
   `docs/scopes/phase-13-full-ask-queue.md`.
+- **Phase 14 — DONE** (qwen impl + architect review, this commit): **Notification log** — makes the
+  Phase 12 "Needs you" alert **durable**. The Phase 12 alert is ephemeral stdout — if the owner is not
+  watching, it is lost. Now, inside the daemon's existing signature-change block, `diffNeedsYou(prev,
+  curr)` (pure, keyed by `source|summary` like `needsYouSignature`) computes items **added**/**resolved**
+  and `appendNotifications()` writes one JSONL record each (`{ts, event:"added"|"resolved", source,
+  summary, detail?}`) to **`.executive/notifications.jsonl`** (append-only). New `notifications [n]` CLI
+  (default 10) reads them back via `readNotifications()` (defensive — skips corrupt lines, `[]` when
+  missing). **Local only** — no network/email/webhook/git/LLM (external delivery still deferred as
+  outward-facing). **Daemon is the only writer** (transitions are observed over time); `report` stays a
+  read-only snapshot and does NOT write notifications. Append is in the existing digest `try/catch`, so a
+  write error never crashes the daemon; fires only on a queue change (no per-tick spam). New files
+  `src/report/notify.ts` + `notify.test.ts`; edits `src/paths.ts` (`notificationsPath()`) + `src/index.ts`
+  (watch wiring adds `lastNeedsItems`; new `notifications` command). No config change; `digest.ts`
+  existing functions/planner/worker/executor/synth/auto/bootstrap unchanged. 199 passing tests (9 new).
+  Reviewed live: blocked→`[added] plan: … resolve_block` record persists after the daemon stops, then
+  `unblocked`→`[resolved]`, exactly 2 records (no spam), `notifications` reads them back, `report`
+  appends nothing, empty log → "No notifications yet." **No qwen defects found.** Spec:
+  `docs/scopes/phase-14-notification-log.md`.
 - **Loop complete (manual trigger):** `auto --apply` runs the whole chain in one command; the human
   reviews/merges the `executive/change-<id>` branch.
 
@@ -266,6 +284,7 @@ bun run src/index.ts execute <changeset.json> [--apply]  # apply a ChangeSet on 
 bun run src/index.ts synth [--files a,b] [--proposal <id>]  # synthesize a ChangeSet from the latest Proposal (dry-run; does NOT apply)
 bun run src/index.ts auto [--apply] [--files a,b]   # run the whole chain plan→work→synth→execute (dry-run without --apply)
 bun run src/index.ts report                         # render a human-readable digest of the current state → digest.md
+bun run src/index.ts notifications [n]              # show the last n "Needs you" notifications (daemon-logged)
 bun run src/index.ts watch                          # start the watcher daemon (Ctrl-C to stop)
 bun run typecheck                                  # tsc --noEmit
 bun test                                           # unit tests
