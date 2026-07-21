@@ -1,6 +1,6 @@
 // Load and validate config.json from .executive/.
 
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync, renameSync } from "node:fs";
 import { configPath } from "./paths.js";
 
 export interface Config {
@@ -75,15 +75,30 @@ export interface Config {
     from?: string;     // work-hours start "HH:MM". Default "09:00".
     to?: string;       // work-hours end "HH:MM". Default "18:00".
   };
-  /** Whisper transcription for the dashboard mic (multilingual/code-switching). OFF by default. */
+  /** Transcription backend for the dashboard mic (multilingual/code-switching). OFF by default
+   *  (mode "webspeech" = the browser recognizer). See TranscribeMode. */
   transcribe?: {
-    enabled?: boolean;  // if true, the dashboard records audio and sends it to a Whisper endpoint. Default false.
-    baseUrl?: string;   // Whisper host (no trailing /v1). Default "" (must be set to use).
-    model?: string;     // e.g. "whisper-1". Default "whisper-1".
-    apiKeyEnv?: string; // env var holding the key (read server-side only). Default "EXECUTIVE_TRANSCRIBE_KEY".
+    mode?: TranscribeMode;    // which backend the dashboard mic uses. Default "webspeech".
+    enabled?: boolean;        // LEGACY (Phase 24). When `mode` is absent: enabled → "whisper-api", else "webspeech".
+    baseUrl?: string;         // whisper-api host (no trailing /v1). Default "" (must be set to use whisper-api).
+    model?: string;           // whisper-api model, e.g. "whisper-large-v3-turbo". Default "whisper-1".
+    apiKeyEnv?: string;       // env var NAME holding the key (read server-side only). Default "EXECUTIVE_TRANSCRIBE_KEY".
     language?: string | null; // hint ("th") or null to auto-detect (best for mixed). Default null.
+    wasmModel?: string;       // browser-wasm model id (HF/Xenova). Default "Xenova/whisper-base".
   };
 }
+
+/** The three transcription backends the dashboard mic can use. */
+export type TranscribeMode = "webspeech" | "whisper-api" | "browser-wasm";
+
+/** One-click presets for the `whisper-api` mode's fields (baseUrl/model), surfaced in the settings UI.
+ *  Both are OpenAI-compatible /v1/audio/transcriptions endpoints. */
+export const TRANSCRIBE_PRESETS: Record<string, { baseUrl: string; model: string }> = {
+  // Groq cloud — free tier ~2000 req/day; set the key in .env under the configured apiKeyEnv.
+  groq: { baseUrl: "https://api.groq.com/openai", model: "whisper-large-v3-turbo" },
+  // A self-hosted faster-whisper / whisper.cpp server on your machine (private, no cloud).
+  local: { baseUrl: "http://127.0.0.1:8000", model: "Systran/faster-whisper-large-v3" },
+};
 
 /** Default configuration values. */
 export function defaultConfig(): Config {
@@ -146,11 +161,13 @@ export function defaultConfig(): Config {
       to: "18:00",
     },
     transcribe: {
+      mode: "webspeech",
       enabled: false,
       baseUrl: "",
       model: "whisper-1",
       apiKeyEnv: "EXECUTIVE_TRANSCRIBE_KEY",
       language: null,
+      wasmModel: "Xenova/whisper-base",
     },
   };
 }
@@ -276,12 +293,51 @@ export function loadConfig(): Config {
     parsed.transcribe = defaults.transcribe!;
   }
   parsed.transcribe.enabled = parsed.transcribe.enabled ?? defaults.transcribe!.enabled!;
+  // Backward-compat: a Phase-24 config had only `enabled` (no `mode`). Derive the mode from it so
+  // an old config keeps working; an explicit `mode` always wins.
+  parsed.transcribe.mode =
+    parsed.transcribe.mode ?? (parsed.transcribe.enabled ? "whisper-api" : "webspeech");
   parsed.transcribe.baseUrl = parsed.transcribe.baseUrl ?? defaults.transcribe!.baseUrl!;
   parsed.transcribe.model = parsed.transcribe.model ?? defaults.transcribe!.model!;
   parsed.transcribe.apiKeyEnv = parsed.transcribe.apiKeyEnv ?? defaults.transcribe!.apiKeyEnv!;
   parsed.transcribe.language = parsed.transcribe.language ?? defaults.transcribe!.language ?? null;
+  parsed.transcribe.wasmModel = parsed.transcribe.wasmModel ?? defaults.transcribe!.wasmModel!;
 
   return parsed;
+}
+
+/**
+ * Persist an owner edit to the `transcribe` config block from the dashboard settings UI.
+ * ONLY the transcribe block is writable this way — every other field is left untouched — and each
+ * field is whitelisted + type-checked so a malformed request can never corrupt config.json. Writes
+ * atomically (temp + rename). Returns the resulting transcribe block. Never writes the raw API key
+ * (the key stays in .env; this only sets the env-var NAME via `apiKeyEnv`).
+ */
+export function updateTranscribeConfig(patch: Record<string, unknown>): Config["transcribe"] {
+  const config = loadConfig();
+  const t = config.transcribe!;
+
+  if (patch.mode !== undefined) {
+    if (patch.mode !== "webspeech" && patch.mode !== "whisper-api" && patch.mode !== "browser-wasm") {
+      throw new Error("invalid transcribe.mode: " + String(patch.mode));
+    }
+    t.mode = patch.mode;
+    t.enabled = patch.mode !== "webspeech"; // keep the legacy flag consistent
+  }
+  if (typeof patch.baseUrl === "string") t.baseUrl = patch.baseUrl.trim();
+  if (typeof patch.model === "string") t.model = patch.model.trim();
+  if (typeof patch.apiKeyEnv === "string") t.apiKeyEnv = patch.apiKeyEnv.trim();
+  if (typeof patch.wasmModel === "string") t.wasmModel = patch.wasmModel.trim();
+  if (patch.language === null || typeof patch.language === "string") {
+    const lang = typeof patch.language === "string" ? patch.language.trim() : null;
+    t.language = lang === "" ? null : lang;
+  }
+
+  const raw = JSON.stringify(config, null, 2) + "\n";
+  const tmp = configPath() + ".tmp";
+  writeFileSync(tmp, raw);
+  renameSync(tmp, configPath());
+  return t;
 }
 
 /**

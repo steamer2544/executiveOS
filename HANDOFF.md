@@ -2,7 +2,7 @@
 
 > **Purpose:** a single doc to resume this project cold if context/memory is lost. Pairs with
 > `CLAUDE.md` (the authoritative phase-by-phase log) and `README.md` (user-facing overview).
-> Last updated at **Phase 24** (git `8001d97`). 251 passing tests, all green.
+> Last updated at **Phase 25**. 260 passing tests, all green.
 
 ---
 
@@ -21,7 +21,7 @@ Main loop: **Observe → Understand → Predict → Act → Observe again.**
 
 ---
 
-## 2. Current status — DONE through Phase 24
+## 2. Current status — DONE through Phase 25
 
 The full loop works and is validated (including **live against the real LLM gateway**). Phases (see
 `CLAUDE.md` for the detailed entry on each):
@@ -54,9 +54,10 @@ The full loop works and is validated (including **live against the real LLM gate
 | 23.1 | Thai/English toggle | language selector for the mic |
 | 23.2 | Hold-to-talk | hold Space to dictate in the dashboard |
 | 24 | Whisper transcription | `config.transcribe` block; `POST /api/transcribe` server-side proxy to Whisper endpoint; MediaRecorder dashboard mic with Web-Speech fallback; scaffolded, needs owner's endpoint+key |
+| 25 | Transcription backends + Settings | `transcribe.mode` = **webspeech / whisper-api / browser-wasm**; dashboard Settings card (mode + fields + Groq/local presets + Save + Download); `POST /api/settings`, `/api/transcribe/download`+`/status`, static `/vendor`+`/models`; `download-model` CLI; browser-wasm serves lib+model from 127.0.0.1 (audio never leaves the machine) |
 
-**Test count:** 251 passing, 100% offline (mock backends). Several phases also **validated live** against
-the 9arm Qwen gateway (`work`, `synth`, `infer`, `propose`).
+**Test count:** 260 passing, 100% offline (mock backends). Several phases also **validated live** against
+the 9arm Qwen gateway (`work`, `synth`, `infer`, `propose`); the Phase-25 vendor download runs live too.
 
 ---
 
@@ -111,10 +112,17 @@ Every phase = one commit + a `CLAUDE.md` phase entry.
 
 ## 6. Remaining work
 
-### Needs the owner
-- **Phase 24 (Whisper transcription)** is code-complete/scaffolded but needs the owner to supply a real
-  Whisper-compatible `/v1/audio/transcriptions` endpoint + key to validate live (the 9arm gateway is
-  LLM-only, no audio endpoint).
+### Needs the owner (to go live — code is complete)
+Transcription now has **three working backends** (Phase 25); pick one in the dashboard **Settings** card:
+- **Groq** (`whisper-api` preset) — free tier ~2000 req/day. Put the key in `.env` under
+  `EXECUTIVE_TRANSCRIBE_KEY`, click the Groq preset, Save. Best "works today", great Thai↔English.
+- **Local faster-whisper** (`whisper-api` preset) — host a `/v1/audio/transcriptions` server (e.g.
+  `speaches`/`whisper.cpp`) on your machine; click the Local preset, set the URL, Save. Private, no cloud.
+- **Browser-WASM** (`browser-wasm` mode) — run `download-model` (or the Settings "Download" button) once
+  (~100MB into `.executive/vendor`+`/models`), then it transcribes **in the browser, fully offline**. The
+  vendor download is verified working; the in-browser transcription needs one real-browser test (browser-only,
+  like Web Speech).
+- **Web Speech** (`webspeech`, default) — no setup, browser recognizer, one language at a time.
 
 ### Deliberately deferred (need an owner decision or real pain)
 - **External delivery** (email/Slack/push of the digest & approvals) — outward-facing; needs a channel
@@ -144,10 +152,11 @@ src/
 ├── infer/         # LLM block/deadline guesses (inferred.json)
 ├── advisor/       # proactive proposal queue (advisor.json)
 ├── hooks/         # install-hooks (post-commit test emitter)
-├── ui/            # Bun.serve dashboard (server.ts + page.ts)
+├── ui/            # Bun.serve dashboard (server.ts + page.ts) + models.ts (browser-wasm asset fetch)
 ├── config.ts  paths.ts  bootstrap.ts  index.ts (CLI)
 .executive/        # runtime data (gitignored): config.json, claude.md, events/, state/plan/digest/
-                   #   proposal/changeset/exec-report, auto-report, notifications, inferred, advisor.json
+                   #   proposal/changeset/exec-report, auto-report, notifications, inferred, advisor.json,
+                   #   vendor/ + models/ (browser-wasm transformers.js + Whisper model, served from 127.0.0.1)
 docs/scopes/       # per-phase specs
 CLAUDE.md          # authoritative phase log + workflow + guardrails
 README.md          # user-facing overview

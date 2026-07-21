@@ -3,14 +3,52 @@
 // signals a watcher can't sense (block/unblock/deadline/task) via buttons.
 // Deterministic, no LLM. Reuses the existing State/Planner/Digest/EventStore.
 
+import { existsSync, statSync, readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { buildState, writeState } from "../state/builder.js";
 import { plan, writePlan } from "../planner/planner.js";
 import { buildDigest } from "../report/digest.js";
 import { append } from "../events/store.js";
-import { loadConfig } from "../config.js";
+import { loadConfig, updateTranscribeConfig, TRANSCRIBE_PRESETS } from "../config.js";
+import { modelsDir, vendorDir } from "../paths.js";
 import { readStore, pending } from "../advisor/store.js";
 import { runAdvisor, decideProposal } from "../advisor/advisor.js";
+import { downloadWasmAssets, wasmAssetsStatus } from "./models.js";
 import { renderPage } from "./page.js";
+
+/** Content types for the locally-served browser-wasm assets. */
+const STATIC_TYPES: Record<string, string> = {
+  ".js": "text/javascript; charset=utf-8",
+  ".mjs": "text/javascript; charset=utf-8",
+  ".json": "application/json; charset=utf-8",
+  ".wasm": "application/wasm",
+  ".map": "application/json; charset=utf-8",
+  ".onnx": "application/octet-stream",
+  ".bin": "application/octet-stream",
+  ".txt": "text/plain; charset=utf-8",
+};
+
+/** Serve a file from `root` for a URL like `/vendor/<rel>`, with path-safety (no `..` escape). */
+function serveStatic(root: string, rel: string): Response {
+  let target: string;
+  try {
+    const clean = decodeURIComponent(rel).replace(/^\/+/, "");
+    target = resolve(root, clean);
+    const base = resolve(root);
+    if (target !== base && !target.startsWith(base + "/") && !target.startsWith(base + "\\")) {
+      return new Response("forbidden", { status: 403 });
+    }
+  } catch {
+    return new Response("bad path", { status: 400 });
+  }
+  if (!existsSync(target) || !statSync(target).isFile()) {
+    return new Response("not found", { status: 404 });
+  }
+  const dot = target.lastIndexOf(".");
+  const ext = dot >= 0 ? target.slice(dot).toLowerCase() : "";
+  const type = STATIC_TYPES[ext] ?? "application/octet-stream";
+  return new Response(readFileSync(target), { headers: { "content-type": type } });
+}
 
 /** The only system event types the GUI is allowed to emit (safe, human-in-head signals). */
 const ALLOWED_EMIT_TYPES = new Set([
@@ -53,26 +91,70 @@ export function startUiServer(opts: UiServerOptions) {
       if (req.method === "GET" && url.pathname === "/api/config") {
         try {
           const cfg = loadConfig();
-          // Never leak the transcription baseUrl/key to the page — only whether it's on.
-          return Response.json({ capture: cfg.capture, transcribe: { enabled: cfg.transcribe?.enabled === true } });
+          // The transcribe block carries NO secret — the real key lives only in process.env[apiKeyEnv],
+          // never in config — so it is safe to hand the whole block to the local settings editor.
+          return Response.json({ capture: cfg.capture, transcribe: cfg.transcribe, presets: TRANSCRIBE_PRESETS });
         } catch (err) {
           return Response.json({ error: (err as Error).message }, { status: 500 });
         }
+      }
+
+      if (req.method === "POST" && url.pathname === "/api/settings") {
+        try {
+          const body = (await req.json()) as { transcribe?: Record<string, unknown> };
+          if (!body.transcribe || typeof body.transcribe !== "object") {
+            return Response.json({ ok: false, error: "need { transcribe: {...} }" }, { status: 400 });
+          }
+          const transcribe = updateTranscribeConfig(body.transcribe);
+          return Response.json({ ok: true, transcribe });
+        } catch (err) {
+          return Response.json({ ok: false, error: (err as Error).message }, { status: 400 });
+        }
+      }
+
+      if (req.method === "GET" && url.pathname === "/api/transcribe/status") {
+        try {
+          const cfg = loadConfig();
+          return Response.json(wasmAssetsStatus(cfg.transcribe?.wasmModel ?? "Xenova/whisper-base"));
+        } catch (err) {
+          return Response.json({ error: (err as Error).message }, { status: 500 });
+        }
+      }
+
+      if (req.method === "POST" && url.pathname === "/api/transcribe/download") {
+        try {
+          const cfg = loadConfig();
+          const body = (await req.json().catch(() => ({}))) as { model?: string };
+          const modelId = body.model || cfg.transcribe?.wasmModel || "Xenova/whisper-base";
+          const result = await downloadWasmAssets(modelId);
+          return Response.json(result, { status: result.ok ? 200 : 502 });
+        } catch (err) {
+          return Response.json({ ok: false, error: (err as Error).message }, { status: 500 });
+        }
+      }
+
+      // Locally-served browser-wasm assets (transformers.js + model files). Path-safety enforced.
+      if (req.method === "GET" && url.pathname.startsWith("/vendor/")) {
+        return serveStatic(vendorDir(), url.pathname.slice("/vendor/".length));
+      }
+      if (req.method === "GET" && url.pathname.startsWith("/models/")) {
+        return serveStatic(modelsDir(), url.pathname.slice("/models/".length));
       }
 
       if (req.method === "POST" && url.pathname === "/api/transcribe") {
         try {
           const cfg = loadConfig();
           const t = cfg.transcribe;
-          if (!t?.enabled || !t.baseUrl) {
+          if (t?.mode !== "whisper-api" || !t.baseUrl) {
             return Response.json({ ok: false, error: "transcription not configured" }, { status: 400 });
           }
           const audio = await req.blob();
           const key = t.apiKeyEnv ? (process.env[t.apiKeyEnv] ?? "") : "";
+          const language = url.searchParams.get("language") || t.language || "";
           const form = new FormData();
           form.append("file", audio, "audio.webm");
           form.append("model", t.model ?? "whisper-1");
-          if (t.language) form.append("language", t.language);
+          if (language) form.append("language", language);
           const controller = new AbortController();
           const timer = setTimeout(() => controller.abort(), 60000);
           try {

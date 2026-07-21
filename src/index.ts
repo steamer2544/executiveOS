@@ -59,6 +59,7 @@ Commands:
   propose                                       Ask the Advisor for proactive proposals (adds to the queue)
   proposals                                     List the pending proposals awaiting your approval
   capture <note>                                Capture a quick note (feeds the Advisor); the dashboard also does this by voice
+  download-model [id]                           Download a browser-wasm Whisper model for offline transcription
   --help                                        Show this help
 
 Sources: git, terminal, editor, system
@@ -800,6 +801,26 @@ async function main(): Promise<void> {
       const ev = await append({ source: "system", type: "system.note", data: { msg: note, via: "text" } });
       process.stdout.write("captured (#" + ev.seq + "). The Advisor will factor it in.\n");
       process.exit(0);
+      break;
+    }
+
+    case "download-model": {
+      await bootstrap();
+      const config = loadConfig();
+      const modelId = args[1] || config.transcribe?.wasmModel || "Xenova/whisper-base";
+      process.stdout.write("Downloading browser-wasm assets for " + modelId + " (one-time)…\n");
+      const { downloadWasmAssets } = await import("./ui/models.js");
+      const result = await downloadWasmAssets(modelId, { onLog: (l) => process.stdout.write(l + "\n") });
+      if (result.ok) {
+        process.stdout.write(
+          "Done: " + result.files + " new file(s), " + Math.round(result.bytes / 1e6) + " MB. " +
+            "Set the dashboard transcription mode to browser-wasm to use it offline.\n",
+        );
+        process.exit(0);
+      } else {
+        process.stderr.write("Error: " + result.error + "\n");
+        process.exit(1);
+      }
       break;
     }
 

@@ -99,3 +99,13 @@ export function advisorPath(): string {
 export function notificationsPath(): string {
   return execRoot() + "/notifications.jsonl";
 }
+
+/** Absolute path to .executive/models/ (browser-wasm Whisper model files, HF layout). */
+export function modelsDir(): string {
+  return execRoot() + "/models";
+}
+
+/** Absolute path to .executive/vendor/ (transformers.js + onnxruntime wasm, served locally). */
+export function vendorDir(): string {
+  return execRoot() + "/vendor";
+}

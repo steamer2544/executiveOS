@@ -89,24 +89,70 @@ describe("ui server", () => {
     expect(res.status).toBe(404);
   });
 
-  it("serves capture config at /api/config (transcribe exposes only enabled, never the key/url)", async () => {
-    // bootstrap writes a default config with the capture block
+  it("serves config at /api/config (transcribe block + presets, but never the key VALUE)", async () => {
+    // bootstrap writes a default config with the capture + transcribe blocks
     await (await import("../bootstrap.js")).bootstrap();
-    server = startUiServer({ port: 0 });
-    const j = await (await fetch("http://127.0.0.1:" + server.port + "/api/config")).json();
-    expect(j.capture).toBeDefined();
-    expect(typeof j.capture.from).toBe("string");
-    expect(j.transcribe).toEqual({ enabled: false });
-    expect(JSON.stringify(j)).not.toContain("apiKeyEnv");
-    expect(JSON.stringify(j)).not.toContain("baseUrl");
+    process.env.EXECUTIVE_TRANSCRIBE_KEY = "super-secret-key-value-xyz";
+    try {
+      server = startUiServer({ port: 0 });
+      const j = await (await fetch("http://127.0.0.1:" + server.port + "/api/config")).json();
+      expect(j.capture).toBeDefined();
+      expect(typeof j.capture.from).toBe("string");
+      // the settings editor needs the whole transcribe block (which holds NO secret)…
+      expect(j.transcribe.mode).toBe("webspeech");
+      expect(j.presets.groq).toBeDefined();
+      // …but the actual key value from the env var must never appear in the response.
+      expect(JSON.stringify(j)).not.toContain("super-secret-key-value-xyz");
+    } finally {
+      delete process.env.EXECUTIVE_TRANSCRIBE_KEY;
+    }
   });
 
-  it("/api/transcribe returns a clear error when not configured", async () => {
+  it("/api/transcribe returns a clear error when mode is not whisper-api", async () => {
     await (await import("../bootstrap.js")).bootstrap();
     server = startUiServer({ port: 0 });
     const res = await fetch("http://127.0.0.1:" + server.port + "/api/transcribe", { method: "POST", body: "x" });
     expect(res.status).toBe(400);
     expect((await res.json()).error).toContain("not configured");
+  });
+
+  it("POST /api/settings persists a transcribe mode change", async () => {
+    await (await import("../bootstrap.js")).bootstrap();
+    server = startUiServer({ port: 0 });
+    const base = "http://127.0.0.1:" + server.port;
+    const res = await fetch(base + "/api/settings", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ transcribe: { mode: "whisper-api", baseUrl: "http://127.0.0.1:8000", model: "whisper-1" } }),
+    });
+    const j = await res.json();
+    expect(j.ok).toBe(true);
+    expect(j.transcribe.mode).toBe("whisper-api");
+    // and it persisted — a fresh /api/config reflects it
+    const cfg = await (await fetch(base + "/api/config")).json();
+    expect(cfg.transcribe.mode).toBe("whisper-api");
+    expect(cfg.transcribe.baseUrl).toBe("http://127.0.0.1:8000");
+  });
+
+  it("POST /api/settings rejects an invalid mode", async () => {
+    await (await import("../bootstrap.js")).bootstrap();
+    server = startUiServer({ port: 0 });
+    const res = await fetch("http://127.0.0.1:" + server.port + "/api/settings", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ transcribe: { mode: "bogus" } }),
+    });
+    expect(res.status).toBe(400);
+    expect((await res.json()).ok).toBe(false);
+  });
+
+  it("static asset serving 404s when absent and rejects path escape", async () => {
+    await (await import("../bootstrap.js")).bootstrap();
+    server = startUiServer({ port: 0 });
+    const base = "http://127.0.0.1:" + server.port;
+    const missing = await fetch(base + "/vendor/transformers.min.js");
+    expect(missing.status).toBe(404);
+    // a ..-escape must never return the escaped file's contents
+    const escape = await fetch(base + "/vendor/..%2f..%2fconfig.json");
+    expect(escape.status).not.toBe(200);
   });
 
   it("accepts a dictated note (system.note) via /api/emit", async () => {

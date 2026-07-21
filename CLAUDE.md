@@ -398,6 +398,34 @@ docs/scopes/           # per-phase specs (the contract handed to the implementer
   This is scaffolding only — needs the owner to supply a real Whisper-compatible endpoint + key to validate
   live (the 9arm gateway is LLM-only, no audio endpoint). Files: `src/config.ts`, `src/ui/{server,page}.ts`,
   `src/index.ts`. Spec: `docs/scopes/phase-24-whisper.md`.
+- **Phase 25 — DONE** (architect impl + self-review + live-validated where possible, this commit):
+  **Transcription backends + Settings.** Phase 24 had a single on/off Whisper path; the owner wanted to
+  **choose the backend and edit it from the dashboard**, keeping Web Speech as an option. Now
+  `config.transcribe.mode` picks among **three backends** (all opt-in, `webspeech` default): `webspeech`
+  (browser SpeechRecognition, no key), `whisper-api` (POST audio → local `/api/transcribe` → a configurable
+  OpenAI-compatible endpoint — covers **Groq** cloud free-tier AND a **self-hosted faster-whisper** server,
+  offered as one-click **presets**), and `browser-wasm` (Whisper runs **in the browser** via transformers.js;
+  lib + model served from `127.0.0.1` so **audio never leaves the machine**). Config is **backward-compatible**
+  (a Phase-24 `enabled:true` with no `mode` derives `mode:"whisper-api"`); `updateTranscribeConfig(patch)`
+  writes **only the transcribe block**, whitelisted + validated, atomically. New endpoints: `POST
+  /api/settings` (persist a transcribe patch), `POST /api/transcribe/download` + `GET
+  /api/transcribe/status` (fetch/serve the browser-wasm assets), static `GET /vendor/*` + `/models/*`
+  (path-safety enforced). `GET /api/config` now returns the full transcribe block (**which holds no secret —
+  the key lives only in `process.env[apiKeyEnv]`**) + the presets; the old "never leak the key" guarantee is
+  preserved and tested (the key VALUE never appears in any response). New `src/ui/models.ts`
+  (`downloadWasmAssets`/`wasmAssetsStatus`: lists via HF + jsDelivr, downloads into `.executive/vendor` +
+  `.executive/models`, idempotent + path-safe), `modelsDir()`/`vendorDir()` in `src/paths.ts`, a dashboard
+  **Settings card** (mode selector + fields + presets + Save + Download), the mic routes by mode, and a new
+  `download-model [id]` CLI. Same listening ethics (own-voice, **visible "🔴 Listening…"**, off by default);
+  the page stays **self-contained** (only same-origin `/vendor`,`/models`,`/api/*` — presets fetched at
+  runtime, never hardcoded). 260 passing tests (10 new). **Live-validated:** the vendor download runs for
+  real (transformers.web.js + `ort-…jsep.wasm` land in `.executive/vendor`), static serving returns 200 +
+  correct content-type, `/api/settings` round-trips + persists, `download-model` exits 1 cleanly on a bad id,
+  HF/jsDelivr listings parse. **Not verifiable here (browser + big download, left to the owner, same status
+  as Web Speech):** the in-browser transformers.js transcription itself, a full ~100MB model pull, and a
+  live Groq/local endpoint with a real key. Spec: `docs/scopes/phase-25-transcription-backends.md`. Files:
+  `src/config.ts`, `src/paths.ts`, `src/ui/{models,server,page}.ts`, `src/ui/ui.test.ts`, `src/config.test.ts`,
+  `src/index.ts`.
 - **Loop complete (manual trigger):** `auto --apply` runs the whole chain in one command; the human
   reviews/merges the `executive/change-<id>` branch.
 
@@ -421,6 +449,7 @@ bun run src/index.ts infer                          # LLM guesses block/deadline
 bun run src/index.ts propose                        # Advisor proposes proactive actions → advisor.json queue
 bun run src/index.ts proposals                      # list pending proposals awaiting approval
 bun run src/index.ts capture <note>                 # capture a quick note (feeds the Advisor); GUI also does this by voice
+bun run src/index.ts download-model [id]            # fetch a browser-wasm Whisper model for offline transcription
 bun run src/index.ts watch                          # start the watcher daemon (Ctrl-C to stop)
 bun run typecheck                                  # tsc --noEmit
 bun test                                           # unit tests

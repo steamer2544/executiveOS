@@ -85,6 +85,56 @@ export function renderPage(): string {
     <div class="muted" style="margin-top:4px;font-size:12.5px">Tip: hold <b>Space</b> to talk (walkie-talkie), release to stop.</div>
   </section>
 
+  <section class="card" id="settingsCard">
+    <h2 style="display:flex;justify-content:space-between;align-items:center">
+      <span>Transcription settings</span>
+      <button class="ghost" onclick="$('settingsBody').style.display = $('settingsBody').style.display==='none'?'block':'none'">Toggle</button>
+    </h2>
+    <div id="settingsBody" style="display:none">
+      <div class="controls">
+        <div class="field">
+          <span class="muted" style="font-size:12.5px;min-width:70px">Mode</span>
+          <select id="modeSel" onchange="onModeChange()">
+            <option value="webspeech">Web Speech (browser, no key)</option>
+            <option value="whisper-api">Whisper API (Groq / local server)</option>
+            <option value="browser-wasm">Browser-WASM (offline, in-browser)</option>
+          </select>
+        </div>
+
+        <div id="apiFields" style="display:none">
+          <div class="field">
+            <span class="muted" style="font-size:12.5px;min-width:70px">Preset</span>
+            <button class="ghost" onclick="applyPreset('groq')">Groq (free tier)</button>
+            <button class="ghost" onclick="applyPreset('local')">Local faster-whisper</button>
+          </div>
+          <div class="field"><input id="setBaseUrl" type="text" placeholder="Base URL — click a preset above, or paste your endpoint" /></div>
+          <div class="field"><input id="setModel" type="text" placeholder="Model (e.g. whisper-large-v3-turbo)" /></div>
+          <div class="field"><input id="setKeyEnv" type="text" placeholder="Key env-var name (default EXECUTIVE_TRANSCRIBE_KEY)" /></div>
+          <div class="muted" style="font-size:12px">The key itself is <b>never</b> stored here — put it in your <span class="mono">.env</span> under that env-var name.</div>
+        </div>
+
+        <div id="wasmFields" style="display:none">
+          <div class="field"><input id="setWasmModel" type="text" placeholder="WASM model id (default Xenova/whisper-base)" /></div>
+          <div class="field">
+            <button class="ghost" id="dlBtn" onclick="downloadModel()">Download model for offline use</button>
+            <span id="dlStatus" class="muted" style="font-size:12.5px"></span>
+          </div>
+          <div class="muted" style="font-size:12px">Downloads the model + runtime to <span class="mono">.executive/</span> once, then runs 100% offline — your audio never leaves the machine.</div>
+        </div>
+
+        <div class="field">
+          <span class="muted" style="font-size:12.5px;min-width:70px">Language</span>
+          <select id="setLang">
+            <option value="">Auto (best for Thai↔English)</option>
+            <option value="th">ไทย (th)</option>
+            <option value="en">English (en)</option>
+          </select>
+          <button onclick="saveSettings()">Save</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
   <section class="card" id="proposalsCard">
     <h2 style="display:flex;justify-content:space-between;align-items:center">
       <span>Decisions for you</span>
@@ -245,15 +295,20 @@ function emitUnblock() { emit("system.unblocked", {}); }
 function emitDeadline() { const d = $("deadline").value; if (!d) return toast("pick a date"); emit("system.task", { deadline: d }); }
 function emitTask() { const t = $("task").value.trim(); if (!t) return toast("enter a task"); emit("system.task", { task: t }); $("task").value=""; }
 
-// ── Listening (Web Speech API; listens to YOU, shows status visibly) ──────────
+// ── Listening: routes by transcribe.mode (webspeech | whisper-api | browser-wasm) ──
+// Listens to YOU (your own dictation); status is always shown visibly.
 let capture = { enabled: false, from: "09:00", to: "18:00" };
+let cfgT = { mode: "webspeech", baseUrl: "", model: "", apiKeyEnv: "", language: null, wasmModel: "Xenova/whisper-base" };
+let presets = {};
 let recog = null, listening = false, userStopped = false;
 let lang = localStorage.getItem("execLang") || "th-TH";
-let useWhisper = false, mediaRec = null, chunks = [];
+let mediaRec = null, chunks = [];
 const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-const canListen = () => useWhisper ? !!(navigator.mediaDevices && window.MediaRecorder) : !!SR;
+const useMediaRec = () => cfgT.mode === "whisper-api" || cfgT.mode === "browser-wasm";
+const canListen = () => useMediaRec() ? !!(navigator.mediaDevices && window.MediaRecorder) : !!SR;
+function wasmLang() { return cfgT.language === "th" ? "thai" : cfgT.language === "en" ? "english" : null; }
 
-async function startWhisper() {
+async function startMediaRec() {
   try {
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     mediaRec = new MediaRecorder(stream); chunks = [];
@@ -263,8 +318,10 @@ async function startWhisper() {
       const blob = new Blob(chunks, { type: "audio/webm" });
       $("listenInterim").textContent = "";
       if (blob.size < 1200) return; // too short to bother
-      try {
-        const r = await fetch("/api/transcribe", { method: "POST", headers: { "content-type": "audio/webm" }, body: blob });
+      if (cfgT.mode === "browser-wasm") return handleWasmBlob(blob);
+      try { // whisper-api: proxy through the local server (key stays server-side)
+        const q = cfgT.language ? ("?language=" + encodeURIComponent(cfgT.language)) : "";
+        const r = await fetch("/api/transcribe" + q, { method: "POST", headers: { "content-type": "audio/webm" }, body: blob });
         const j = await r.json();
         if (j.ok && j.text) emit("system.note", { msg: j.text, via: "voice" });
         else toast("transcribe: " + (j.error || "failed"));
@@ -273,12 +330,94 @@ async function startWhisper() {
     mediaRec.start(); listening = true; $("listenInterim").textContent = "● recording…"; setListenUI();
   } catch { toast("mic permission needed"); }
 }
-function stopWhisper() { listening = false; try { if (mediaRec && mediaRec.state !== "inactive") mediaRec.stop(); } catch {} setListenUI(); }
+function stopMediaRec() { listening = false; try { if (mediaRec && mediaRec.state !== "inactive") mediaRec.stop(); } catch {} setListenUI(); }
+
+// browser-wasm: transformers.js + model are served from our own /vendor + /models (localhost only),
+// so the audio never leaves the machine. env.allowRemoteModels=false pins it to those local paths.
+let wasmPipe = null;
+async function ensureWasmPipe() {
+  if (wasmPipe) return wasmPipe;
+  const T = await import("/vendor/transformers.web.js");
+  T.env.allowRemoteModels = false;
+  T.env.localModelPath = "/models/";
+  try { T.env.backends.onnx.wasm.wasmPaths = "/vendor/"; } catch {}
+  wasmPipe = await T.pipeline("automatic-speech-recognition", cfgT.wasmModel || "Xenova/whisper-base");
+  return wasmPipe;
+}
+async function handleWasmBlob(blob) {
+  try {
+    $("listenInterim").textContent = "transcribing…";
+    const pipe = await ensureWasmPipe();
+    const ctx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+    const decoded = await ctx.decodeAudioData(await blob.arrayBuffer());
+    const out = await pipe(decoded.getChannelData(0), { task: "transcribe", language: wasmLang() });
+    $("listenInterim").textContent = "";
+    const text = ((out && out.text) || "").trim();
+    if (text) emit("system.note", { msg: text, via: "voice" });
+  } catch (e) { $("listenInterim").textContent = ""; toast("wasm transcribe failed — download the model in settings first"); }
+}
 
 function onLangChange() {
   lang = $("lang").value; localStorage.setItem("execLang", lang);
   toast("language: " + (lang === "th-TH" ? "ไทย" : "English"));
   if (listening && recog) { try { recog.lang = lang; recog.stop(); } catch {} } // onend restarts with new lang
+}
+
+// ── Settings (transcription backend) ─────────────────────────────────────────
+function populateSettings() {
+  $("modeSel").value = cfgT.mode || "webspeech";
+  $("setBaseUrl").value = cfgT.baseUrl || "";
+  $("setModel").value = cfgT.model || "";
+  $("setKeyEnv").value = cfgT.apiKeyEnv || "";
+  $("setWasmModel").value = cfgT.wasmModel || "";
+  $("setLang").value = cfgT.language || "";
+  onModeChange();
+}
+function onModeChange() {
+  const m = $("modeSel").value;
+  $("apiFields").style.display = m === "whisper-api" ? "block" : "none";
+  $("wasmFields").style.display = m === "browser-wasm" ? "block" : "none";
+  if (m === "browser-wasm") refreshDlStatus();
+}
+function applyPreset(name) {
+  const p = presets[name]; if (!p) return;
+  $("modeSel").value = "whisper-api"; onModeChange();
+  $("setBaseUrl").value = p.baseUrl; $("setModel").value = p.model;
+  toast("preset: " + name + " — add your key to .env, then Save");
+}
+async function saveSettings() {
+  const patch = {
+    mode: $("modeSel").value,
+    baseUrl: $("setBaseUrl").value.trim(),
+    model: $("setModel").value.trim(),
+    apiKeyEnv: $("setKeyEnv").value.trim() || "EXECUTIVE_TRANSCRIBE_KEY",
+    wasmModel: $("setWasmModel").value.trim() || "Xenova/whisper-base",
+    language: $("setLang").value,
+  };
+  try {
+    const r = await fetch("/api/settings", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ transcribe: patch }) });
+    const j = await r.json(); if (!j.ok) throw new Error(j.error || "failed");
+    cfgT = j.transcribe; wasmPipe = null; // mode/model may have changed
+    toast("settings saved ✓"); setListenUI();
+  } catch (e) { toast("error: " + e.message); }
+}
+async function refreshDlStatus() {
+  try {
+    const s = await (await fetch("/api/transcribe/status")).json();
+    $("dlStatus").textContent = (s.libReady && s.modelReady) ? "ready ✓ (offline)" : (s.libReady || s.modelReady) ? "partly downloaded" : "not downloaded yet";
+  } catch {}
+}
+async function downloadModel() {
+  const b = $("dlBtn"); b.disabled = true; b.textContent = "Downloading… (can take a few min)";
+  $("dlStatus").textContent = "";
+  try {
+    const model = $("setWasmModel").value.trim() || undefined;
+    const r = await fetch("/api/transcribe/download", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ model }) });
+    const j = await r.json();
+    if (!j.ok) throw new Error(j.error || "failed");
+    toast("downloaded " + j.files + " file(s), " + Math.round(j.bytes / 1e6) + " MB");
+  } catch (e) { toast("download failed: " + e.message); }
+  finally { b.disabled = false; b.textContent = "Download model for offline use"; refreshDlStatus(); }
 }
 
 function hhmmNow() { const d = new Date(); return d.getHours() * 60 + d.getMinutes(); }
@@ -298,7 +437,7 @@ function setListenUI() {
 function startListen() {
   if (listening) return;
   userStopped = false;
-  if (useWhisper) { startWhisper(); return; }
+  if (useMediaRec()) { startMediaRec(); return; }
   if (!SR) return;
   try {
     recog = new SR();
@@ -320,12 +459,18 @@ function startListen() {
     listening = true; setListenUI();
   } catch (e) { toast("could not start listening"); }
 }
-function stopListen(manual) { if (manual) userStopped = true; if (useWhisper) { stopWhisper(); return; } listening = false; try { recog && recog.stop(); } catch {} setListenUI(); }
+function stopListen(manual) { if (manual) userStopped = true; if (useMediaRec()) { stopMediaRec(); return; } listening = false; try { recog && recog.stop(); } catch {} setListenUI(); }
 function toggleListen() { listening ? stopListen(true) : startListen(); }
 
 async function loadCaptureConfig() {
-  try { const r = await fetch("/api/config"); const j = await r.json(); if (j.capture) capture = j.capture; useWhisper = !!(j.transcribe && j.transcribe.enabled); } catch {}
+  try {
+    const r = await fetch("/api/config"); const j = await r.json();
+    if (j.capture) capture = j.capture;
+    if (j.transcribe) cfgT = j.transcribe;
+    if (j.presets) presets = j.presets;
+  } catch {}
   const sel = $("lang"); if (sel) sel.value = lang;
+  populateSettings();
   setListenUI();
 }
 // Schedule tick: auto-start within work hours (once enabled + mic granted), auto-stop outside.
