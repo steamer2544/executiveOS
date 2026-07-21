@@ -387,3 +387,176 @@ describe("buildState — project inferred from git repo", () => {
     expect(state.currentProject).toBe("explicit-project");
   });
 });
+
+// ── 9. Multi-repo: activeRepo + repos ──────────────────────────────────────
+
+describe("buildState — multi-repo: single-repo unchanged", () => {
+  const DIR = "/tmp/executive-test-multirepo-single-" + randomUUID();
+  beforeEach(() => setExecutiveHome(DIR));
+  afterEach(() => cleanup(DIR));
+
+  it("single-repo log produces identical git/project/task + additive repo fields", () => {
+    writeRawEvent("git", 1, "git.commit", { sha: "abc111", subject: "init", branch: "main", repo: "myrepo" });
+    writeRawEvent("git", 2, "git.branch_switch", { from: "main", to: "feat/login", repo: "myrepo" });
+    writeRawEvent("editor", 3, "editor.save", { path: "src/main.ts", repo: "myrepo" });
+
+    const { state } = buildState(new Date("2026-01-01T00:00:10.000Z"));
+
+    // New fields
+    expect(state.activeRepo).toBe("myrepo");
+    expect(state.repos).toHaveLength(1);
+    expect(state.repos[0]!.name).toBe("myrepo");
+    expect(state.repos[0]!.branch).toBe("feat/login");
+    expect(state.repos[0]!.lastCommit).toEqual({
+      sha: "abc111",
+      subject: "init",
+      ts: expect.any(String),
+    });
+    expect(state.repos[0]!.lastActivityTs).toBeDefined();
+
+    // Existing fields must match the pre-multi-repo derivation
+    expect(state.git.branch).toBe("feat/login");
+    expect(state.git.lastCommit).toEqual({
+      sha: "abc111",
+      subject: "init",
+      ts: expect.any(String),
+    });
+    expect(state.currentProject).toBe("myrepo");
+    expect(state.currentTask).toBe("login");
+  });
+});
+
+describe("buildState — multi-repo: two repos, active = newest", () => {
+  const DIR = "/tmp/executive-test-multirepo-two-" + randomUUID();
+  beforeEach(() => setExecutiveHome(DIR));
+  afterEach(() => cleanup(DIR));
+
+  it("activeRepo = repo with highest-seq event; branch matches active repo", () => {
+    // Repo A events
+    writeRawEvent("git", 1, "git.commit", { sha: "aaa", subject: "A1", branch: "main", repo: "A" });
+    writeRawEvent("git", 2, "git.branch_switch", { from: "main", to: "feat/a", repo: "A" });
+    // Repo B events (newest overall)
+    writeRawEvent("git", 3, "git.commit", { sha: "bbb", subject: "B1", branch: "develop", repo: "B" });
+    writeRawEvent("git", 4, "git.branch_switch", { from: "develop", to: "feat/b", repo: "B" });
+
+    const { state } = buildState(new Date("2026-01-01T00:00:10.000Z"));
+
+    expect(state.activeRepo).toBe("B");
+    expect(state.git.branch).toBe("feat/b");
+    expect(state.currentProject).toBe("B");
+    expect(state.repos).toHaveLength(2);
+    // B first (newer activity at seq 4 vs A's seq 2)
+    expect(state.repos[0]!.name).toBe("B");
+    expect(state.repos[0]!.branch).toBe("feat/b");
+    expect(state.repos[1]!.name).toBe("A");
+    expect(state.repos[1]!.branch).toBe("feat/a");
+  });
+});
+
+describe("buildState — multi-repo: active flips on new activity", () => {
+  const DIR = "/tmp/executive-test-multirepo-flip-" + randomUUID();
+  beforeEach(() => setExecutiveHome(DIR));
+  afterEach(() => cleanup(DIR));
+
+  it("Project and Branch move together when active repo changes", () => {
+    // Initial: B is active (seq 4)
+    writeRawEvent("git", 1, "git.commit", { sha: "aaa", subject: "A1", branch: "main", repo: "A" });
+    writeRawEvent("git", 2, "git.branch_switch", { from: "main", to: "feat/a", repo: "A" });
+    writeRawEvent("git", 3, "git.commit", { sha: "bbb", subject: "B1", branch: "develop", repo: "B" });
+    writeRawEvent("git", 4, "git.branch_switch", { from: "develop", to: "feat/b", repo: "B" });
+
+    let { state } = buildState(new Date("2026-01-01T00:00:10.000Z"));
+    expect(state.activeRepo).toBe("B");
+    expect(state.git.branch).toBe("feat/b");
+    expect(state.currentProject).toBe("B");
+
+    // Append: A gets a newer commit (seq 5)
+    writeRawEvent("git", 5, "git.commit", { sha: "aaa2", subject: "A2", branch: "feat/a", repo: "A" });
+
+    ({ state } = buildState(new Date("2026-01-01T00:00:10.000Z")));
+    expect(state.activeRepo).toBe("A");
+    expect(state.git.branch).toBe("feat/a");
+    expect(state.currentProject).toBe("A");
+  });
+});
+
+describe("buildState — multi-repo: explicit system.task wins", () => {
+  const DIR = "/tmp/executive-test-multirepo-explicit-" + randomUUID();
+  beforeEach(() => setExecutiveHome(DIR));
+  afterEach(() => cleanup(DIR));
+
+  it("system.task overrides currentProject/currentTask regardless of activeRepo", () => {
+    writeRawEvent("git", 1, "git.commit", { sha: "a", subject: "x", branch: "main", repo: "A" });
+    writeRawEvent("git", 2, "git.branch_switch", { from: "main", to: "feat/a", repo: "A" });
+    writeRawEvent("git", 3, "git.commit", { sha: "b", subject: "y", branch: "develop", repo: "B" });
+    writeRawEvent("git", 4, "git.branch_switch", { from: "develop", to: "feat/b", repo: "B" });
+    writeRawEvent("system", 5, "system.task", { project: "X", task: "manual task" });
+
+    const { state } = buildState(new Date("2026-01-01T00:00:10.000Z"));
+
+    // activeRepo still follows the newest repo-tagged event (seq 4 = B)
+    expect(state.activeRepo).toBe("B");
+    // But explicit task overrides project/task
+    expect(state.currentProject).toBe("X");
+    expect(state.currentTask).toBe("manual task");
+  });
+});
+
+describe("buildState — multi-repo: file-save repo tagging", () => {
+  const DIR = "/tmp/executive-test-multirepo-fs-" + randomUUID();
+  beforeEach(() => setExecutiveHome(DIR));
+  afterEach(() => cleanup(DIR));
+
+  it("activeRepo can be set purely from an editor.save with data.repo", () => {
+    writeRawEvent("git", 1, "git.commit", { sha: "a", subject: "x", branch: "main", repo: "A" });
+    writeRawEvent("editor", 2, "editor.save", { path: "src/x.ts", repo: "B" });
+
+    const { state } = buildState(new Date("2026-01-01T00:00:10.000Z"));
+
+    expect(state.activeRepo).toBe("B");
+    // B has no git events, so branch is null
+    expect(state.git.branch).toBeNull();
+    expect(state.currentProject).toBe("B");
+  });
+});
+
+describe("buildState — multi-repo: state.repos shape and sort", () => {
+  const DIR = "/tmp/executive-test-multirepo-shape-" + randomUUID();
+  beforeEach(() => setExecutiveHome(DIR));
+  afterEach(() => cleanup(DIR));
+
+  it("repos array has all four fields and is sorted by lastActivityTs desc", () => {
+    const now = new Date("2026-01-01T00:00:10.000Z");
+
+    // Write events with distinct timestamps by writing raw JSONL directly.
+    const gitDir = eventLogPath("git").substring(0, eventLogPath("git").lastIndexOf("/"));
+    mkdirSync(gitDir, { recursive: true });
+    // Repo C: newest activity (ts 08)
+    writeFileSync(eventLogPath("git"), JSON.stringify({ seq: 1, id: randomUUID(), ts: "2026-01-01T00:00:08.000Z", source: "git", type: "git.commit", data: { sha: "ccc", subject: "C1", branch: "main", repo: "C" } }) + "\n", { flag: "w" });
+    // Repo A: oldest activity (ts 01)
+    writeFileSync(eventLogPath("git"), JSON.stringify({ seq: 2, id: randomUUID(), ts: "2026-01-01T00:00:01.000Z", source: "git", type: "git.commit", data: { sha: "aaa", subject: "A1", branch: "main", repo: "A" } }) + "\n", { flag: "a" });
+    // Repo B: middle activity (ts 05)
+    writeFileSync(eventLogPath("git"), JSON.stringify({ seq: 3, id: randomUUID(), ts: "2026-01-01T00:00:05.000Z", source: "git", type: "git.commit", data: { sha: "bbb", subject: "B1", branch: "main", repo: "B" } }) + "\n", { flag: "a" });
+
+    const { state } = buildState(now);
+
+    expect(state.repos).toHaveLength(3);
+
+    // Verify all four fields exist on each entry
+    for (const r of state.repos) {
+      expect(r).toHaveProperty("name");
+      expect(r).toHaveProperty("branch");
+      expect(r).toHaveProperty("lastCommit");
+      expect(r).toHaveProperty("lastActivityTs");
+      expect(typeof r.name).toBe("string");
+      expect(r.lastCommit).toHaveProperty("sha");
+      expect(r.lastCommit).toHaveProperty("subject");
+      expect(r.lastCommit).toHaveProperty("ts");
+    }
+
+    // Sorted by lastActivityTs descending: C (08) > B (05) > A (01)
+    expect(state.repos[0]!.name).toBe("C");
+    expect(state.repos[1]!.name).toBe("B");
+    expect(state.repos[2]!.name).toBe("A");
+  });
+});

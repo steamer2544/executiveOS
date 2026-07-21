@@ -1,4 +1,5 @@
 // Phase 25 — transcribe config: backward-compat mode derivation + the settings writer.
+// Phase 26 — multi-repo watch config.
 
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import { mkdirSync, writeFileSync, rmSync } from "node:fs";
@@ -56,5 +57,56 @@ describe("updateTranscribeConfig", () => {
     const c = loadConfig();
     expect(c.transcribe!.mode).toBe("browser-wasm");
     expect(c.timezone).toBe("Asia/Bangkok"); // untouched
+  });
+});
+
+describe("multi-repo watch.repos config", () => {
+  beforeEach(() => { process.env.EXECUTIVE_HOME = DIR; });
+  afterEach(() => { try { rmSync(DIR, { recursive: true, force: true }); } catch {} delete process.env.EXECUTIVE_HOME; });
+
+  it("defaultConfig() has no repos key under watch", () => {
+    expect(defaultConfig().watch?.repos).toBeUndefined();
+  });
+
+  it("a config with no watch.repos key leaves it undefined and keeps git/fs defaults", () => {
+    writeConfig({ version: 1, createdAt: "x", timezone: "Asia/Bangkok" });
+    const c = loadConfig();
+    expect(c.watch!.repos).toBeUndefined();
+    expect(c.watch!.git).toEqual(defaultConfig().watch!.git);
+    expect(c.watch!.fs).toEqual(defaultConfig().watch!.fs);
+  });
+
+  it("a repos entry with only path fills in all defaults", () => {
+    writeConfig({
+      version: 1, createdAt: "x", timezone: "Asia/Bangkok",
+      watch: { git: {}, fs: {}, repos: [{ path: "/home/me/opm" }] },
+    });
+    const r = loadConfig().watch!.repos![0]!;
+    expect(r.name).toBe("opm");
+    expect(r.pollMs).toBe(5000);
+    expect(r.watchFiles).toBe(true);
+    expect(r.filePaths).toEqual(["/home/me/opm/src"]);
+    expect(r.fileDebounceMs).toBe(300);
+  });
+
+  it("de-duplicates a two-way name collision by suffixing the second entry", () => {
+    writeConfig({
+      version: 1, createdAt: "x", timezone: "Asia/Bangkok",
+      watch: { git: {}, fs: {}, repos: [{ path: "/a/x" }, { path: "/b/x" }] },
+    });
+    const repos = loadConfig().watch!.repos!;
+    expect(repos[0]!.name).toBe("x");
+    expect(repos[1]!.name).toBe("x (2)");
+  });
+
+  it("de-duplicates a three-way name collision as (2), (3) in array order", () => {
+    writeConfig({
+      version: 1, createdAt: "x", timezone: "Asia/Bangkok",
+      watch: { git: {}, fs: {}, repos: [{ path: "/a/x" }, { path: "/b/x" }, { path: "/c/x" }] },
+    });
+    const repos = loadConfig().watch!.repos!;
+    expect(repos[0]!.name).toBe("x");
+    expect(repos[1]!.name).toBe("x (2)");
+    expect(repos[2]!.name).toBe("x (3)");
   });
 });

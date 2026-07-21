@@ -42,7 +42,7 @@ export function buildDigest(opts?: DigestOptions): Digest {
       available: false,
       project: null, task: null, deadline: null, currentFile: null,
       tests: null, blocked: null, blockedReason: null, branch: null,
-      idle: null, stateGeneratedAt: null,
+      idle: null, stateGeneratedAt: null, repos: [], activeRepo: null,
     };
   } else {
     now = {
@@ -57,6 +57,8 @@ export function buildDigest(opts?: DigestOptions): Digest {
       branch: rawState.git?.branch ?? null,
       idle: rawState.activity?.active === false ? true : rawState.activity?.active === true ? false : null,
       stateGeneratedAt: rawState.generatedAt ?? null,
+      repos: ((rawState as any).repos ?? []).map((r: { name: string; branch: string | null }) => ({ name: r.name, branch: r.branch ?? null })),
+      activeRepo: (rawState as any).activeRepo ?? null,
     };
   }
 
@@ -235,6 +237,10 @@ export function renderDigest(d: Digest): string {
     lines.push("- **Idle:** " + (d.now.idle === true ? "yes" : d.now.idle === false ? "no" : "—"));
     if (d.now.stateGeneratedAt) {
       lines.push("- _State generated at " + d.now.stateGeneratedAt + "_");
+    }
+    if (d.now.repos.length > 1) {
+      const repoList = d.now.repos.map((r) => (r.name === d.now.activeRepo ? r.name + "*" : r.name) + " (" + (r.branch ?? "no branch") + ")").join(", ");
+      lines.push("- **Repos:** " + repoList);
     }
   }
   lines.push("");

@@ -127,6 +127,8 @@ function makeState(overrides: Partial<State> = {}): State {
     blocked: false,
     blockedReason: null,
     activity: { active: true, idleMs: null },
+    activeRepo: null,
+    repos: [],
     ...overrides,
   };
 }

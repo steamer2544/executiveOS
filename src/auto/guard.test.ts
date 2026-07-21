@@ -42,6 +42,8 @@ function makeState(): State {
     blocked: false,
     blockedReason: null,
     activity: { active: true, idleMs: 5000 },
+    activeRepo: null,
+    repos: [],
   };
 }
 

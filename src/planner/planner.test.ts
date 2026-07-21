@@ -36,6 +36,8 @@ function makeState(overrides: Partial<State> = {}): State {
     blocked: false,
     blockedReason: null,
     activity: { active: true, idleMs: null },
+    activeRepo: null,
+    repos: [],
     ...overrides,
   };
 }
@@ -59,6 +61,8 @@ describe("planner — empty / clean state", () => {
       blocked: false,
       deadline: null,
       activity: { active: true, idleMs: null },
+      activeRepo: null,
+      repos: [],
     });
     const p = plan(s);
     expect(p.actions).toEqual([]);

@@ -194,6 +194,11 @@ const dash = (v) => (v === null || v === undefined || v === "") ? "<span class='
 
 function toast(msg) { const t = $("toast"); t.textContent = msg; t.classList.add("show"); setTimeout(()=>t.classList.remove("show"), 1600); }
 
+function repoList(repos, activeRepo) {
+  if (!repos || repos.length <= 1) return "";
+  return repos.map(function(r) { return (r.name === activeRepo ? r.name + "*" : r.name) + " (" + (r.branch || "no branch") + ")"; }).join(", ");
+}
+
 function rows(pairs) {
   return pairs.map(([k,v]) => \`<div class="row"><span class="k">\${k}</span><span class="v">\${v}</span></div>\`).join("");
 }
@@ -209,7 +214,8 @@ async function refresh() {
       ["Blocked", n.blocked ? \`<span class="pill ask">yes</span> \${esc(n.blockedReason||"")}\` : "no"],
       ["Branch", dash(n.branch)], ["Deadline", dash(n.deadline)],
       ["Current file", dash(n.currentFile)], ["Idle", n.idle===true?"yes":n.idle===false?"no":dash(null)],
-    ]) : "<span class='muted'>No state yet.</span>";
+    ]) + (n.repos && n.repos.length > 1 ? \`<div class="row"><span class="k">Repos</span><span class="v">\${repoList(n.repos, n.activeRepo)}</span></div>\` : "")
+      : "<span class='muted'>No state yet.</span>";
 
     const rec = dg.recommended;
     $("recommended").innerHTML = rec.available && rec.topActionKind

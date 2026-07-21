@@ -22,6 +22,15 @@ export interface Config {
       paths?: string[];
       debounceMs?: number;
     };
+    /** Multi-repo mode. When present and non-empty, these REPLACE the single git/fs watchers above. */
+    repos?: Array<{
+      path: string;             // repo root (required)
+      name?: string;            // display/repo name; default = basename(path)
+      pollMs?: number;          // git poll cadence; default 5000
+      watchFiles?: boolean;     // also run an FsWatcher on this repo; default true
+      filePaths?: string[];     // fs watch roots; default [path + "/src"]
+      fileDebounceMs?: number;  // default 300
+    }>;
   };
   /** State builder configuration (defaults applied when absent). */
   state?: {
@@ -217,6 +226,37 @@ export function loadConfig(): Config {
   parsed.watch.fs.enabled = parsed.watch.fs.enabled ?? defaults.watch!.fs.enabled!;
   parsed.watch.fs.paths = parsed.watch.fs.paths ?? defaults.watch!.fs.paths!;
   parsed.watch.fs.debounceMs = parsed.watch.fs.debounceMs ?? defaults.watch!.fs.debounceMs!;
+
+  // Normalize multi-repo watch entries when repos is present and non-empty.
+  if (parsed.watch.repos && parsed.watch.repos.length > 0) {
+    // Local helper matching src/watchers/git.ts's repoName.
+    function basenameOf(p: string): string {
+      const cleaned = p.replace(/[\\/]+$/, "");
+      return cleaned.split(/[\\/]/).pop() ?? "";
+    }
+
+    const seen = new Map<string, number>(); // name → count of occurrences
+    for (let i = 0; i < parsed.watch.repos.length; i++) {
+      const r = parsed.watch.repos[i]!;
+      r.name = r.name ?? basenameOf(r.path);
+      r.pollMs = r.pollMs ?? 5000;
+      r.watchFiles = r.watchFiles ?? true;
+      r.filePaths = r.filePaths ?? [r.path + "/src"];
+      r.fileDebounceMs = r.fileDebounceMs ?? 300;
+
+      // Name-collision resolution (keyed by the ORIGINAL name, so a 3-way
+      // collision suffixes " (2)", " (3)", ... instead of repeating " (2)").
+      const originalName = r.name;
+      const count = seen.get(originalName) ?? 0;
+      if (count > 0) {
+        // This is a collision — suffix it.
+        const newName = originalName + " (" + (count + 1) + ")";
+        process.stderr.write("config: multi-repo name collision: \"" + originalName + "\" → \"" + newName + "\"\n");
+        r.name = newName;
+      }
+      seen.set(originalName, count + 1);
+    }
+  }
 
   // Merge missing state fields with defaults.
   if (!parsed.state) {

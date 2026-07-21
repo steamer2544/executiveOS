@@ -15,7 +15,7 @@ function ctx(summary: string, events: Array<{ type: string; data: Record<string,
       generatedAt: "2026-01-01T00:00:00.000Z", eventCount: events.length, lastEventTs: null,
       currentProject: null, currentTask: null, deadline: null, currentFile: null, recentFiles: [],
       git: { branch: null, lastCommit: null }, tests: "unknown", blocked: false, blockedReason: null,
-      activity: { active: true, idleMs: 0 },
+      activity: { active: true, idleMs: 0 }, activeRepo: null, repos: [],
     },
     recentEvents: events.map((e, i) => ({ seq: i + 1, ts: "2026-01-01T00:00:00.000Z", source: "system", type: e.type, data: e.data })),
   };

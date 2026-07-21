@@ -11,6 +11,7 @@ const IGNORE_DIRS = [".git", "node_modules", ".executive"];
 export interface FsWatcherConfig {
   paths: string[];
   debounceMs: number;
+  repo?: string; // when set, every editor.save event carries data.repo
 }
 
 export function createFsWatcher(config: FsWatcherConfig): Watcher {
@@ -38,10 +39,17 @@ export function createFsWatcher(config: FsWatcherConfig): Watcher {
 
     const timer = setTimeout(() => {
       debounceTimers.delete(filePath);
+      const data: { path: string; changeType: string; repo?: string } = {
+        path: filePath,
+        changeType,
+      };
+      if (config.repo) {
+        data.repo = config.repo;
+      }
       const event: EventInput = {
         source: "editor" as EventSource,
         type: "editor.save",
-        data: { path: filePath, changeType },
+        data,
       };
       b.publish(event);
     }, config.debounceMs);

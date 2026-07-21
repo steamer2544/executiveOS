@@ -53,6 +53,8 @@ function seedState(partial: Partial<State>): void {
     blocked: false,
     blockedReason: null,
     activity: { active: true, idleMs: 0 },
+    activeRepo: null,
+    repos: [],
     ...partial,
   };
   writeFileSync(statePath(), JSON.stringify(base));

@@ -36,6 +36,15 @@ export interface State {
     lastCommit: CommitInfo | null;
   };
 
+  // ── Multi-repo (from repo-tagged git / editor events) ──────────────────
+  activeRepo: string | null;
+  repos: Array<{
+    name: string;
+    branch: string | null;
+    lastCommit: { sha: string; subject: string; ts: string } | null;
+    lastActivityTs: string | null;
+  }>;
+
   // ── Health signals (from system.* events) ──────────────────────────────
   tests: "passing" | "failing" | "unknown";
   blocked: boolean;

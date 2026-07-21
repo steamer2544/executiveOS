@@ -10,8 +10,7 @@ import { execRoot, logsDir, statePath, contextPath, planPath, proposalPath, exec
 import { EventBus } from "./bus.js";
 import { attachStoreSink } from "./sink.js";
 import { WatcherManager } from "./watchers/index.js";
-import { createGitWatcher } from "./watchers/git.js";
-import { createFsWatcher } from "./watchers/fs.js";
+import { buildWatchers } from "./watchers/build.js";
 import { loadConfig } from "./config.js";
 import { buildState, writeState } from "./state/builder.js";
 import { plan, writePlan } from "./planner/planner.js";
@@ -275,35 +274,17 @@ async function main(): Promise<void> {
       });
 
       // Build enabled watchers from config.
-      const watchers = [];
-      const activeNames: string[] = [];
-
-      const watchConfig = config.watch ?? { git: {}, fs: {} };
-      const gitConfig = watchConfig.git ?? {};
-      const fsConfig = watchConfig.fs ?? {};
-
-      if (gitConfig.enabled !== false) {
-        const watcher = createGitWatcher({
-          repoPath: gitConfig.repoPath ?? process.cwd(),
-          pollMs: gitConfig.pollMs ?? 5000,
-        });
-        watchers.push(watcher);
-        activeNames.push("git");
-      }
-
-      if (fsConfig.enabled !== false) {
-        const watcher = createFsWatcher({
-          paths: fsConfig.paths ?? [process.cwd() + "/src"],
-          debounceMs: fsConfig.debounceMs ?? 300,
-        });
-        watchers.push(watcher);
-        activeNames.push("fs");
-      }
+      const { watchers, activeNames } = buildWatchers(config);
 
       const manager = new WatcherManager(bus, watchers);
       await manager.startAll();
 
       process.stdout.write("ExecutiveOS watch started. Active watchers: " + activeNames.join(", ") + "\n");
+      if (config.watch?.repos && config.watch.repos.length > 0) {
+        process.stdout.write(
+          "Watching repos: " + config.watch.repos.map((r) => r.name).join(", ") + "\n",
+        );
+      }
       process.stdout.write("Runtime root: " + execRoot() + "\n");
 
       // ── Autopilot banner ─────────────────────────────────────────────────
@@ -889,16 +870,7 @@ async function main(): Promise<void> {
           const config = loadConfig();
           const bus = new EventBus();
           attachStoreSink(bus, () => {});
-          const watchConfig = config.watch ?? { git: {}, fs: {} };
-          const gitConfig = watchConfig.git ?? {};
-          const fsConfig = watchConfig.fs ?? {};
-          const watchers = [];
-          if (gitConfig.enabled !== false) {
-            watchers.push(createGitWatcher({ repoPath: gitConfig.repoPath ?? process.cwd(), pollMs: gitConfig.pollMs ?? 5000 }));
-          }
-          if (fsConfig.enabled !== false) {
-            watchers.push(createFsWatcher({ paths: fsConfig.paths ?? [process.cwd() + "/src"], debounceMs: fsConfig.debounceMs ?? 300 }));
-          }
+          const { watchers } = buildWatchers(config);
           manager = new WatcherManager(bus, watchers);
           await manager.startAll();
         }

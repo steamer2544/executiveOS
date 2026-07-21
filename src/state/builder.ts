@@ -144,49 +144,165 @@ export function buildState(now?: Date): { state: State; context: Context } {
   }
   const recentFiles = recentFilesSet.slice(0, 5);
 
-  // --- git.lastCommit (from git.commit) ---
-  let lastCommitSeq = -1;
-  let lastCommit: CommitInfo | null = null;
+  // ── Multi-repo derivation ──────────────────────────────────────────────
+
+  // Per-repo record shape (mirrors CommitInfo but scoped per repo).
+  type PerRepoCommit = Pick<CommitInfo, "sha" | "subject" | "ts">;
+
+  interface PerRepo {
+    branch: string | null;
+    latestBranchSwitchSeq: number;
+    latestBranchSwitchTo: string | null;
+    latestCommitBranchSeq: number;
+    latestCommitBranch: string | null;
+    latestCommitSeq: number;
+    latestCommit: PerRepoCommit | null;
+    latestActivitySeq: number;
+    latestActivityTs: string | null;
+  }
+
+  const repoMap = new Map<string, PerRepo>();
+
+  function getRepo(name: string): PerRepo {
+    let r = repoMap.get(name);
+    if (!r) {
+      r = {
+        branch: null,
+        latestBranchSwitchSeq: -1,
+        latestBranchSwitchTo: null,
+        latestCommitBranchSeq: -1,
+        latestCommitBranch: null,
+        latestCommitSeq: -1,
+        latestCommit: null,
+        latestActivitySeq: -1,
+        latestActivityTs: null,
+      };
+      repoMap.set(name, r);
+    }
+    return r;
+  }
+
+  // Walk all events in seq order; group repo-tagged events by repo.
   for (const e of allEvents) {
+    const d = (e.data ?? {}) as Record<string, unknown>;
+    const isRepoTagged =
+      (e.type === "git.commit" || e.type === "git.branch_switch" || e.type === "editor.save") &&
+      typeof d.repo === "string" &&
+      d.repo.length > 0;
+    if (!isRepoTagged) continue;
+
+    const repoName = d.repo as string;
+    const r = getRepo(repoName);
+
+    // Track latest activity (highest-seq event for this repo).
+    if (e.seq > r.latestActivitySeq) {
+      r.latestActivitySeq = e.seq;
+      r.latestActivityTs = e.ts;
+    }
+
+    if (e.type === "git.branch_switch") {
+      const to = str(e.data ?? {}, "to");
+      if (to && e.seq > r.latestBranchSwitchSeq) {
+        r.latestBranchSwitchSeq = e.seq;
+        r.branch = to;
+      }
+    }
     if (e.type === "git.commit") {
-      const d = e.data ?? {};
-      const sha = str(d, "sha") ?? "";
-      const subject = str(d, "subject") ?? "";
-      if (sha) {
-        lastCommit = { sha, subject, ts: e.ts };
-        lastCommitSeq = e.seq;
+      // Mirror the per-repo branch logic: commit.branch wins over branch_switch
+      // when the commit is newer (same as the top-level logic).
+      const branch = str(e.data ?? {}, "branch");
+      if (branch && e.seq > r.latestBranchSwitchSeq) {
+        r.branch = branch;
+      }
+      // Track latest commit (same shape as top-level git.lastCommit).
+      const sha = str(e.data ?? {}, "sha") ?? "";
+      const subject = str(e.data ?? {}, "subject") ?? "";
+      if (sha && e.seq > r.latestCommitSeq) {
+        r.latestCommit = { sha, subject, ts: e.ts };
+        r.latestCommitSeq = e.seq;
       }
     }
   }
 
-  // --- git.branch (newest of branch_switch.to / commit.branch by seq) ---
-  let latestBranchSwitchSeq = -1;
-  let latestBranchSwitchTo: string | null = null;
-  let latestCommitBranchSeq = -1;
-  let latestCommitBranch: string | null = null;
+  // activeRepo = the repo carried by the single highest-seq repo-tagged event.
+  let activeRepo: string | null = null;
   for (const e of allEvents) {
-    if (e.type === "git.branch_switch") {
-      const d = e.data ?? {};
-      const to = str(d, "to");
-      if (to && e.seq > latestBranchSwitchSeq) {
-        latestBranchSwitchSeq = e.seq;
-        latestBranchSwitchTo = to;
-      }
-    }
-    if (e.type === "git.commit") {
-      const d = e.data ?? {};
-      const branch = str(d, "branch");
-      if (branch && e.seq > latestCommitBranchSeq) {
-        latestCommitBranchSeq = e.seq;
-        latestCommitBranch = branch;
+    const d = (e.data ?? {}) as Record<string, unknown>;
+    const isRepoTagged =
+      (e.type === "git.commit" || e.type === "git.branch_switch" || e.type === "editor.save") &&
+      typeof d.repo === "string" &&
+      d.repo.length > 0;
+    if (!isRepoTagged) continue;
+    activeRepo = d.repo as string;
+  }
+
+  // Per-repo summary array, sorted by lastActivityTs descending (newest first).
+  const repos = Array.from(repoMap.entries())
+    .map(([name, r]) => ({
+      name,
+      branch: r.branch,
+      lastCommit: r.latestCommit,
+      lastActivityTs: r.latestActivityTs,
+    }))
+    .sort((a, b) => {
+      if (!a.lastActivityTs && !b.lastActivityTs) return 0;
+      if (!a.lastActivityTs) return 1;
+      if (!b.lastActivityTs) return -1;
+      return b.lastActivityTs < a.lastActivityTs ? -1 : b.lastActivityTs > a.lastActivityTs ? 1 : 0;
+    });
+
+  // Derive top-level git fields from the active repo (coherence: Project/Branch move together).
+  let gitBranch: string | null = null;
+  let lastCommit: CommitInfo | null = null;
+
+  if (activeRepo) {
+    const ar = repoMap.get(activeRepo);
+    if (ar) {
+      gitBranch = ar.branch;
+      if (ar.latestCommit) {
+        lastCommit = { sha: ar.latestCommit.sha, subject: ar.latestCommit.subject, ts: ar.latestCommit.ts };
       }
     }
   }
-  let gitBranch: string | null = null;
-  if (latestBranchSwitchSeq >= latestCommitBranchSeq) {
-    gitBranch = latestBranchSwitchTo;
-  } else if (latestCommitBranchSeq > latestBranchSwitchSeq) {
-    gitBranch = latestCommitBranch;
+
+  // Fallback: when no repo-tagged events exist (pre-multi-repo log or single-repo
+  // without the repo field), derive from all events exactly as before.
+  if (!activeRepo) {
+    let latestBranchSwitchSeq = -1;
+    let latestBranchSwitchTo: string | null = null;
+    let latestCommitBranchSeq = -1;
+    let latestCommitBranch: string | null = null;
+    let latestCommitSeq = -1;
+
+    for (const e of allEvents) {
+      if (e.type === "git.branch_switch") {
+        const d = e.data ?? {};
+        const to = str(d, "to");
+        if (to && e.seq > latestBranchSwitchSeq) {
+          latestBranchSwitchSeq = e.seq;
+          latestBranchSwitchTo = to;
+        }
+      }
+      if (e.type === "git.commit") {
+        const d = e.data ?? {};
+        const branch = str(d, "branch");
+        if (branch && e.seq > latestCommitBranchSeq) {
+          latestCommitBranchSeq = e.seq;
+          latestCommitBranch = branch;
+        }
+        const sha = str(d, "sha") ?? "";
+        const subject = str(d, "subject") ?? "";
+        if (sha && e.seq > latestCommitSeq) {
+          lastCommit = { sha, subject, ts: e.ts };
+          latestCommitSeq = e.seq;
+        }
+      }
+    }
+    if (latestBranchSwitchSeq >= latestCommitBranchSeq) {
+      gitBranch = latestBranchSwitchTo;
+    } else if (latestCommitBranchSeq > latestBranchSwitchSeq) {
+      gitBranch = latestCommitBranch;
+    }
   }
 
   // Fallback: infer the current task from the branch name when no explicit
@@ -196,20 +312,10 @@ export function buildState(now?: Date): { state: State; context: Context } {
     currentTask = taskFromBranch(gitBranch);
   }
 
-  // Fallback: infer the project from the newest git event carrying a repo name
-  // (the GitWatcher tags commits/branch switches with the repo folder name).
+  // Fallback: infer the project from the active repo name.
   // Explicit system.task project always wins; this only fills the gap.
   if (currentProject === null) {
-    let latestRepoSeq = -1;
-    for (const e of allEvents) {
-      if (e.type === "git.commit" || e.type === "git.branch_switch") {
-        const r = str(e.data ?? {}, "repo");
-        if (r && r.length > 0 && e.seq > latestRepoSeq) {
-          latestRepoSeq = e.seq;
-          currentProject = r;
-        }
-      }
-    }
+    currentProject = activeRepo;
   }
 
   // --- tests (system.test_result) ---
@@ -284,6 +390,8 @@ export function buildState(now?: Date): { state: State; context: Context } {
       active,
       idleMs,
     },
+    activeRepo,
+    repos,
   };
 
   // ── Build Context ──────────────────────────────────────────────────────
