@@ -439,6 +439,21 @@ docs/scopes/           # per-phase specs (the contract handed to the implementer
   re-download is 16 files / 81MB (`encoder_model_quantized.onnx` 23MB + `decoder_model_merged_quantized.onnx`
   52MB + tokenizer/configs), `wasmAssetsStatus` → `{libReady:true, modelReady:true}`. Still browser-only for
   the actual in-page transcription. 260 tests green. Files: `src/ui/{models,page}.ts`.
+- **Phase 25.2 — DONE** (architect fix + **live browser validation via Playwright**, this commit): the
+  browser-wasm path is now **verified end-to-end in a real Chromium**, not just "files on disk". Driving the
+  dashboard with Playwright + Chromium fake audio (`--use-file-for-fake-audio-capture` fed the classic
+  `jfk.wav`) surfaced two real defects in the page's wasm loader: (1) it imported `transformers.web.js`,
+  which is the **bundler build** with bare `import"onnxruntime-common"/"onnxruntime-web"` specifiers a plain
+  browser can't resolve → "Failed to resolve module specifier" — fixed to import **`transformers.min.js`**
+  (the self-contained web bundle with onnxruntime inlined; `models.ts` `libReady` checks it too); (2) the web
+  build defaults `env.allowLocalModels=false`, so with `allowRemoteModels=false` it refused everything
+  ("both local and remote models are disabled") — fixed by setting **`env.allowLocalModels=true`** alongside
+  `allowRemoteModels=false` + `localModelPath="/models/"`. After the fix the full flow works: fake JFK audio
+  → MediaRecorder → `decodeAudioData` → transformers.js pipeline (**WASM CPU, WebGPU absent in headless,
+  fully offline from `/vendor`+`/models`**) → correctly transcribed *"…my fellow America ask not what your
+  country can do for you…"* → emitted `system.note{via:"voice"}`. So **all four transcription modes are now
+  real**: webspeech + whisper-api (config/endpoints tested) and browser-wasm (**end-to-end browser-tested**);
+  only a live Groq/local key remains owner-supplied. 260 tests green. Files: `src/ui/{page,models}.ts`.
 - **Loop complete (manual trigger):** `auto --apply` runs the whole chain in one command; the human
   reviews/merges the `executive/change-<id>` branch.
 

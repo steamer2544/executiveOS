@@ -148,7 +148,7 @@ export async function downloadWasmAssets(
 
 /** What browser-wasm assets are already on disk for `modelId` (no network). */
 export function wasmAssetsStatus(modelId: string): AssetsStatus {
-  const libFile = vendorDir() + "/transformers.web.js";
+  const libFile = vendorDir() + "/transformers.min.js"; // the self-contained bundle the page imports
   const libReady = existsSync(libFile) && statSync(libFile).size > 0;
 
   const root = modelsDir() + "/" + modelId;

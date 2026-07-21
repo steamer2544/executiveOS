@@ -337,8 +337,9 @@ function stopMediaRec() { listening = false; try { if (mediaRec && mediaRec.stat
 let wasmPipe = null;
 async function ensureWasmPipe() {
   if (wasmPipe) return wasmPipe;
-  const T = await import("/vendor/transformers.web.js");
-  T.env.allowRemoteModels = false;
+  const T = await import("/vendor/transformers.min.js"); // the self-contained web bundle (ort inlined)
+  T.env.allowLocalModels = true;   // the web build defaults this off; we serve the model from /models
+  T.env.allowRemoteModels = false; // never hit the network at transcription time
   T.env.localModelPath = "/models/";
   try { T.env.backends.onnx.wasm.wasmPaths = "/vendor/"; } catch {}
   // dtype "q8" must match WASM_DTYPE in models.ts — we only downloaded the "_quantized" onnx variant.
