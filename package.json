@@ -6,10 +6,12 @@
   "scripts": {
     "executive": "bun run src/index.ts",
     "test": "bun test",
+    "test:e2e": "node test/e2e/browser-wasm.e2e.mjs",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
     "typescript": "^5.7.0",
-    "@types/bun": "^1.2.0"
+    "@types/bun": "^1.2.0",
+    "playwright": "^1.61.0"
   }
 }

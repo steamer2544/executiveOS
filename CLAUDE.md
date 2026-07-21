@@ -454,6 +454,24 @@ docs/scopes/           # per-phase specs (the contract handed to the implementer
   country can do for you…"* → emitted `system.note{via:"voice"}`. So **all four transcription modes are now
   real**: webspeech + whisper-api (config/endpoints tested) and browser-wasm (**end-to-end browser-tested**);
   only a live Groq/local key remains owner-supplied. 260 tests green. Files: `src/ui/{page,models}.ts`.
+- **Phase 25.3 — DONE** (architect impl + Playwright-validated, this commit): **merged the two language
+  dropdowns into one.** There were two overlapping-but-different language selectors (the Listening card's
+  `th-TH`/`en-US` in localStorage → Web Speech only; the Settings card's `""`/`th`/`en` in config →
+  whisper-api + browser-wasm only), so in any given mode one did nothing. Now a **single** Language selector
+  (Auto/ไทย/English) in the Listening card, backed by `config.transcribe.language`, applies to every mode:
+  `webspeechLang()`→`th-TH`/`en-US` (auto→th), whisper-api→`?language=`, `wasmLang()`→`"thai"`/`"english"`/
+  null. Changing it POSTs `/api/settings` (persists across reloads); the localStorage cache is gone; the
+  Settings card keeps only Save. Files: `src/ui/page.ts`.
+- **Phase 25.4 — DONE** (architect, this commit): **permanent browser-wasm e2e test.** The Playwright checks
+  that caught the 25.2/25.3 defects are now committed as `test/e2e/browser-wasm.e2e.mjs` (+ `fixtures/jfk.wav`,
+  `test/e2e/README.md`). It drives a real headless Chromium with fake-mic audio, asserting the full offline
+  transcription flow + the single language selector. **Opt-in, not in `bun test`** (heavy: needs a browser +
+  the 81MB model) — `bun run test:e2e`, auto-skips (exit 0) with instructions if playwright/model aren't set
+  up. **Runtime split (important):** the UI server runs as a `bun` subprocess (loads the `.ts` sources) while
+  the driver runs under **`node`** — Playwright's Chromium pipe transport **hangs under `bun`**, so the
+  `test:e2e` script is `node …`, not `bun …`. Uses a temp `EXECUTIVE_HOME` that junction-links the
+  already-downloaded `vendor/`+`models/`, so it never touches real runtime data. `playwright` added to
+  devDependencies. Verified passing (8/8 checks: JFK line transcribed, language persists + survives reload).
 - **Loop complete (manual trigger):** `auto --apply` runs the whole chain in one command; the human
   reviews/merges the `executive/change-<id>` branch.
 

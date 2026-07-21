@@ -66,7 +66,9 @@ the 9arm Qwen gateway (`work`, `synth`, `infer`, `propose`); the Phase-25 vendor
 ```bash
 bun install
 bun run typecheck          # tsc --noEmit (strict) — must stay green
-bun test                   # 250 tests, offline
+bun test                   # 260 tests, offline
+bun run test:e2e           # OPT-IN browser-wasm e2e (real Chromium via Playwright; runs under node, auto-skips
+                           #   if playwright/model aren't set up — see test/e2e/README.md)
 
 bun run src/index.ts init  # create .executive/ (also adds .executive/ to .gitignore in a repo)
 bun run src/index.ts ui    # dashboard at localhost:4317 (+ watches git/files); the main entry point now
