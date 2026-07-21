@@ -532,6 +532,37 @@ docs/scopes/           # per-phase specs (the contract handed to the implementer
   anthropic,types}.ts`, `src/synth/{synth,types}.ts`, `src/config.ts`, `src/index.ts`, `src/ui/{server,
   page}.ts`. **NOT yet run against the live gateway** (real Advisor + real Synth over the 9arm Qwen — left
   for the owner; offline MockAdvisor/MockSynthesizer cover both paths).
+- **Phase 28 — DONE** (qwen impl + architect review + live-validated on Windows, this commit):
+  **Screen-sense Layer 1 — window-title watcher.** The first "read what I'm looking at" sensor: a
+  deterministic poll-based watcher (mirrors GitWatcher, **NO LLM, no screenshot, no OCR, no network**) that
+  reads the **active foreground window title + process name** and emits `screen.window{title,app}` on
+  change — so a browser title like `"Sprint Board | Trello"` / `"แชท OPM Dev — LINE"` flows into the event
+  log → `Context` → the existing Advisor/infer gain screen context **with zero changes to their code**.
+  `screen.window` is a new 5th event source. New `src/screen/capture.ts` `foregroundWindow()` (sync
+  PowerShell user32 `GetForegroundWindow`/`GetWindowText`/`GetWindowThreadProcessId`, null-safe, warn-once,
+  non-Windows → null), `src/watchers/screen.ts` `createScreenWatcher` (closure state, baseline-no-emit,
+  dedup by `(title,app)`, idempotent stop). Wired into **`buildWatchers`** behind
+  **`config.screen.window.enabled`** (default false; a config with no `screen` block starts no screen
+  watcher — backward compatible). Additive `State.currentWindow` (newest `screen.window`), a digest
+  **"Looking at:"** line, and a UI Now-card row. **Planner/Worker/Executor/Synth/Autopilot/Advisor/infer
+  source untouched** (only their test fixtures gained `currentWindow: null`). 331 passing tests.
+  **Architect defects found + fixed:** (1) **the 5 unit tests were vacuous** — every `expect` sat inside an
+  un-awaited `setTimeout`, so a watcher with dedup+baseline deleted still passed all 5 (only 2/12 asserts
+  actually ran); rewrote them as `async`+awaited so a broken watcher now fails 4/6. (2) **Thai/emoji titles
+  were mangled to `?`** — `[DllImport("user32.dll")]` defaults to `CharSet.Ansi` → bound `GetWindowTextA`,
+  flattening Unicode titles to the ANSI codepage *before* capture; fixed with `CharSet=CharSet.Unicode`
+  (→`GetWindowTextW`) **plus** `[Console]::OutputEncoding=UTF8` — verified live that a real title with
+  U+2733 survives, and `"แชท OPM Dev — LINE"` round-trips through emit→state→report→tail intact. (3) **three
+  stale 4-source lists** (`emit` CLI `VALID_SOURCES`, its help text, and `store.ts` `tail()`'s merge) never
+  learned about the 5th source → `emit screen …` was rejected and `tail` hid screen events; added `screen`
+  to all three. `eventLogPath`/`append`/`ensureLogExists` are generic so `screen.jsonl` persists fine.
+  **Live-validated on Windows:** `foregroundWindow()` reads the real active window (correct `app`, Unicode
+  title preserved); off-by-default confirmed (`buildWatchers` → `["git","fs"]`, `screen` only when enabled);
+  full emit→build-state→report→tail chain with a Thai title. **Not automatable here** (left as the same
+  manual check as GitWatcher's live poll): the actual setInterval-driven window-switch in a running daemon.
+  Spec: `docs/scopes/phase-28-screen-window-watcher.md`. Files: `src/screen/capture.ts`,
+  `src/watchers/{screen,build}.ts`, `src/config.ts`, `src/events/{types,store}.ts`, `src/index.ts`,
+  `src/state/{types,builder}.ts`, `src/report/{types,digest}.ts`, `src/ui/page.ts` (+ test-fixture bumps).
 - **Loop complete (manual trigger):** `auto --apply` runs the whole chain in one command; the human
   reviews/merges the `executive/change-<id>` branch.
 

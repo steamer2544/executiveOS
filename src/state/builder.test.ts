@@ -563,3 +563,35 @@ describe("buildState — multi-repo: state.repos shape and sort", () => {
     expect(state.activeRepo).toBe("C");
   });
 });
+
+// ── 10. currentWindow derivation (Phase 28) ────────────────────────────────
+
+describe("buildState — currentWindow derivation", () => {
+  const DIR = "/tmp/executive-test-currentwindow-" + randomUUID();
+  beforeEach(() => setExecutiveHome(DIR));
+  afterEach(() => cleanup(DIR));
+
+  it("null when no screen.window events exist", () => {
+    writeRawEvent("git", 1, "git.commit", { sha: "abc", subject: "x", branch: "main" });
+    const { state } = buildState(new Date("2026-01-01T00:00:10.000Z"));
+    expect(state.currentWindow).toBeNull();
+  });
+
+  it("equals the newest screen.window event when present", () => {
+    writeRawEvent("screen", 1, "screen.window", { title: "Chrome", app: "chrome" });
+    writeRawEvent("screen", 2, "screen.window", { title: "VS Code", app: "code" });
+
+    const { state } = buildState(new Date("2026-01-01T00:00:10.000Z"));
+    expect(state.currentWindow).toEqual({ title: "VS Code", app: "code" });
+  });
+
+  it("newest wins even when mixed with other event types", () => {
+    writeRawEvent("editor", 1, "editor.save", { path: "src/a.ts" });
+    writeRawEvent("screen", 2, "screen.window", { title: "Slack", app: "slack" });
+    writeRawEvent("git", 3, "git.commit", { sha: "def", subject: "y", branch: "main" });
+    writeRawEvent("screen", 4, "screen.window", { title: "Trello", app: "chrome" });
+
+    const { state } = buildState(new Date("2026-01-01T00:00:10.000Z"));
+    expect(state.currentWindow).toEqual({ title: "Trello", app: "chrome" });
+  });
+});

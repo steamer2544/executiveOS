@@ -93,7 +93,7 @@ export function buildState(now?: Date): { state: State; context: Context } {
 
   // Gather all events from all sources, sorted ascending by seq (tie-break ts).
   const allEvents: ExecEvent[] = [];
-  const sources: EventSource[] = ["git", "terminal", "editor", "system"];
+  const sources: EventSource[] = ["git", "terminal", "editor", "system", "screen"];
   for (const src of sources) {
     try {
       const events = readEventsSync(src);
@@ -358,6 +358,19 @@ export function buildState(now?: Date): { state: State; context: Context } {
   // If lastBlockedSeq > lastUnblockedSeq, blocked stays true with its reason.
   // Equal or both 0 → default false.
 
+  // --- currentWindow (from screen.window events) ---
+  let currentWindow: { title: string; app: string } | null = null;
+  for (const e of allEvents) {
+    if (e.type === "screen.window") {
+      const d = e.data ?? {};
+      const title = str(d, "title");
+      const app = str(d, "app");
+      if (title && app) {
+        currentWindow = { title, app };
+      }
+    }
+  }
+
   // --- activity ---
   let idleMs: number | null = null;
   let active = false;
@@ -384,6 +397,7 @@ export function buildState(now?: Date): { state: State; context: Context } {
     tests,
     blocked,
     blockedReason,
+    currentWindow,
     activity: {
       active,
       idleMs,

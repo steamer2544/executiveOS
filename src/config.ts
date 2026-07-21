@@ -98,6 +98,13 @@ export interface Config {
     language?: string | null; // hint ("th") or null to auto-detect (best for mixed). Default null.
     wasmModel?: string;       // browser-wasm model id (HF/Xenova). Default "Xenova/whisper-base".
   };
+  /** Screen-sensing (Layer 1 here). Each layer is independently toggle-able; all OFF by default. */
+  screen?: {
+    window?: {
+      enabled?: boolean; // Layer 1: emit the active window title/process on change. Default false.
+      pollMs?: number;   // poll cadence. Default 3000.
+    };
+  };
 }
 
 /** The three transcription backends the dashboard mic can use. */
@@ -347,6 +354,14 @@ export function loadConfig(): Config {
   parsed.transcribe.apiKeyEnv = parsed.transcribe.apiKeyEnv ?? defaults.transcribe!.apiKeyEnv!;
   parsed.transcribe.language = parsed.transcribe.language ?? defaults.transcribe!.language ?? null;
   parsed.transcribe.wasmModel = parsed.transcribe.wasmModel ?? defaults.transcribe!.wasmModel!;
+
+  // Merge missing screen fields with defaults (only if screen block is present).
+  if (parsed.screen) {
+    if (parsed.screen.window) {
+      parsed.screen.window.enabled = parsed.screen.window.enabled ?? false;
+      parsed.screen.window.pollMs = parsed.screen.window.pollMs ?? 3000;
+    }
+  }
 
   return parsed;
 }

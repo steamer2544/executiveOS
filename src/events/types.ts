@@ -1,8 +1,8 @@
 // Canonical event type for ExecutiveOS event log.
 // Every event is one JSON object on one line in a JSONL file.
 
-/** The four event sources = the four jsonl files. */
-export type EventSource = "git" | "terminal" | "editor" | "system";
+/** The five event sources = the five jsonl files. */
+export type EventSource = "git" | "terminal" | "editor" | "system" | "screen";
 
 /** Base fields present on every event. */
 export interface BaseEvent {

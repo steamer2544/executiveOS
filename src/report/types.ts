@@ -32,6 +32,7 @@ export interface Digest {
     stateGeneratedAt: string | null; // provenance/staleness
     repos: Array<{ name: string; branch: string | null }>; // watched repos (from git watcher)
     activeRepo: string | null;       // the currently active repo name
+    currentWindow: { title: string; app: string } | null; // active foreground window (from screen watcher)
   };
 
   recommended: {

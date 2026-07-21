@@ -52,6 +52,7 @@ function seedState(partial: Partial<State>): void {
     tests: "unknown",
     blocked: false,
     blockedReason: null,
+    currentWindow: null,
     activity: { active: true, idleMs: 0 },
     activeRepo: null,
     repos: [],

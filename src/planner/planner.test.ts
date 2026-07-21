@@ -35,6 +35,7 @@ function makeState(overrides: Partial<State> = {}): State {
     tests: "unknown",
     blocked: false,
     blockedReason: null,
+    currentWindow: null,
     activity: { active: true, idleMs: null },
     activeRepo: null,
     repos: [],

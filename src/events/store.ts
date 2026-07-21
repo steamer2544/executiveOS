@@ -104,9 +104,9 @@ export async function tail(
     return events.slice(-n);
   }
 
-  // All sources: read all 4 logs, merge, sort ascending by seq (primary),
+  // All sources: read every log, merge, sort ascending by seq (primary),
   // ts ascending (tie-break only if seq missing), return last n.
-  const sources: EventSource[] = ["git", "terminal", "editor", "system"];
+  const sources: EventSource[] = ["git", "terminal", "editor", "system", "screen"];
   const all: ExecEvent[] = [];
   for (const src of sources) {
     const events = await read(src);

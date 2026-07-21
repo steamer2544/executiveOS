@@ -4,6 +4,7 @@ import type { Config } from "../config.js";
 import type { Watcher } from "./index.js";
 import { createGitWatcher } from "./git.js";
 import { createFsWatcher } from "./fs.js";
+import { createScreenWatcher } from "./screen.js";
 
 /** Result of building watchers from config. */
 export function buildWatchers(config: Config): { watchers: Watcher[]; activeNames: string[] } {
@@ -54,6 +55,14 @@ export function buildWatchers(config: Config): { watchers: Watcher[]; activeName
       createFsWatcher({ paths: fsConfig.paths ?? [process.cwd() + "/src"], debounceMs: fsConfig.debounceMs ?? 300 })
     );
     activeNames.push("fs");
+  }
+
+  // Screen watcher — only when explicitly enabled in config.
+  if (config.screen?.window?.enabled === true) {
+    watchers.push(
+      createScreenWatcher({ pollMs: config.screen.window.pollMs ?? 3000 })
+    );
+    activeNames.push("screen");
   }
 
   return { watchers, activeNames };

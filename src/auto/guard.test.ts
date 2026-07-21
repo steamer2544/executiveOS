@@ -41,6 +41,7 @@ function makeState(): State {
     tests: "failing",
     blocked: false,
     blockedReason: null,
+    currentWindow: null,
     activity: { active: true, idleMs: 5000 },
     activeRepo: null,
     repos: [],

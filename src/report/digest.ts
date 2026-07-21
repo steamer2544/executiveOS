@@ -42,7 +42,7 @@ export function buildDigest(opts?: DigestOptions): Digest {
       available: false,
       project: null, task: null, deadline: null, currentFile: null,
       tests: null, blocked: null, blockedReason: null, branch: null,
-      idle: null, stateGeneratedAt: null, repos: [], activeRepo: null,
+      idle: null, stateGeneratedAt: null, repos: [], activeRepo: null, currentWindow: null,
     };
   } else {
     now = {
@@ -59,6 +59,7 @@ export function buildDigest(opts?: DigestOptions): Digest {
       stateGeneratedAt: rawState.generatedAt ?? null,
       repos: ((rawState as any).repos ?? []).map((r: { name: string; branch: string | null }) => ({ name: r.name, branch: r.branch ?? null })),
       activeRepo: (rawState as any).activeRepo ?? null,
+      currentWindow: (rawState as any).currentWindow ?? null,
     };
   }
 
@@ -241,6 +242,10 @@ export function renderDigest(d: Digest): string {
     if (d.now.repos.length > 1) {
       const repoList = d.now.repos.map((r) => (r.name === d.now.activeRepo ? r.name + "*" : r.name) + " (" + (r.branch ?? "no branch") + ")").join(", ");
       lines.push("- **Repos:** " + repoList);
+    }
+    // Screen window — "Looking at: ..." line when present.
+    if (d.now.currentWindow) {
+      lines.push("- **Looking at:** " + d.now.currentWindow.title + "  (" + d.now.currentWindow.app + ")");
     }
   }
   lines.push("");

@@ -217,7 +217,7 @@ async function refresh() {
       ["Blocked", n.blocked ? \`<span class="pill ask">yes</span> \${esc(n.blockedReason||"")}\` : "no"],
       ["Branch", dash(n.branch)], ["Deadline", dash(n.deadline)],
       ["Current file", dash(n.currentFile)], ["Idle", n.idle===true?"yes":n.idle===false?"no":dash(null)],
-    ]) + (n.repos && n.repos.length > 1 ? \`<div class="row"><span class="k">Repos</span><span class="v">\${repoList(n.repos, n.activeRepo)}</span></div>\` : "")
+    ]) + (n.currentWindow ? \`<div class="row"><span class="k">Looking at</span><span class="v">\${esc(n.currentWindow.title)} <span class="muted">(\${esc(n.currentWindow.app)})</span></span></div>\` : "") + (n.repos && n.repos.length > 1 ? \`<div class="row"><span class="k">Repos</span><span class="v">\${repoList(n.repos, n.activeRepo)}</span></div>\` : "")
       : "<span class='muted'>No state yet.</span>";
 
     const rec = dg.recommended;

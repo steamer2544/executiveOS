@@ -31,7 +31,7 @@ import { inferredPath } from "./paths.js";
 import { runAdvisor, decideProposal } from "./advisor/advisor.js";
 import { readStore, pending } from "./advisor/store.js";
 
-const VALID_SOURCES: EventSource[] = ["git", "terminal", "editor", "system"];
+const VALID_SOURCES: EventSource[] = ["git", "terminal", "editor", "system", "screen"];
 
 function printUsage(): void {
   process.stdout.write(`
@@ -63,7 +63,7 @@ Commands:
   download-model [id]                           Download a browser-wasm Whisper model for offline transcription
   --help                                        Show this help
 
-Sources: git, terminal, editor, system
+Sources: git, terminal, editor, system, screen
 
 Examples:
   bun run src/index.ts init

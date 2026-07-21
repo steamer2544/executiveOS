@@ -18,7 +18,7 @@ function ctx(over?: Partial<Context["state"]>): Context {
       generatedAt: "x", eventCount: 1, lastEventTs: null, currentProject: "myshi",
       currentTask: "fix login", deadline: null, currentFile: null, recentFiles: [],
       git: { branch: "feat/login", lastCommit: null }, tests: "failing", blocked: false,
-      blockedReason: null, activity: { active: true, idleMs: 0 }, activeRepo: null, repos: [], ...over,
+      blockedReason: null, currentWindow: null, activity: { active: true, idleMs: 0 }, activeRepo: null, repos: [], ...over,
     },
     recentEvents: [],
   };

@@ -45,6 +45,9 @@ export interface State {
     lastActivityTs: string | null;
   }>;
 
+  // ── Screen (from screen.window events) ─────────────────────────────────
+  currentWindow: { title: string; app: string } | null;
+
   // ── Health signals (from system.* events) ──────────────────────────────
   tests: "passing" | "failing" | "unknown";
   blocked: boolean;
