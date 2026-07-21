@@ -7,6 +7,9 @@ import type { Watcher } from "./index.js";
 import type { EventSource } from "../events/types.js";
 
 const IGNORE_DIRS = [".git", "node_modules", ".executive"];
+// Editor/OS temp + backup suffixes we never treat as "the file being worked on"
+// (atomic-write temps like "foo.jsonl.tmp", vim swaps, emacs backups).
+const IGNORE_SUFFIXES = ["~", ".tmp", ".temp", ".swp", ".swo", ".swx", ".bak"];
 
 export interface FsWatcherConfig {
   paths: string[];
@@ -14,20 +17,44 @@ export interface FsWatcherConfig {
   repo?: string; // when set, every editor.save event carries data.repo
 }
 
+/**
+ * True if `filePath` should NOT produce an editor.save event. Pure + exported so
+ * the ignore policy is unit-testable without spawning fs.watch.
+ *
+ * Segment-aware (splits on both separators, so it works on relative fs.watch
+ * filenames and absolute paths). Ignores:
+ *  - any segment that is an IGNORE_DIRS entry (".git" / "node_modules" /
+ *    ".executive") — the last also prevents a feedback loop where writing the
+ *    event log would itself trigger an editor.save;
+ *  - any dotfile/dot-dir segment (".env", atomic-write temps like
+ *    ".tmp-notify-test", vim swaps ".x.swp") — but never the "." / ".." parts;
+ *  - a basename ending in an editor/OS temp/backup suffix ("state.json.tmp").
+ */
+export function isIgnoredPath(filePath: string): boolean {
+  const segments = filePath.split(/[/\\]/);
+  if (
+    segments.some(
+      (seg) =>
+        IGNORE_DIRS.includes(seg) ||
+        (seg.startsWith(".") && seg !== "." && seg !== "..")
+    )
+  ) {
+    return true;
+  }
+  const base = segments[segments.length - 1] ?? "";
+  // Atomic-write scratch files often carry ".tmp"/".temp" as an INFIX, e.g.
+  // "page.ts.tmp.16128.167982cfb2a4" (name + ".tmp." + pid + random) — the
+  // suffix check alone misses these because the random token is last.
+  if (base.includes(".tmp.") || base.includes(".temp.")) return true;
+  return IGNORE_SUFFIXES.some((suf) => base.endsWith(suf));
+}
+
 export function createFsWatcher(config: FsWatcherConfig): Watcher {
   // Debounce timers per file path
   const debounceTimers = new Map<string, ReturnType<typeof setTimeout>>();
   const watchers: ReturnType<typeof watch>[] = [];
 
-  function shouldIgnore(filePath: string): boolean {
-    // Segment-aware match: split on both separators and ignore the path if ANY
-    // segment is an ignored dir. This catches ".executive/events/git.jsonl"
-    // (relative filename from fs.watch, no leading separator) as well as
-    // absolute paths — preventing a feedback loop where writing the event log
-    // would itself trigger an editor.save.
-    const segments = filePath.split(/[/\\]/);
-    return segments.some((seg) => IGNORE_DIRS.includes(seg));
-  }
+  const shouldIgnore = isIgnoredPath;
 
   function emitDebounced(filePath: string, changeType: string, b: EventBus): void {
     if (shouldIgnore(filePath)) return;
