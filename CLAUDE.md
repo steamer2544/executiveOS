@@ -387,6 +387,17 @@ docs/scopes/           # per-phase specs (the contract handed to the implementer
   endpoint, `system.note` emit, page has the listening/proposals UI; Web Speech itself is browser-only).
   `capture` verified live (Thai note logged). Files: `src/config.ts`, `src/ui/{server,page}.ts`,
   `src/index.ts`.
+- **Phase 24 — DONE** (architect impl + self-review): **Whisper multilingual transcription** — the dashboard mic
+  now routes through a configurable Whisper-compatible `/v1/audio/transcriptions` endpoint instead of browser
+  Web Speech, for proper Thai↔English code-switching. `config.transcribe` block (`enabled`/`baseUrl`/`model`/
+  `apiKeyEnv`/`language`, default off); `GET /api/config` exposes only `{ transcribe: { enabled } }` (never
+  leaks key/baseUrl); `POST /api/transcribe` is a server-side proxy that forwards audio as multipart with
+  `Authorization: Bearer <key>` read from `process.env[apiKeyEnv]`; the page uses `MediaRecorder` when
+  `transcribe.enabled` is true, falls back to Web Speech when false; the "🔴 Listening…" indicator stays
+  intact. 251 passing tests (1 new — `/api/transcribe` not-configured guard).
+  This is scaffolding only — needs the owner to supply a real Whisper-compatible endpoint + key to validate
+  live (the 9arm gateway is LLM-only, no audio endpoint). Files: `src/config.ts`, `src/ui/{server,page}.ts`,
+  `src/index.ts`. Spec: `docs/scopes/phase-24-whisper.md`.
 - **Loop complete (manual trigger):** `auto --apply` runs the whole chain in one command; the human
   reviews/merges the `executive/change-<id>` branch.
 

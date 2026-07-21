@@ -2,7 +2,7 @@
 
 > **Purpose:** a single doc to resume this project cold if context/memory is lost. Pairs with
 > `CLAUDE.md` (the authoritative phase-by-phase log) and `README.md` (user-facing overview).
-> Last updated at **Phase 23.2** (git `8cbc537`). 250 passing tests, all green.
+> Last updated at **Phase 24** (git `8001d97`). 251 passing tests, all green.
 
 ---
 
@@ -21,7 +21,7 @@ Main loop: **Observe → Understand → Predict → Act → Observe again.**
 
 ---
 
-## 2. Current status — DONE through Phase 23.2
+## 2. Current status — DONE through Phase 24
 
 The full loop works and is validated (including **live against the real LLM gateway**). Phases (see
 `CLAUDE.md` for the detailed entry on each):
@@ -53,8 +53,9 @@ The full loop works and is validated (including **live against the real LLM gate
 | 23 | Voice/text capture | `capture <note>` CLI + dashboard push-to-talk (own-voice, **visible**) → `system.note` feeds the Advisor |
 | 23.1 | Thai/English toggle | language selector for the mic |
 | 23.2 | Hold-to-talk | hold Space to dictate in the dashboard |
+| 24 | Whisper transcription | `config.transcribe` block; `POST /api/transcribe` server-side proxy to Whisper endpoint; MediaRecorder dashboard mic with Web-Speech fallback; scaffolded, needs owner's endpoint+key |
 
-**Test count:** 250 passing, 100% offline (mock backends). Several phases also **validated live** against
+**Test count:** 251 passing, 100% offline (mock backends). Several phases also **validated live** against
 the 9arm Qwen gateway (`work`, `synth`, `infer`, `propose`).
 
 ---
@@ -110,16 +111,10 @@ Every phase = one commit + a `CLAUDE.md` phase entry.
 
 ## 6. Remaining work
 
-### In progress / next: Whisper multilingual transcription (Phase 24 — scoped)
-- **Why:** Thai devs code-switch Thai↔English constantly; Web Speech does one language at a time. Whisper
-  handles code-switching well. Spec: `docs/scopes/phase-24-whisper.md`.
-- **Shape:** browser `MediaRecorder` captures the owner's dictation → POST audio to a new local
-  `/api/transcribe` → server forwards to a **configurable OpenAI-compatible `/v1/audio/transcriptions`**
-  (Whisper) endpoint → returns text → emit `system.note`. New `config.transcribe` block (endpoint, model,
-  apiKeyEnv, default off). **Same listening ethics as §5** (own-voice, visible).
-- **Blocker to validate live:** needs a reachable Whisper endpoint + key (the 9arm gateway is LLM-only; the
-  owner must supply an audio-transcription endpoint). Build the scaffolding + tests offline; the owner wires
-  the endpoint to go live.
+### Needs the owner
+- **Phase 24 (Whisper transcription)** is code-complete/scaffolded but needs the owner to supply a real
+  Whisper-compatible `/v1/audio/transcriptions` endpoint + key to validate live (the 9arm gateway is
+  LLM-only, no audio endpoint).
 
 ### Deliberately deferred (need an owner decision or real pain)
 - **External delivery** (email/Slack/push of the digest & approvals) — outward-facing; needs a channel
