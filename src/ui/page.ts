@@ -77,9 +77,11 @@ export function renderPage(): string {
     <div style="margin-top:8px;display:flex;gap:8px;align-items:center">
       <span class="muted" style="font-size:12.5px">Language</span>
       <select id="lang" onchange="onLangChange()">
-        <option value="th-TH">ไทย</option>
-        <option value="en-US">English</option>
+        <option value="">Auto (best for Thai↔English)</option>
+        <option value="th">ไทย</option>
+        <option value="en">English</option>
       </select>
+      <span class="muted" style="font-size:11.5px">applies to all modes</span>
     </div>
     <div id="listenSchedule" class="muted" style="margin-top:6px;font-size:12.5px"></div>
     <div class="muted" style="margin-top:4px;font-size:12.5px">Tip: hold <b>Space</b> to talk (walkie-talkie), release to stop.</div>
@@ -123,13 +125,8 @@ export function renderPage(): string {
         </div>
 
         <div class="field">
-          <span class="muted" style="font-size:12.5px;min-width:70px">Language</span>
-          <select id="setLang">
-            <option value="">Auto (best for Thai↔English)</option>
-            <option value="th">ไทย (th)</option>
-            <option value="en">English (en)</option>
-          </select>
           <button onclick="saveSettings()">Save</button>
+          <span class="muted" style="font-size:12px">Language is set in the Listening card above (applies to every mode).</span>
         </div>
       </div>
     </div>
@@ -301,12 +298,13 @@ let capture = { enabled: false, from: "09:00", to: "18:00" };
 let cfgT = { mode: "webspeech", baseUrl: "", model: "", apiKeyEnv: "", language: null, wasmModel: "Xenova/whisper-base" };
 let presets = {};
 let recog = null, listening = false, userStopped = false;
-let lang = localStorage.getItem("execLang") || "th-TH";
 let mediaRec = null, chunks = [];
 const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
 const useMediaRec = () => cfgT.mode === "whisper-api" || cfgT.mode === "browser-wasm";
 const canListen = () => useMediaRec() ? !!(navigator.mediaDevices && window.MediaRecorder) : !!SR;
-function wasmLang() { return cfgT.language === "th" ? "thai" : cfgT.language === "en" ? "english" : null; }
+// ONE language control (cfgT.language: ""=auto | "th" | "en"), mapped per backend:
+function wasmLang() { return cfgT.language === "th" ? "thai" : cfgT.language === "en" ? "english" : null; } // browser-wasm
+function webspeechLang() { return cfgT.language === "en" ? "en-US" : "th-TH"; } // Web Speech has no true auto → default th
 
 async function startMediaRec() {
   try {
@@ -359,10 +357,12 @@ async function handleWasmBlob(blob) {
   } catch (e) { $("listenInterim").textContent = ""; toast("wasm transcribe failed — download the model in settings first"); }
 }
 
-function onLangChange() {
-  lang = $("lang").value; localStorage.setItem("execLang", lang);
-  toast("language: " + (lang === "th-TH" ? "ไทย" : "English"));
-  if (listening && recog) { try { recog.lang = lang; recog.stop(); } catch {} } // onend restarts with new lang
+async function onLangChange() {
+  cfgT.language = $("lang").value; // "" | "th" | "en"
+  toast("language: " + (cfgT.language === "th" ? "ไทย" : cfgT.language === "en" ? "English" : "Auto"));
+  // persist to config so it survives reload and applies to every backend
+  try { await fetch("/api/settings", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ transcribe: { language: cfgT.language } }) }); } catch {}
+  if (listening && recog) { try { recog.lang = webspeechLang(); recog.stop(); } catch {} } // onend restarts with new lang
 }
 
 // ── Settings (transcription backend) ─────────────────────────────────────────
@@ -372,7 +372,6 @@ function populateSettings() {
   $("setModel").value = cfgT.model || "";
   $("setKeyEnv").value = cfgT.apiKeyEnv || "";
   $("setWasmModel").value = cfgT.wasmModel || "";
-  $("setLang").value = cfgT.language || "";
   onModeChange();
 }
 function onModeChange() {
@@ -394,7 +393,7 @@ async function saveSettings() {
     model: $("setModel").value.trim(),
     apiKeyEnv: $("setKeyEnv").value.trim() || "EXECUTIVE_TRANSCRIBE_KEY",
     wasmModel: $("setWasmModel").value.trim() || "Xenova/whisper-base",
-    language: $("setLang").value,
+    language: cfgT.language, // the single Language selector in the Listening card owns this
   };
   try {
     const r = await fetch("/api/settings", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ transcribe: patch }) });
@@ -443,7 +442,7 @@ function startListen() {
   if (!SR) return;
   try {
     recog = new SR();
-    recog.continuous = true; recog.interimResults = true; recog.lang = lang;
+    recog.continuous = true; recog.interimResults = true; recog.lang = webspeechLang();
     recog.onresult = (e) => {
       let interim = "";
       for (let i = e.resultIndex; i < e.results.length; i++) {
@@ -471,7 +470,7 @@ async function loadCaptureConfig() {
     if (j.transcribe) cfgT = j.transcribe;
     if (j.presets) presets = j.presets;
   } catch {}
-  const sel = $("lang"); if (sel) sel.value = lang;
+  const sel = $("lang"); if (sel) sel.value = cfgT.language || "";
   populateSettings();
   setListenUI();
 }
