@@ -472,6 +472,31 @@ docs/scopes/           # per-phase specs (the contract handed to the implementer
   `test:e2e` script is `node …`, not `bun …`. Uses a temp `EXECUTIVE_HOME` that junction-links the
   already-downloaded `vendor/`+`models/`, so it never touches real runtime data. `playwright` added to
   devDependencies. Verified passing (8/8 checks: JFK line transcribed, language persists + survives reload).
+- **Phase 26 — DONE** (qwen impl + architect review + live-validated, commit `cea47f5`): **Multi-repo
+  watching** — the runtime can now watch **N repos at once** instead of one, and the derived state stays
+  **coherent with the repo the owner is actively working in**. New `config.watch.repos[]`
+  (`{path,name?,pollMs?,watchFiles?,filePaths?,fileDebounceMs?}`); when present+non-empty it is
+  authoritative — the `watch`/`ui` daemon builds **one GitWatcher (+ optional FsWatcher) per repo** via a
+  new shared `buildWatchers(config)` (`src/watchers/build.ts`, used by both the `watch` and `ui` cases),
+  wiring each FsWatcher's `repo` tag. The **State Builder** groups repo-tagged events (`git.commit`/
+  `git.branch_switch`/`editor.save` carrying `data.repo`) per repo, picks **`activeRepo`** = the
+  highest-`seq` repo-tagged event, builds a **`state.repos[]`** summary (name/branch/lastCommit/
+  lastActivityTs, newest-activity first), and derives the top-level `git.branch`/`git.lastCommit`/
+  `currentProject`/`currentTask`-fallback **from the active repo** — so Project/Branch/Task move together.
+  Digest + UI show a `Repos: a* (branch), b (branch)` line (`*` = active) when >1 repo. **Backward
+  compatible:** no `repos` key → the legacy single-repo path unchanged; an event log with **no** repo tags
+  → the original global derivation (a defensive fallback in the builder). Config normalizes each entry
+  (`name`←basename default, defaults filled) and **de-dups name collisions** (` (2)`/` (3)` + a stderr
+  warning) since `name` keys the per-repo map. **NOTE:** the FsWatcher already accepted an optional `repo`
+  and the State/Digest/UI were already multi-repo-shaped in the working tree — the only real gap was that
+  the daemon could construct just one watcher pair; this phase closes exactly that. Deterministic, NO LLM.
+  279 passing tests (19 new). Reviewed **live in temp git repos** against every §5 criterion: two-repo
+  active-flip (commit B → `active=repoB/feat/beta`; commit A → `active=repoA/feat/alpha`), `editor.save`
+  carries `repo`, no double-watch (1 `git.commit`/real commit), banner lists repos. **Architect fixes:**
+  removed now-dead `createGitWatcher`/`createFsWatcher` imports in `src/index.ts`; corrected a "Phase 27"
+  → "Phase 26" test comment. Spec: `docs/scopes/phase-26-multi-repo.md`. Files: `src/config.ts`,
+  `src/watchers/build.ts`, `src/index.ts` (+ `src/state/*`, `src/report/*`, `src/ui/page.ts`,
+  `src/watchers/fs.ts` were the already-present multi-repo groundwork, verified).
 - **Loop complete (manual trigger):** `auto --apply` runs the whole chain in one command; the human
   reviews/merges the `executive/change-<id>` branch.
 
