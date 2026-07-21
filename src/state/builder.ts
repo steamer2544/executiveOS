@@ -236,20 +236,18 @@ export function buildState(now?: Date): { state: State; context: Context } {
     activeRepo = d.repo as string;
   }
 
-  // Per-repo summary array, sorted by lastActivityTs descending (newest first).
+  // Per-repo summary array, newest-activity first. Sort by latestActivitySeq
+  // (monotonic, unique) — NOT by lastActivityTs, which ties when two repos have
+  // events in the same millisecond and would then fall back to insertion order
+  // non-deterministically. Same "highest seq wins" rule used for activeRepo.
   const repos = Array.from(repoMap.entries())
+    .sort(([, a], [, b]) => b.latestActivitySeq - a.latestActivitySeq)
     .map(([name, r]) => ({
       name,
       branch: r.branch,
       lastCommit: r.latestCommit,
       lastActivityTs: r.latestActivityTs,
-    }))
-    .sort((a, b) => {
-      if (!a.lastActivityTs && !b.lastActivityTs) return 0;
-      if (!a.lastActivityTs) return 1;
-      if (!b.lastActivityTs) return -1;
-      return b.lastActivityTs < a.lastActivityTs ? -1 : b.lastActivityTs > a.lastActivityTs ? 1 : 0;
-    });
+    }));
 
   // Derive top-level git fields from the active repo (coherence: Project/Branch move together).
   let gitBranch: string | null = null;

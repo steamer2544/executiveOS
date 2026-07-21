@@ -531,12 +531,13 @@ describe("buildState — multi-repo: state.repos shape and sort", () => {
     // Write events with distinct timestamps by writing raw JSONL directly.
     const gitDir = eventLogPath("git").substring(0, eventLogPath("git").lastIndexOf("/"));
     mkdirSync(gitDir, { recursive: true });
-    // Repo C: newest activity (ts 08)
-    writeFileSync(eventLogPath("git"), JSON.stringify({ seq: 1, id: randomUUID(), ts: "2026-01-01T00:00:08.000Z", source: "git", type: "git.commit", data: { sha: "ccc", subject: "C1", branch: "main", repo: "C" } }) + "\n", { flag: "w" });
-    // Repo A: oldest activity (ts 01)
-    writeFileSync(eventLogPath("git"), JSON.stringify({ seq: 2, id: randomUUID(), ts: "2026-01-01T00:00:01.000Z", source: "git", type: "git.commit", data: { sha: "aaa", subject: "A1", branch: "main", repo: "A" } }) + "\n", { flag: "a" });
-    // Repo B: middle activity (ts 05)
-    writeFileSync(eventLogPath("git"), JSON.stringify({ seq: 3, id: randomUUID(), ts: "2026-01-01T00:00:05.000Z", source: "git", type: "git.commit", data: { sha: "bbb", subject: "B1", branch: "main", repo: "B" } }) + "\n", { flag: "a" });
+    // Realistic: seq increases with ts (events are appended in time order).
+    // Repo A: oldest activity (seq 1, ts 01)
+    writeFileSync(eventLogPath("git"), JSON.stringify({ seq: 1, id: randomUUID(), ts: "2026-01-01T00:00:01.000Z", source: "git", type: "git.commit", data: { sha: "aaa", subject: "A1", branch: "main", repo: "A" } }) + "\n", { flag: "w" });
+    // Repo B: middle activity (seq 2, ts 05)
+    writeFileSync(eventLogPath("git"), JSON.stringify({ seq: 2, id: randomUUID(), ts: "2026-01-01T00:00:05.000Z", source: "git", type: "git.commit", data: { sha: "bbb", subject: "B1", branch: "main", repo: "B" } }) + "\n", { flag: "a" });
+    // Repo C: newest activity (seq 3, ts 08)
+    writeFileSync(eventLogPath("git"), JSON.stringify({ seq: 3, id: randomUUID(), ts: "2026-01-01T00:00:08.000Z", source: "git", type: "git.commit", data: { sha: "ccc", subject: "C1", branch: "main", repo: "C" } }) + "\n", { flag: "a" });
 
     const { state } = buildState(now);
 
@@ -554,9 +555,11 @@ describe("buildState — multi-repo: state.repos shape and sort", () => {
       expect(r.lastCommit).toHaveProperty("ts");
     }
 
-    // Sorted by lastActivityTs descending: C (08) > B (05) > A (01)
+    // Sorted newest-first by latestActivitySeq (== ts order here): C (3) > B (2) > A (1)
     expect(state.repos[0]!.name).toBe("C");
     expect(state.repos[1]!.name).toBe("B");
     expect(state.repos[2]!.name).toBe("A");
+    // repos[0] must equal activeRepo (highest-seq repo-tagged event)
+    expect(state.activeRepo).toBe("C");
   });
 });
