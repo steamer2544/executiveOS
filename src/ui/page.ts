@@ -47,6 +47,9 @@ export function renderPage(): string {
   .muted { color:var(--muted); } .mono { font-family:ui-monospace, Menlo, Consolas, monospace; }
   .prop { border:1px solid var(--line); border-radius:10px; padding:12px 14px; margin-bottom:10px; }
   .prop .cat { font-size:10.5px; text-transform:uppercase; letter-spacing:.06em; color:var(--accent); font-weight:700; }
+  .prop .badge { font-size:10.5px; padding:2px 8px; border-radius:999px; margin-left:8px; }
+  .prop .badge.exec { background:var(--accent); color:#fff; }
+  .prop .badge.record { background:transparent; border:1px solid var(--line); color:var(--muted); }
   .prop .title { font-weight:650; margin:2px 0 4px; }
   .prop .detail { color:var(--muted); margin-bottom:8px; }
   .prop input { margin-bottom:8px; }
@@ -261,7 +264,7 @@ async function loadProposals() {
     const items = d.proposals || [];
     $("proposals").innerHTML = items.length ? items.map(p => \`
       <div class="prop" id="prop-\${p.id}">
-        <div class="cat">\${esc(p.category)}</div>
+        <div class="cat">\${esc(p.category)}\${p.executable ? '<span class="badge exec">⚙ will create a branch</span>' : '<span class="badge record">records your decision</span>'}</div>
         <div class="title">\${esc(p.title)}</div>
         <div class="detail">\${esc(p.detail)}</div>
         <input type="text" id="act-\${p.id}" value="\${esc(p.action)}" />
@@ -278,7 +281,12 @@ async function decideProp(id, decision) {
     const action = ($("act-"+id)||{}).value; const note = ($("note-"+id)||{}).value;
     const r = await fetch("/api/proposal/decide", { method:"POST", headers:{"content-type":"application/json"}, body: JSON.stringify({ id, decision, action, note }) });
     const j = await r.json(); if (!j.ok) throw new Error(j.error||"failed");
-    toast(decision === "approve" ? "approved ✓" : "dismissed");
+    const ex = j.proposal && j.proposal.execution;
+    if (decision === "approve" && ex) {
+      toast("approved ✓ — " + (ex.branch ? ("branched: " + ex.branch) : ex.message));
+    } else {
+      toast(decision === "approve" ? "approved ✓" : "dismissed");
+    }
     await loadProposals();
   } catch (e) { toast("error: " + e.message); }
 }

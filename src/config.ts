@@ -73,9 +73,12 @@ export interface Config {
   };
   /** Proactive Advisor / proposal queue (defaults applied when absent). OFF by default. */
   advisor?: {
-    enabled?: boolean;   // if true, the watch daemon periodically asks the LLM to PROPOSE actions. Default false.
-    cooldownMs?: number; // minimum ms between two advisor calls in the daemon. Default 600000 (10 min).
-    maxOpen?: number;    // cap on pending proposals in the queue. Default 8.
+    enabled?: boolean;        // if true, the watch daemon periodically asks the LLM to PROPOSE actions. Default false.
+    cooldownMs?: number;      // minimum ms between two advisor calls in the daemon. Default 600000 (10 min).
+    maxOpen?: number;         // cap on pending proposals in the queue. Default 8.
+    applyOnApprove?: boolean; // if true, approving an EXECUTABLE proposal commits to an isolated branch
+                              // immediately (still never merges). Default false → approve leaves a
+                              // reviewed dry-run changeset for the owner to `execute --apply`.
   };
   /** Voice/text capture (defaults applied when absent). The dashboard listens to YOU (your own
    *  dictated notes) and, during work hours, can start listening automatically. OFF by default. */
@@ -163,6 +166,7 @@ export function defaultConfig(): Config {
       enabled: false,
       cooldownMs: 600000,
       maxOpen: 8,
+      applyOnApprove: false,
     },
     capture: {
       enabled: false,
@@ -319,6 +323,7 @@ export function loadConfig(): Config {
   parsed.advisor.enabled = parsed.advisor.enabled ?? defaults.advisor!.enabled!;
   parsed.advisor.cooldownMs = parsed.advisor.cooldownMs ?? defaults.advisor!.cooldownMs!;
   parsed.advisor.maxOpen = parsed.advisor.maxOpen ?? defaults.advisor!.maxOpen!;
+  parsed.advisor.applyOnApprove = parsed.advisor.applyOnApprove ?? defaults.advisor!.applyOnApprove!;
 
   // Merge missing capture fields with defaults.
   if (!parsed.capture) {

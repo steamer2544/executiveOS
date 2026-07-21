@@ -5,6 +5,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync } from "
 import { randomUUID } from "node:crypto";
 import { execRoot, advisorPath } from "../paths.js";
 import type { AdvisorStore, Proposal, ProposalDraft, ProposalStatus } from "./types.js";
+import { sanitizeExecutable } from "./advisor.js";
 
 /** Read the queue defensively (missing/corrupt → empty). Never throws. */
 export function readStore(): AdvisorStore {
@@ -36,6 +37,7 @@ export function pendingTitles(store: AdvisorStore): string[] {
  * Add drafts as pending proposals. Skips any whose title matches an existing
  * NON-rejected item (dedup), and caps the number of pending items at `maxOpen`
  * (oldest-pending are kept; excess new drafts are dropped). Returns the added items.
+ * Applies `sanitizeExecutable` to enforce the code filter on every draft.
  */
 export function addDrafts(
   store: AdvisorStore,
@@ -51,6 +53,8 @@ export function addDrafts(
     const key = (d.title ?? "").toLowerCase().trim();
     if (!key || seen.has(key)) continue;
     if (pendingCount >= maxOpen) break;
+    // Apply the code filter — runs on every draft regardless of backend.
+    const sanitized = sanitizeExecutable(d);
     const p: Proposal = {
       id: randomUUID(),
       createdAt: now,
@@ -60,6 +64,9 @@ export function addDrafts(
       action: d.action || "",
       status: "pending",
       backend,
+      executable: sanitized.executable,
+      repo: sanitized.executable ? sanitized.repo : undefined,
+      files: sanitized.executable ? sanitized.files : undefined,
     };
     store.items.push(p);
     added.push(p);

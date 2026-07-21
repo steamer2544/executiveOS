@@ -134,30 +134,56 @@ export function writeSynthReport(r: SynthReport): void {
 /**
  * Run the full synthesis pipeline:
  *   load proposal → select files → synthesize → validate → dry-run executor → report
+ *
+ * When `opts.instruction` is set, skip loading `proposal.json` and use the
+ * instruction text directly as the synthesis prompt. Backward-compatible:
+ * when absent, behavior is byte-identical to today.
  */
 export async function runSynth(opts: SynthOptions): Promise<SynthReport> {
   const messages: string[] = [];
 
-  // 1. Load the proposal.
-  const proposal = loadProposal(opts.proposalId ?? null);
-  if (!proposal) {
-    return {
-      ok: false,
-      proposalId: null,
-      synthesizer: null,
-      selectedFiles: [],
-      changeSetWritten: false,
-      validation: { ok: false, errors: [] },
-      execReport: null,
-      messages: ["no proposal found — run `work` first"],
-      error: null,
+  // 1. Load the proposal (or use instruction override).
+  let proposal: Proposal;
+  let proposalId: string | null;
+  if (opts.instruction) {
+    // Instruction override — skip proposal.json entirely.
+    proposal = {
+      id: "instruction",
       generatedAt: new Date().toISOString(),
-    };
+      status: "ok",
+      backend: "instruction",
+      action: { kind: "instruction" as any, reason: "", priority: 0, confidence: 0, forbidden: false, disposition: "act" as any },
+      summary: opts.instruction,
+      steps: [],
+      raw: opts.instruction,
+      error: null,
+      basedOn: { stateGeneratedAt: new Date().toISOString(), topActionKind: "instruction" as any },
+    } as Proposal;
+    proposalId = "instruction";
+  } else {
+    const loaded = loadProposal(opts.proposalId ?? null);
+    if (!loaded) {
+      return {
+        ok: false,
+        proposalId: null,
+        synthesizer: null,
+        selectedFiles: [],
+        changeSetWritten: false,
+        validation: { ok: false, errors: [] },
+        execReport: null,
+        messages: ["no proposal found — run `work` first"],
+        error: null,
+        generatedAt: new Date().toISOString(),
+      };
+    }
+    proposal = loaded;
+    proposalId = loaded.id;
   }
+
   if (proposal.status !== "ok") {
     return {
       ok: false,
-      proposalId: proposal.id,
+      proposalId,
       synthesizer: null,
       selectedFiles: [],
       changeSetWritten: false,
@@ -193,7 +219,7 @@ export async function runSynth(opts: SynthOptions): Promise<SynthReport> {
   } catch (err) {
     return {
       ok: false,
-      proposalId: proposal.id,
+      proposalId,
       synthesizer: synth.name,
       selectedFiles: files.map((f) => f.path),
       changeSetWritten: false,
@@ -217,7 +243,7 @@ export async function runSynth(opts: SynthOptions): Promise<SynthReport> {
     }
     return {
       ok: false,
-      proposalId: proposal.id,
+      proposalId,
       synthesizer: result.backend,
       selectedFiles: files.map((f) => f.path),
       changeSetWritten: true,
@@ -244,7 +270,7 @@ export async function runSynth(opts: SynthOptions): Promise<SynthReport> {
   // 9. Fill report.
   return {
     ok: execReport.ok,
-    proposalId: proposal.id,
+    proposalId,
     synthesizer: result.backend,
     selectedFiles: files.map((f) => f.path),
     changeSetWritten: true,

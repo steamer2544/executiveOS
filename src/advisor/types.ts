@@ -19,6 +19,19 @@ export interface Proposal {
   note?: string;          // the owner's optional addition at decision time
   decidedAt?: string;     // ISO, set when approved/rejected
   backend?: string;       // which Advisor produced it
+  // Execution fields (Phase 27): only meaningful for executable proposals.
+  executable?: boolean;   // true ONLY for a code task on a real repo (see guardrail). Default false.
+  repo?: string;          // target repo NAME (matches State.repos[].name) for an executable proposal.
+  files?: string[];       // optional file hints fed to the synthesizer.
+  execution?: {           // set after an approve that executed
+    ran: boolean;
+    applied: boolean;     // true if it committed to a branch
+    branch: string | null; // executive/change-<id> when applied
+    changeSetWritten: boolean;
+    valid: boolean;       // validation result
+    testPassed: boolean | null;
+    message: string;      // short human summary
+  };
 }
 
 /** Raw Advisor output before it becomes a queued Proposal. */
@@ -27,6 +40,10 @@ export interface ProposalDraft {
   title: string;
   detail: string;
   action: string;
+  // Phase 27: model's suggestion; the code filter has final say.
+  executable?: boolean;
+  repo?: string;
+  files?: string[];
 }
 
 /** Persisted queue (.executive/advisor.json). */

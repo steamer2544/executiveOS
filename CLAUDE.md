@@ -497,6 +497,41 @@ docs/scopes/           # per-phase specs (the contract handed to the implementer
   → "Phase 26" test comment. Spec: `docs/scopes/phase-26-multi-repo.md`. Files: `src/config.ts`,
   `src/watchers/build.ts`, `src/index.ts` (+ `src/state/*`, `src/report/*`, `src/ui/page.ts`,
   `src/watchers/fs.ts` were the already-present multi-repo groundwork, verified).
+- **Phase 26.1 — fix** (architect, this commit): **`state.repos` ordering was non-deterministic.** The
+  Phase 26 builder sorted the per-repo summary by `lastActivityTs` (wall-clock), which **ties** when two
+  repos have events in the same millisecond and then falls back to insertion order — a real bug (repo list
+  order, and `repos[0]` vs `activeRepo`, could disagree) that surfaced as a **flaky test** (~50%). Fixed by
+  sorting on `latestActivitySeq` (monotonic, unique — the same "highest seq wins" rule `activeRepo` uses),
+  so `repos[0]` always equals `activeRepo`. Corrected the one test that had encoded the ts-based order with
+  an unrealistic seq/ts inversion. Files: `src/state/builder.ts`, `src/state/builder.test.ts`.
+- **Phase 27 — DONE** (qwen impl + architect review + live-validated, this commit): **Approve → Execute
+  (code proposals) + Advisor life-domain proposals.** Clicking **Approve** on an Advisor proposal used to
+  only record the decision; now, when a proposal is a **code task** (`executable:true` with a target
+  `repo`), approving runs the existing **Synth → Executor** pipeline: it synthesizes a `ChangeSet` from the
+  proposal's `action` (new `runSynth({instruction})` override — backward-compatible), validates it, and —
+  only when the owner opted in (`config.advisor.applyOnApprove` **default false**, or CLI `--apply`) —
+  commits to an **isolated `executive/change-<id>` branch** (reversible, HEAD returns to the original
+  branch, **never merges**). Non-code proposals keep the record-only behavior. The Advisor prompt is
+  **broadened to propose across ALL of life (incl. relationships/money/life-goals) as suggestions** — but a
+  **hard code filter `sanitizeExecutable()`** (runs on every draft at enqueue, regardless of backend)
+  forces `executable:false` for any sensitive category (relationship/moral/spend/goal/…), a work/code
+  category, a non-empty `repo`, and a non-empty `action` — so the LLM can never route a life/money task into
+  the executor. New `src/advisor/execute.ts` (`executeProposal`, never throws), `decideProposal` is now
+  **async** and wired to it; new CLI `approve <id> [--apply] [--note]` / `dismiss <id>`; the GUI cards show a
+  "⚙ will create a branch" vs "records your decision" badge and the execution outcome. `config.advisor.
+  applyOnApprove` added. 322 passing tests (sanitize: every keyword; execute: real temp-git dry-run / apply
+  / **unsafe `../../etc/passwd` changeset → validation blocks, no branch**). Reviewed **live via the real
+  CLI**: life approve → record-only, no branch; code approve → dry-run changeset, no branch; code approve
+  `--apply` → `executive/change-*` branch created + HEAD back + clean tree + commit on the branch.
+  **Architect fixes:** added `applyOnApprove` to `defaultConfig()` + the `loadConfig` merge (qwen left it
+  interface-only — functionally safe but off-pattern). **Known minor limitations (flagged, not blocking):**
+  the instruction-override changeset id is fixed (`synth-instruction`) → repeated executable approvals can
+  collide on the branch name (real synth varies by generated title); `resolveRepoRoot` returns `undefined`
+  for a misconfigured `repos` entry missing `path` → a caught, cryptic "paths[0]" synth error (no branch,
+  safe). Spec: `docs/scopes/phase-27-approve-execute.md`. Files: `src/advisor/{execute,advisor,store,mock,
+  anthropic,types}.ts`, `src/synth/{synth,types}.ts`, `src/config.ts`, `src/index.ts`, `src/ui/{server,
+  page}.ts`. **NOT yet run against the live gateway** (real Advisor + real Synth over the 9arm Qwen — left
+  for the owner; offline MockAdvisor/MockSynthesizer cover both paths).
 - **Loop complete (manual trigger):** `auto --apply` runs the whole chain in one command; the human
   reviews/merges the `executive/change-<id>` branch.
 

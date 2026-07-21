@@ -228,7 +228,12 @@ export function startUiServer(opts: UiServerOptions) {
           if (!body.id || (body.decision !== "approve" && body.decision !== "reject")) {
             return Response.json({ ok: false, error: "need { id, decision: approve|reject }" }, { status: 400 });
           }
-          const p = decideProposal(body.id, body.decision, { action: body.action, note: body.note });
+          const p = await decideProposal(
+            body.id,
+            body.decision,
+            { action: body.action, note: body.note },
+            loadConfig(),
+          );
           if (!p) return Response.json({ ok: false, error: "unknown proposal id" }, { status: 404 });
           return Response.json({ ok: true, proposal: p });
         } catch (err) {

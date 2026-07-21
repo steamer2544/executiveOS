@@ -28,7 +28,7 @@ import { installHooks } from "./hooks/install.js";
 import { startUiServer } from "./ui/server.js";
 import { runInference, writeInference } from "./infer/infer.js";
 import { inferredPath } from "./paths.js";
-import { runAdvisor } from "./advisor/advisor.js";
+import { runAdvisor, decideProposal } from "./advisor/advisor.js";
 import { readStore, pending } from "./advisor/store.js";
 
 const VALID_SOURCES: EventSource[] = ["git", "terminal", "editor", "system"];
@@ -57,6 +57,8 @@ Commands:
   infer                                         Ask the LLM to guess block/deadline (suggestions only) → inferred.json
   propose                                       Ask the Advisor for proactive proposals (adds to the queue)
   proposals                                     List the pending proposals awaiting your approval
+  approve <proposalId> [--apply] [--note ".."]  Approve a proposal (runs Synth→Executor if executable)
+  dismiss <proposalId>                          Reject a pending proposal
   capture <note>                                Capture a quick note (feeds the Advisor); the dashboard also does this by voice
   download-model [id]                           Download a browser-wasm Whisper model for offline transcription
   --help                                        Show this help
@@ -841,11 +843,78 @@ async function main(): Promise<void> {
         process.exit(0);
       }
       for (const p of items) {
-        process.stdout.write("\n[" + p.category + "] " + p.title + "  (" + p.id.slice(0, 8) + ")\n");
+        process.stdout.write(
+          "\n[" + p.category + "] " + p.title + (p.executable ? "  [executable]" : "") +
+            "  (" + p.id.slice(0, 8) + ")\n",
+        );
         process.stdout.write("  " + p.detail + "\n");
         process.stdout.write("  → " + p.action + "\n");
       }
-      process.stdout.write("\nApprove/dismiss in the dashboard (`ui`).\n");
+      process.stdout.write("\nApprove/dismiss via `approve <id>` / `dismiss <id>`, or the dashboard (`ui`).\n");
+      process.exit(0);
+      break;
+    }
+
+    case "approve": {
+      if (args.length < 2) {
+        process.stderr.write("Error: approve requires <proposalId>\n");
+        process.exit(1);
+      }
+      const idArg = args[1]!;
+      let forceApply = false;
+      let note: string | undefined;
+      for (let i = 2; i < args.length; i++) {
+        if (args[i] === "--apply") {
+          forceApply = true;
+        } else if (args[i] === "--note" && i + 1 < args.length) {
+          note = args[++i];
+        }
+      }
+      await bootstrap();
+      const config = loadConfig();
+      const store = readStore();
+      const match = store.items.find((p) => p.id === idArg || p.id.startsWith(idArg));
+      if (!match) {
+        process.stderr.write("Error: no proposal found matching id: " + idArg + "\n");
+        process.exit(1);
+      }
+      // --apply forces the apply path for THIS approval only, even if config.advisor.applyOnApprove is false.
+      const effectiveConfig = forceApply
+        ? { ...config, advisor: { ...config.advisor, applyOnApprove: true } }
+        : config;
+      const p = await decideProposal(match.id, "approve", note ? { note } : undefined, effectiveConfig);
+      if (!p) {
+        process.stderr.write("Error: proposal not found\n");
+        process.exit(1);
+      }
+      process.stdout.write("Approved: " + p.title + "\n");
+      if (p.executable === true && p.execution) {
+        process.stdout.write("  executable: yes\n");
+        process.stdout.write("  valid: " + p.execution.valid + "\n");
+        process.stdout.write("  applied: " + p.execution.applied + "\n");
+        if (p.execution.branch) process.stdout.write("  branch: " + p.execution.branch + "\n");
+        if (p.execution.testPassed !== null) process.stdout.write("  testPassed: " + p.execution.testPassed + "\n");
+        process.stdout.write("  " + p.execution.message + "\n");
+      }
+      process.exit(0);
+      break;
+    }
+
+    case "dismiss": {
+      if (args.length < 2) {
+        process.stderr.write("Error: dismiss requires <proposalId>\n");
+        process.exit(1);
+      }
+      const idArg = args[1]!;
+      await bootstrap();
+      const store = readStore();
+      const match = store.items.find((p) => p.id === idArg || p.id.startsWith(idArg));
+      if (!match) {
+        process.stderr.write("Error: no proposal found matching id: " + idArg + "\n");
+        process.exit(1);
+      }
+      const p = await decideProposal(match.id, "reject");
+      process.stdout.write("Dismissed: " + (p?.title ?? idArg) + "\n");
       process.exit(0);
       break;
     }

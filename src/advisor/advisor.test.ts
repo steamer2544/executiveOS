@@ -119,9 +119,9 @@ describe("runAdvisor + decideProposal", () => {
   it("decideProposal approves a queued proposal and returns it", async () => {
     const r = await runAdvisor(ctx(), { config: MOCK_CONFIG, advisorOverride: new MockAdvisor() });
     const id = r.added[0]!.id;
-    const p = decideProposal(id, "approve", { note: "yes please" });
+    const p = await decideProposal(id, "approve", { note: "yes please" }, MOCK_CONFIG);
     expect(p?.status).toBe("approved");
     expect(p?.note).toBe("yes please");
-    expect(decideProposal("nope", "approve")).toBeNull();
+    expect(await decideProposal("nope", "approve")).toBeNull();
   });
 });

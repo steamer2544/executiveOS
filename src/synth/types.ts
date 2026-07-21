@@ -40,6 +40,8 @@ export interface SynthOptions {
   config: Config;
   explicitFiles?: string[];      // from --files; when absent, fall back to State
   proposalId?: string | null;    // from --proposal; when absent, use the latest proposal.json
+  instruction?: string;          // NEW: when set, use THIS text as the synthesis instruction
+                                 // instead of loading proposal.json. Backward-compatible (absent = today).
   synthOverride?: Synthesizer;   // tests inject a Synthesizer; production passes nothing
 }
 
