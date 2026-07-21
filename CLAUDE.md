@@ -426,6 +426,19 @@ docs/scopes/           # per-phase specs (the contract handed to the implementer
   live Groq/local endpoint with a real key. Spec: `docs/scopes/phase-25-transcription-backends.md`. Files:
   `src/config.ts`, `src/paths.ts`, `src/ui/{models,server,page}.ts`, `src/ui/ui.test.ts`, `src/config.test.ts`,
   `src/index.ts`.
+- **Phase 25.1 — DONE** (architect fix + live-validated, this commit): **Minimal-set model download.** The
+  owner clicked "Download" in the dashboard before the browser-wasm path had been exercised, which surfaced
+  two real defects in `downloadWasmAssets`: (1) it fetched **every** onnx variant a Whisper repo ships
+  (fp16/int8/bnb4/q4/quantized/uint8/merged/with_past…) → **~1.6GB** for `Xenova/whisper-base`; (2) it also
+  pulled the unused `transformers.node.*` builds. Now `downloadModel` fetches ONLY the encoder +
+  `decoder_model_merged` for a single dtype (`WASM_DTYPE = "q8"` → the `_quantized` files, via a
+  `DTYPE_SUFFIX` map, fp32 fallback) plus the small non-onnx configs/tokenizers → **~81MB**; `downloadVendor`
+  skips `.node.` builds; and `wasmAssetsStatus` now requires **both** an `encoder_model*` and a
+  `decoder_model_merged*` on disk (a partial download that grabbed only decoders correctly reports
+  not-ready). The page's `pipeline(...)` passes the matching `{ dtype: "q8" }`. **Live-validated:** a clean
+  re-download is 16 files / 81MB (`encoder_model_quantized.onnx` 23MB + `decoder_model_merged_quantized.onnx`
+  52MB + tokenizer/configs), `wasmAssetsStatus` → `{libReady:true, modelReady:true}`. Still browser-only for
+  the actual in-page transcription. 260 tests green. Files: `src/ui/{models,page}.ts`.
 - **Loop complete (manual trigger):** `auto --apply` runs the whole chain in one command; the human
   reviews/merges the `executive/change-<id>` branch.
 

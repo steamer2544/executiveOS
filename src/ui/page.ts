@@ -341,7 +341,8 @@ async function ensureWasmPipe() {
   T.env.allowRemoteModels = false;
   T.env.localModelPath = "/models/";
   try { T.env.backends.onnx.wasm.wasmPaths = "/vendor/"; } catch {}
-  wasmPipe = await T.pipeline("automatic-speech-recognition", cfgT.wasmModel || "Xenova/whisper-base");
+  // dtype "q8" must match WASM_DTYPE in models.ts — we only downloaded the "_quantized" onnx variant.
+  wasmPipe = await T.pipeline("automatic-speech-recognition", cfgT.wasmModel || "Xenova/whisper-base", { dtype: "q8" });
   return wasmPipe;
 }
 async function handleWasmBlob(blob) {

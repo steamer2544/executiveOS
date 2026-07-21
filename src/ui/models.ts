@@ -6,13 +6,22 @@
 // at transcription time — only this one-time download does. Server-side only; not called from the page
 // except via the POST /api/transcribe/download endpoint.
 
-import { existsSync, mkdirSync, writeFileSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync, statSync, readdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { modelsDir, vendorDir } from "../paths.js";
 
 /** transformers.js package pinned so the served lib + wasm are a matched set. */
 const VENDOR_PACKAGE = "@huggingface/transformers";
 const VENDOR_VERSION = "3.7.5";
+
+/** transformers.js dtype → HF onnx filename suffix. Whisper repos ship every variant (each 20–200MB);
+ *  we fetch ONLY the chosen one so a model is ~80MB, not ~1.6GB. Must match the `dtype` the page passes
+ *  to `pipeline(...)`. Default q8 = the "_quantized" files (small + fast on CPU). */
+const DTYPE_SUFFIX: Record<string, string> = {
+  fp32: "", fp16: "_fp16", q8: "_quantized", int8: "_int8", uint8: "_uint8", q4: "_q4", q4f16: "_q4f16", bnb4: "_bnb4",
+};
+/** The dtype the dashboard's browser-wasm pipeline uses — keep in sync with page.ts. */
+export const WASM_DTYPE = "q8";
 
 export interface DownloadResult {
   ok: boolean;
@@ -61,7 +70,8 @@ async function downloadVendor(log: Logger): Promise<{ files: number; bytes: numb
   const listing = (await res.json()) as { files?: Array<{ name?: string }> };
   const distFiles = (listing.files ?? [])
     .map((f) => f.name ?? "")
-    .filter((n) => n.startsWith("/dist/") && /\.(js|mjs|wasm|map)$/.test(n));
+    // browser build only — the page imports transformers.web.js + the ort wasm. Skip the node/*.cjs builds.
+    .filter((n) => n.startsWith("/dist/") && /\.(js|mjs|wasm|map)$/.test(n) && !n.includes(".node."));
   if (distFiles.length === 0) throw new Error("no dist files found for " + VENDOR_PACKAGE + "@" + VENDOR_VERSION);
 
   let files = 0,
@@ -78,14 +88,30 @@ async function downloadVendor(log: Logger): Promise<{ files: number; bytes: numb
   return { files, bytes };
 }
 
-/** Download an HF model repo (all files, HF layout) into modelsDir()/<id>/. */
-async function downloadModel(modelId: string, log: Logger): Promise<{ files: number; bytes: number }> {
+/**
+ * Download the MINIMAL set of an HF Whisper repo into modelsDir()/<id>/: every non-onnx file (the small
+ * configs/tokenizers transformers.js always needs) plus ONLY the encoder + merged-decoder for one dtype.
+ * A Whisper repo ships ~30 onnx variants (each 20–200MB); grabbing them all is ~1.6GB — grabbing one dtype
+ * is ~80MB. Falls back to fp32 for any onnx the chosen dtype doesn't provide.
+ */
+async function downloadModel(modelId: string, dtype: string, log: Logger): Promise<{ files: number; bytes: number }> {
   const treeUrl = "https://huggingface.co/api/models/" + modelId + "/tree/main?recursive=1";
   const res = await fetch(treeUrl);
   if (!res.ok) throw new Error("could not list model " + modelId + ": HTTP " + res.status);
   const tree = (await res.json()) as Array<{ type?: string; path?: string }>;
-  const paths = tree.filter((e) => e.type === "file" && e.path).map((e) => e.path as string);
-  if (paths.length === 0) throw new Error("model " + modelId + " has no files (private or wrong id?)");
+  const all = tree.filter((e) => e.type === "file" && e.path).map((e) => e.path as string);
+  if (all.length === 0) throw new Error("model " + modelId + " has no files (private or wrong id?)");
+
+  // Which onnx files do we actually want? encoder + decoder_model_merged in the chosen dtype (fp32 fallback).
+  const suffix = DTYPE_SUFFIX[dtype] ?? "";
+  const onnxSet = new Set(all.filter((p) => p.endsWith(".onnx")));
+  const want = (base: string) => {
+    const pref = onnxSet.has("onnx/" + base + suffix + ".onnx") ? suffix : "";
+    return "onnx/" + base + pref + ".onnx";
+  };
+  const wantedOnnx = new Set([want("encoder_model"), want("decoder_model_merged")]);
+  const paths = all.filter((p) => !p.endsWith(".onnx") || wantedOnnx.has(p));
+  log("  (fetching " + dtype + " onnx: " + [...wantedOnnx].map((p) => p.split("/").pop()).join(", ") + ")");
 
   const root = modelsDir() + "/" + modelId;
   let files = 0,
@@ -107,12 +133,13 @@ async function downloadModel(modelId: string, log: Logger): Promise<{ files: num
  */
 export async function downloadWasmAssets(
   modelId: string,
-  opts: { onLog?: Logger } = {},
+  opts: { onLog?: Logger; dtype?: string } = {},
 ): Promise<DownloadResult> {
   const log = opts.onLog ?? (() => {});
+  const dtype = opts.dtype ?? WASM_DTYPE;
   try {
     const v = await downloadVendor(log);
-    const m = await downloadModel(modelId, log);
+    const m = await downloadModel(modelId, dtype, log);
     return { ok: true, model: modelId, files: v.files + m.files, bytes: v.bytes + m.bytes, error: null };
   } catch (err) {
     return { ok: false, model: modelId, files: 0, bytes: 0, error: (err as Error).message };
@@ -126,8 +153,16 @@ export function wasmAssetsStatus(modelId: string): AssetsStatus {
 
   const root = modelsDir() + "/" + modelId;
   const cfg = existsSync(root + "/config.json");
-  // any onnx weight (transformers.js loads from onnx/*.onnx)
-  const modelReady = cfg && existsSync(root + "/onnx");
+  // Whisper needs BOTH an encoder and a (merged) decoder — a partial download that grabbed only decoders
+  // must report not-ready. Check the onnx dir for at least one encoder_* and one decoder_model_merged*.
+  let hasEncoder = false, hasDecoder = false;
+  try {
+    for (const f of readdirSync(root + "/onnx")) {
+      if (f.startsWith("encoder_model")) hasEncoder = true;
+      if (f.startsWith("decoder_model_merged")) hasDecoder = true;
+    }
+  } catch {}
+  const modelReady = cfg && hasEncoder && hasDecoder;
 
   return {
     libReady,
