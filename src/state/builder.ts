@@ -190,9 +190,13 @@ export function buildState(now?: Date): { state: State; context: Context } {
         const v = typeof d.task === "string" ? d.task.trim() : "";
         currentTask = v.length > 0 ? v : null;
       }
-      // deadline: unchanged — only set on non-empty (no clearing for deadline)
-      if (typeof d.deadline === "string" && (d.deadline as string).length > 0)
-        deadline = d.deadline as string;
+      // deadline: absent → unchanged; non-empty → set; empty/whitespace → clear (null).
+      // Same three-way rule as task/project — without it a past deadline can never be
+      // retired, so the Planner asks about it forever.
+      if ("deadline" in d) {
+        const v = typeof d.deadline === "string" ? d.deadline.trim() : "";
+        deadline = v.length > 0 ? v : null;
+      }
     }
   }
 

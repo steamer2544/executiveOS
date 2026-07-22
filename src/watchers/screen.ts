@@ -13,6 +13,37 @@ export interface ScreenWatcherConfig {
   read?: () => ForegroundWindow | null;
 }
 
+/**
+ * Normalize a window title before dedup/emit.
+ *
+ * Many apps animate their title with a leading glyph — a terminal running an agent
+ * cycles "⠂ task" → "⠐ task" → "✳ task" every few seconds, an editor prefixes "● " for
+ * unsaved changes. Comparing raw titles treats each frame as a new window, which floods
+ * the event log (measured: 51% of real screen events were spinner frames of one title).
+ *
+ * Strips two kinds of leading noise, repeatedly and in this order:
+ *   1. a parenthesised unread count — browsers prefix "(81) " and bump it per notification;
+ *      it must be matched BEFORE rule 2, which would otherwise eat only the "(" and leave
+ *      an unbalanced "81) ".
+ *   2. any run of characters that are neither letters nor digits (spinner glyphs, "● ", 🔴).
+ * Then trims trailing junk (keeping a closing bracket, as in "build (2 errors)") and
+ * collapses inner whitespace. Falls back to the trimmed raw title if nothing would survive.
+ */
+const LEADING_NOISE = /^(?:\(\d+\)\s*|[^\p{L}\p{N}]+)/u;
+
+export function normalizeTitle(raw: string): string {
+  let s = raw;
+  for (let prev = ""; s !== prev && s.length > 0; ) {
+    prev = s;
+    s = s.replace(LEADING_NOISE, "");
+  }
+  const stripped = s
+    .replace(/[^\p{L}\p{N})\]}]+$/u, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  return stripped.length > 0 ? stripped : raw.trim();
+}
+
 export function createScreenWatcher(cfg: ScreenWatcherConfig): Watcher {
   let warned = false;
   let lastTitle: string | null = null;
@@ -41,14 +72,16 @@ export function createScreenWatcher(cfg: ScreenWatcherConfig): Watcher {
       }
       warned = false;
 
-      // Dedup: only emit when (title, app) changes from the last observed value.
-      if (w.title !== lastTitle || w.app !== lastApp) {
+      // Dedup: only emit when the (normalized title, app) pair changes. The normalized
+      // title is also what gets emitted, so state/digest show a stable name.
+      const title = normalizeTitle(w.title);
+      if (title !== lastTitle || w.app !== lastApp) {
         currentBus.publish({
           source: "screen",
           type: "screen.window",
-          data: { title: w.title, app: w.app },
+          data: { title, app: w.app },
         });
-        lastTitle = w.title;
+        lastTitle = title;
         lastApp = w.app;
       }
     } catch (err) {
@@ -65,7 +98,7 @@ export function createScreenWatcher(cfg: ScreenWatcherConfig): Watcher {
       // Record the current window as the baseline without emitting (same as GitWatcher).
       const baseline = read();
       if (baseline) {
-        lastTitle = baseline.title;
+        lastTitle = normalizeTitle(baseline.title);
         lastApp = baseline.app;
       }
       interval = setInterval(poll, cfg.pollMs);

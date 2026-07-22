@@ -29,9 +29,42 @@ function resolveBlock(s: State): ProposedAction | null {
   };
 }
 
-/** R3: A deadline exists → review progress against it. Priority 70, confidence 0.80 → ask. */
+const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * Whole days `deadline` is past `nowIso`, or null when either is not a plain date.
+ * Uses the state's own `generatedAt` as "now" so the rule stays a pure function of state.
+ */
+export function daysOverdue(deadline: string, nowIso: string): number | null {
+  if (!DATE_ONLY.test(deadline)) return null;
+  const today = nowIso.slice(0, 10);
+  if (!DATE_ONLY.test(today)) return null;
+  const ms = Date.parse(today + "T00:00:00Z") - Date.parse(deadline + "T00:00:00Z");
+  if (Number.isNaN(ms)) return null;
+  const days = Math.floor(ms / 86_400_000);
+  return days > 0 ? days : null;
+}
+
+/**
+ * R3: A deadline exists → review progress against it. Priority 70, confidence 0.80 → ask.
+ * An already-past deadline is a different (and more urgent) question — it can only be
+ * closed out, rescheduled, or cleared — so it says so instead of repeating "review progress"
+ * forever. Clearing is an empty `system.task {deadline:""}` (dashboard: "Clear deadline").
+ */
 function reviewDeadline(s: State): ProposedAction | null {
   if (s.deadline === null) return null;
+  const overdue = daysOverdue(s.deadline, s.generatedAt);
+  if (overdue !== null) {
+    return {
+      kind: "review_deadline",
+      reason:
+        "deadline (" + s.deadline + ") passed " + overdue + " day(s) ago — " +
+        "close it out, reschedule, or clear it",
+      priority: 75,
+      confidence: 0.80,
+      forbidden: false,
+    };
+  }
   return {
     kind: "review_deadline",
     reason: "deadline set (" + s.deadline + ") — review progress",

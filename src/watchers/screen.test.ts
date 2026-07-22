@@ -10,7 +10,7 @@
 import { describe, it, expect } from "bun:test";
 import type { ForegroundWindow } from "../screen/capture.js";
 import type { EventBus } from "../bus.js";
-import { createScreenWatcher } from "./screen.js";
+import { createScreenWatcher, normalizeTitle } from "./screen.js";
 
 const POLL_MS = 5;
 const SETTLE_MS = 80; // ~16 poll cycles at POLL_MS — plenty, well clear of timer jitter
@@ -170,5 +170,70 @@ describe("ScreenWatcher — stop is idempotent", () => {
     await delay(SETTLE_MS);
     // No poll ever ran after stop → no emit.
     expect(events.filter((e) => e.type === "screen.window").length).toBe(0);
+  });
+});
+
+// ─── 6. Title normalization (Phase 32) ──────────────────────────────────────
+
+describe("normalizeTitle", () => {
+  it("strips a leading animated glyph but keeps the text", () => {
+    expect(normalizeTitle("⠂ ตรวจสอบความคืบหน้า handoff")).toBe("ตรวจสอบความคืบหน้า handoff");
+    expect(normalizeTitle("✳ ตรวจสอบความคืบหน้า handoff")).toBe("ตรวจสอบความคืบหน้า handoff");
+    expect(normalizeTitle("● app.ts — Zed")).toBe("app.ts — Zed");
+  });
+
+  it("collapses inner whitespace and trims trailing punctuation", () => {
+    expect(normalizeTitle("  Sprint   Board | Trello  ")).toBe("Sprint Board | Trello");
+  });
+
+  it("keeps a bracketed/parenthesised tail intact", () => {
+    expect(normalizeTitle("build (2 errors)")).toBe("build (2 errors)");
+  });
+
+  it("strips a browser unread count without breaking the brackets", () => {
+    expect(normalizeTitle("(81) 🔴 Cold City - YouTube - Brave")).toBe("Cold City - YouTube - Brave");
+    expect(normalizeTitle("(3) Inbox - Gmail")).toBe("Inbox - Gmail");
+    // a count that only changes value is the same window
+    expect(normalizeTitle("(81) Inbox")).toBe(normalizeTitle("(92) Inbox"));
+  });
+
+  it("falls back to the raw title when nothing would survive", () => {
+    expect(normalizeTitle(" ✳✳ ")).toBe("✳✳");
+  });
+});
+
+describe("ScreenWatcher — spinner frames are one window", () => {
+  it("a title whose only change is the leading glyph never re-emits", async () => {
+    const { bus, events } = makeSpyBus();
+    const frames = ["⠂ Recover code", "⠐ Recover code", "✳ Recover code", "⠂ Recover code"];
+    let i = 0;
+    const watcher = createScreenWatcher({
+      pollMs: POLL_MS,
+      read: () => ({ title: frames[Math.min(i++, frames.length - 1)]!, app: "WindowsTerminal" }),
+    });
+
+    watcher.start(bus);
+    await delay(SETTLE_MS);
+    watcher.stop();
+
+    expect(events.length).toBe(0);
+  });
+
+  it("emits the normalized title when the window really changes", async () => {
+    const { bus, events } = makeSpyBus();
+    let calls = 0;
+    const watcher = createScreenWatcher({
+      pollMs: POLL_MS,
+      read: () => (calls++ === 0
+        ? { title: "⠂ Recover code", app: "WindowsTerminal" }
+        : { title: "⠐ Sprint Board | Trello", app: "chrome" }),
+    });
+
+    watcher.start(bus);
+    await delay(SETTLE_MS);
+    watcher.stop();
+
+    expect(events.length).toBe(1);
+    expect(events[0]!.data).toEqual({ title: "Sprint Board | Trello", app: "chrome" });
   });
 });

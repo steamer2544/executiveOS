@@ -739,3 +739,47 @@ describe("buildState — clearable task (Part 2)", () => {
     expect(state.currentTask).toBeNull();
   });
 });
+
+// ── Phase 32: clearable deadline (same three-way semantics as task) ──────────
+
+describe("buildState — clearable deadline", () => {
+  const DIR = "/tmp/executive-test-clear-deadline-" + randomUUID();
+  beforeEach(() => setExecutiveHome(DIR));
+  afterEach(() => cleanup(DIR));
+
+  it("empty deadline clears: set then cleared → null", () => {
+    writeRawEvent("system", 1, "system.task", { deadline: "2026-07-20" });
+    writeRawEvent("system", 2, "system.task", { deadline: "" });
+
+    const { state } = buildState(new Date("2026-07-22T00:00:00.000Z"));
+
+    expect(state.deadline).toBeNull();
+  });
+
+  it("whitespace-only clears", () => {
+    writeRawEvent("system", 1, "system.task", { deadline: "2026-07-20" });
+    writeRawEvent("system", 2, "system.task", { deadline: "  " });
+
+    const { state } = buildState(new Date("2026-07-22T00:00:00.000Z"));
+
+    expect(state.deadline).toBeNull();
+  });
+
+  it("absent deadline key leaves the deadline unchanged", () => {
+    writeRawEvent("system", 1, "system.task", { deadline: "2026-07-20" });
+    writeRawEvent("system", 2, "system.task", { task: "something else" });
+
+    const { state } = buildState(new Date("2026-07-22T00:00:00.000Z"));
+
+    expect(state.deadline).toBe("2026-07-20");
+  });
+
+  it("a later non-empty deadline still overwrites", () => {
+    writeRawEvent("system", 1, "system.task", { deadline: "2026-07-20" });
+    writeRawEvent("system", 2, "system.task", { deadline: "2026-08-01" });
+
+    const { state } = buildState(new Date("2026-07-22T00:00:00.000Z"));
+
+    expect(state.deadline).toBe("2026-08-01");
+  });
+});

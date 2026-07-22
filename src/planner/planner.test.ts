@@ -10,7 +10,7 @@ import { describe, expect, it } from "bun:test";
 import { execRoot } from "../paths.js";
 import type { State, Context } from "../state/types.js";
 import { plan, writePlan, applyGuardrail } from "./planner.js";
-import { RULES } from "./rules.js";
+import { RULES, daysOverdue } from "./rules.js";
 import { CONFIDENCE_THRESHOLD } from "./types.js";
 import type { ProposedAction } from "./types.js";
 
@@ -286,5 +286,35 @@ describe("planner — writePlan round-trip", () => {
         // ignore cleanup errors
       }
     }
+  });
+});
+
+// ─── R3 (Phase 32): a past deadline asks a different question ────────────────
+
+describe("planner — R3: overdue deadline", () => {
+  it("daysOverdue counts whole days, null for future/today/non-dates", () => {
+    expect(daysOverdue("2026-07-15", "2026-07-17T09:00:00.000Z")).toBe(2);
+    expect(daysOverdue("2026-07-17", "2026-07-17T23:00:00.000Z")).toBeNull(); // today
+    expect(daysOverdue("2026-07-20", "2026-07-17T00:00:00.000Z")).toBeNull(); // future
+    expect(daysOverdue("tomorrow", "2026-07-17T00:00:00.000Z")).toBeNull();  // not a date
+  });
+
+  it("says the deadline passed instead of 'review progress'", () => {
+    const s = makeState({ deadline: "2026-07-15" }); // generatedAt is 2026-07-17
+    const p = plan(s);
+    const a = p.topAction!;
+    expect(a.kind).toBe("review_deadline");
+    expect(a.reason).toBe(
+      "deadline (2026-07-15) passed 2 day(s) ago — close it out, reschedule, or clear it"
+    );
+    expect(a.priority).toBe(75);
+    expect(a.disposition).toBe("ask");
+  });
+
+  it("a future deadline keeps the original wording and priority", () => {
+    const s = makeState({ deadline: "2026-07-20" });
+    const a = plan(s).topAction!;
+    expect(a.reason).toBe("deadline set (2026-07-20) — review progress");
+    expect(a.priority).toBe(70);
   });
 });

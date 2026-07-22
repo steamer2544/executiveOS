@@ -259,7 +259,8 @@ async function refresh() {
       ["Task", dash(n.task) + (n.task ? \` <button class="ghost" style="font-size:11px;padding:2px 8px" onclick="clearTask()">Clear task</button>\` : "")],
       ["Tests", n.tests ? \`<span class="pill \${n.tests==='failing'?'ask':'act'}">\${esc(n.tests)}</span>\` : dash(null)],
       ["Blocked", n.blocked ? \`<span class="pill ask">yes</span> \${esc(n.blockedReason||"")}\` : "no"],
-      ["Branch", dash(n.branch)], ["Deadline", dash(n.deadline)],
+      ["Branch", dash(n.branch)],
+      ["Deadline", dash(n.deadline) + (n.deadline ? \` <button class="ghost" style="font-size:11px;padding:2px 8px" onclick="clearDeadline()">Clear deadline</button>\` : "")],
       ["Current file", dash(n.currentFile)], ["Idle", n.idle===true?"yes":n.idle===false?"no":dash(null)],
     ]) + (n.currentWindow ? \`<div class="row"><span class="k">Looking at</span><span class="v">\${esc(n.currentWindow.title)} <span class="muted">(\${esc(n.currentWindow.app)})</span></span></div>\` : "") + (n.repos && n.repos.length > 1 ? \`<div class="row"><span class="k">Repos</span><span class="v">\${repoList(n.repos, n.activeRepo)}</span></div>\` : "")
       : "<span class='muted'>No state yet.</span>";
@@ -350,6 +351,7 @@ function emitUnblock() { emit("system.unblocked", {}); }
 function emitDeadline() { const d = $("deadline").value; if (!d) return toast("pick a date"); emit("system.task", { deadline: d }); }
 function emitTask() { const t = $("task").value.trim(); if (!t) return toast("enter a task"); emit("system.task", { task: t }); $("task").value=""; }
 function clearTask() { emit("system.task", { task: "" }); }
+function clearDeadline() { emit("system.task", { deadline: "" }); }
 
 // ── Listening: routes by transcribe.mode (webspeech | whisper-api | browser-wasm) ──
 // Listens to YOU (your own dictation); status is always shown visibly.

@@ -14,6 +14,7 @@ import { modelsDir, vendorDir } from "../paths.js";
 import { readStore, pending } from "../advisor/store.js";
 import { runAdvisor, decideProposal } from "../advisor/advisor.js";
 import { downloadWasmAssets, wasmAssetsStatus } from "./models.js";
+import { judgeNote } from "../capture/note.js";
 import { renderPage } from "./page.js";
 
 /** Live "is a screen capture in flight" flag, set by the periodic screen-infer trigger in
@@ -209,6 +210,13 @@ export function startUiServer(opts: UiServerOptions) {
           const data = body.data ?? {};
           if (!ALLOWED_EMIT_TYPES.has(type)) {
             return Response.json({ ok: false, error: "type not allowed: " + type }, { status: 400 });
+          }
+          // Dictated notes pass a low-signal filter — a live mic transcribes counting and
+          // mumbles, which would otherwise reach the Advisor as if they were thoughts.
+          // Not an error for the caller: the note is simply not recorded.
+          if (type === "system.note" && data.via === "voice") {
+            const verdict = judgeNote(typeof data.msg === "string" ? data.msg : "");
+            if (!verdict.keep) return Response.json({ ok: true, skipped: true, reason: verdict.reason });
           }
           const event = await append({ source: "system", type, data });
           return Response.json({ ok: true, seq: event.seq });

@@ -699,6 +699,38 @@ docs/scopes/           # per-phase specs (the contract handed to the implementer
   language list from the Layer 1 window title is the obvious follow-up. Spec:
   `docs/scopes/phase-31-tesseract-ocr.md`. Files: `src/screen/{ocr,ocr.test,screen-infer}.ts`,
   `src/config.ts`, `src/config.test.ts`, `src/ui/page.ts`.
+- **Phase 32 — DONE** (architect impl + self-review + live-validated, this commit): **Signal hygiene** —
+  five fixes driven by reading the *real* 3,241-event log rather than by adding a sensor. All
+  deterministic, NO LLM. (1) **ScreenWatcher dedup was defeated by animated titles** — dedup compared raw
+  `(title, app)`, but a terminal running an agent cycles a leading spinner glyph (`⠂`→`⠐`→`✳`) every ~3s,
+  so one conversation was logged **269 times**; measured **51% of all screen events were spinner frames**.
+  New pure `normalizeTitle()` strips leading noise and is used for both dedup and the emitted title —
+  replayed over the real log: **790 → 386 events**. A live check then found a second costume of the same
+  bug: browsers prefix `"(81) "` unread counts that bump per notification (and a naive strip left an
+  unbalanced `"81) "`), so the parenthesised count is stripped first, before the symbol rule. (2)
+  **A past deadline nagged forever** — `deadline` was the one `system.task` field with no clearing path
+  (set-on-non-empty only), so `2026-07-20` still fired `review_deadline/ask` on 07-22 with no way out.
+  `deadline` is now three-way like task/project (absent → unchanged, non-empty → set, empty → **clear**),
+  with a **"Clear deadline"** dashboard button, and R3 tells the truth when overdue (`daysOverdue()`,
+  computed from `state.generatedAt` so the rule stays pure): *"passed 2 day(s) ago — close it out,
+  reschedule, or clear it"*, priority 70→75. (3) **`tests: unknown` forever** — the repo had no
+  `post-commit` hook; installed. (4) **Junk dictation reached the Advisor** — a live mic transcribes
+  counting and mumbles (`"1 2 3 1 2 3 4"`, `"12312 เนี่ย"`) which entered the log with the same weight as
+  a real thought. New pure `src/capture/note.ts` `judgeNote()` (letters < 5, or a repeated chant → drop)
+  gates **voice notes only** at `/api/emit`; a typed `capture` is intentional and always kept. Dropping is
+  **not an error** for the caller (`{ok:true, skipped:true, reason}`). (5) **Advisor dedup was by exact
+  title**, so one decision queued four times ("Take a 10-minute screen break" / "Stretch neck and
+  shoulders" / "Quick desk stretch and water" / "Step away for a 5-minute walk"). Added `contentTokens`/
+  `jaccard`/`intentBucket`/`isRepeatIntent`: a "rest" bucket for self-care wording plus ≥0.6 word overlap,
+  scoped to **pending** items (so a nudge may return once today's is decided). 440 passing tests (23 new).
+  **Sabotage-checked** (`GOTCHA.md` §4): 8 of the new tests fail against the pre-fix source.
+  **Defect found + fixed during the work:** the similarity rule scored one-word titles at 1.0 (`"Fix
+  login"` vs `"Fix build"` → both `{fix}`), which broke a real existing test — a `MIN_TOKENS_FOR_SIMILARITY`
+  guard now falls back to exact-title dedup for thin titles. **Live-validated:** stale deadline cleared →
+  planner "No action needed"; junk notes rejected/real Thai note accepted over a real server port; the
+  live foreground title normalizes correctly; replaying the real advisor queue merges 10/37 as repeats,
+  each verified to be genuinely the same intent. Files: `src/watchers/screen.ts`, `src/planner/rules.ts`,
+  `src/state/builder.ts`, `src/capture/note.ts`, `src/advisor/store.ts`, `src/ui/{page,server}.ts` (+ tests).
 - **Loop complete (manual trigger):** `auto --apply` runs the whole chain in one command; the human
   reviews/merges the `executive/change-<id>` branch.
 
