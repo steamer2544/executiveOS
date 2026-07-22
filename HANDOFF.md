@@ -3,13 +3,17 @@
 > **Purpose:** a single doc to resume this project cold if context/memory is lost. Pairs with
 > `CLAUDE.md` (the authoritative phase-by-phase log), `GOTCHA.md` (traps & non-obvious failure modes —
 > read before touching PowerShell/state/tests/LLM), and `README.md` (user-facing overview).
-> Last updated after **Phase 29.2** (screen OCR live + failure honesty). **387 passing tests**, all green.
+> Last updated after **Phase 31** (Tesseract OCR engine). **406 passing tests**, all green.
 
-> **⏭️ Immediate next task:** screen-sensing **Layer 2 is now live** — the Defender exclusion is in place
-> and the full chain (screenshot → on-device OCR → LLM suggestions) was validated end-to-end. What remains
-> is the **Thai OCR language pack** (only `en-US` installed, so Thai on screen OCRs to garbage). See §6.
+> **⏭️ Immediate next task:** screen-sensing Layer 2 is **live and now reads Thai** — the config on this
+> machine is already switched to `engine:"tesseract"`. Nothing is blocking. The best next improvement is
+> **deriving the Tesseract language list from the Layer 1 window title**: `-l tha+eng` hallucinates Thai
+> on English-only screens (measured — `GOTCHA.md` §2), so using `eng` unless the window title actually
+> contains Thai would cut the noise.
 > **Layer 3 (vision) is a dead end on this gateway:** the team is allow-listed to `qwen3.6-35b-a3b`, so
 > `qwen-vl-max` returns 403. It fails cleanly; Layer 2 is the path that works (and keeps the image local).
+> **If the gateway starts timing out (524):** check Arm's inference box — the LiteLLM proxy reports
+> `Cannot connect to host vllm.tetra-magellanic.ts.net:8000` when it is down. Nothing to fix on our side.
 >
 > **If every LLM feature suddenly reports "nothing found":** check whether the work **Zscaler** proxy is
 > on — it MITMs TLS and Bun's `fetch` rejects the re-signed cert, and every client swallows that into a
@@ -155,13 +159,12 @@ Every phase = one commit + a `CLAUDE.md` phase entry.
 Phase 29.1 got the full chain working on this machine (screenshot → OCR → suggestions, validated live).
 1. ~~**Windows Defender exclusion**~~ — **done.** (Windows Security → Virus & threat protection → Manage
    settings → Exclusions → the project folder.) If capture ever returns null again, re-check it first.
-2. ~~**Thai OCR pack**~~ — **does not exist.** Verified with an elevated
-   `Get-WindowsCapability -Online -Name "Language.OCR*"`: Windows offers **36** OCR languages
-   (ar, zh-CN/HK/TW, ja, ko, ru, most of Europe) and **`th-TH` is not one of them**. So Layer 2 is
-   **English-only, permanently** — Thai on screen OCRs to garbage and no install can change that.
-   (Layer 1 window titles still carry Thai correctly — different API.) See `GOTCHA.md` §2 for the
-   alternatives (local Tesseract with `tha.traineddata`, a multimodal LLM, or accept English-only).
-   Check what is actually installed:
+2. ~~**Thai OCR pack**~~ — **does not exist, and is no longer needed (Phase 31).** Verified with an
+   elevated `Get-WindowsCapability -Online -Name "Language.OCR*"`: Windows offers **36** OCR languages
+   (ar, zh-CN/HK/TW, ja, ko, ru, most of Europe) and **`th-TH` is not one of them**, so the WinRT engine
+   is English-only forever. **Solved by switching the engine to Tesseract** (`config.screen.ocr.engine`,
+   or the dashboard Settings card): Tesseract 5.4 + `tha.traineddata` are installed and read Thai
+   correctly, including Thai/English mixed lines. Check what the WinRT engine has:
    `[Windows.Media.Ocr.OcrEngine,Windows.Foundation,ContentType=WindowsRuntime]; [Windows.Media.Ocr.OcrEngine]::AvailableRecognizerLanguages | %{ $_.LanguageTag }`
 2b. **Layer 3 (vision) is blocked at the gateway** — `qwen-vl-max` → `403 team_model_access_denied` (the
    team may only use `qwen3.6-35b-a3b`). Enabling the toggle is harmless (it reports `vision: unavailable`)

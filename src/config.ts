@@ -109,6 +109,15 @@ export interface Config {
       enabled?: boolean;   // Default false.
       cooldownMs?: number; // min ms between OCR captures in the daemon. Default 300000 (5 min).
       minChars?: number;   // OCR text shorter than this is "too thin" → eligible to escalate. Default 40.
+      /**
+       * Which OCR engine reads the screenshot. Default "winrt".
+       *  - "winrt"     — Windows.Media.Ocr. Built in, no install, but has NO Thai pack and never
+       *                  will (Windows ships 36 OCR languages; th-TH is not one) — Thai is dropped.
+       *  - "tesseract" — local tesseract.exe + tha.traineddata. Reads Thai (and Thai/English mixed).
+       */
+      engine?: OcrEngine;
+      languages?: string;          // tesseract only, e.g. "tha+eng". Default "tha+eng".
+      tesseractPath?: string | null; // null → auto-detect the exe. Default null.
     };
     /** Layer 3: screenshot → multimodal vision LLM (qwen-vl-max) on the owner's gateway. Opt-in escalation. */
     vision?: {
@@ -122,6 +131,9 @@ export interface Config {
     };
   };
 }
+
+/** The OCR engines screen-sense Layer 2 can read a screenshot with. */
+export type OcrEngine = "winrt" | "tesseract";
 
 /** The three transcription backends the dashboard mic can use. */
 export type TranscribeMode = "webspeech" | "whisper-api" | "browser-wasm";
@@ -381,6 +393,11 @@ export function loadConfig(): Config {
       parsed.screen.ocr.enabled = parsed.screen.ocr.enabled ?? false;
       parsed.screen.ocr.cooldownMs = parsed.screen.ocr.cooldownMs ?? 300000;
       parsed.screen.ocr.minChars = parsed.screen.ocr.minChars ?? 40;
+      // An unknown engine string must never throw and must never silently enable Tesseract —
+      // anything that isn't the exact literal falls back to today's behaviour.
+      parsed.screen.ocr.engine = parsed.screen.ocr.engine === "tesseract" ? "tesseract" : "winrt";
+      parsed.screen.ocr.languages = parsed.screen.ocr.languages ?? "tha+eng";
+      parsed.screen.ocr.tesseractPath = parsed.screen.ocr.tesseractPath ?? null;
     }
     if (parsed.screen.vision) {
       parsed.screen.vision.enabled = parsed.screen.vision.enabled ?? false;
@@ -454,6 +471,12 @@ export function updateScreenConfig(patch: Record<string, unknown>): Config["scre
     if (typeof ocrPatch.enabled === "boolean") s.ocr.enabled = ocrPatch.enabled;
     if (typeof ocrPatch.cooldownMs === "number") s.ocr.cooldownMs = ocrPatch.cooldownMs;
     if (typeof ocrPatch.minChars === "number") s.ocr.minChars = ocrPatch.minChars;
+    // Only the two literal engine names are accepted; anything else is ignored, not coerced.
+    if (ocrPatch.engine === "winrt" || ocrPatch.engine === "tesseract") s.ocr.engine = ocrPatch.engine;
+    if (typeof ocrPatch.languages === "string") s.ocr.languages = ocrPatch.languages;
+    if (typeof ocrPatch.tesseractPath === "string" || ocrPatch.tesseractPath === null) {
+      s.ocr.tesseractPath = ocrPatch.tesseractPath as string | null;
+    }
   }
 
   const visionPatch = patch.vision as Record<string, unknown> | undefined;

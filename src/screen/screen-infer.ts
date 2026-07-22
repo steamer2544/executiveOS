@@ -20,7 +20,11 @@ export interface ScreenInferResult {
 /** Injectable dependencies for testing. */
 export interface ScreenInferDeps {
   capture?: (maxBytes: number) => import("./screenshot.js").Screenshot | null;
-  ocr?: (path: string, language?: string | null) => string;
+  ocr?: (
+    path: string,
+    language?: string | null,
+    opts?: import("./ocr.js").OcrOptions,
+  ) => string;
   vision?: (
     opts: import("./vision.js").VisionOptions,
     prompt: string,
@@ -66,7 +70,12 @@ export async function runScreenInference(
       }
 
       if (shot) {
-        const text = ocr(shot.path, null);
+        // Engine selection lives in config (default "winrt"); the OCR module resolves the rest.
+        const text = ocr(shot.path, null, {
+          engine: config.screen?.ocr?.engine,
+          languages: config.screen?.ocr?.languages,
+          tesseractPath: config.screen?.ocr?.tesseractPath,
+        });
         const minChars = config.screen?.ocr?.minChars ?? 40;
         if (text.trim().length >= minChars) {
           // A hard failure (TLS/401/403/timeout) must NOT masquerade as "no signal" — that

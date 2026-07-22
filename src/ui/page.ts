@@ -143,6 +143,17 @@ export function renderPage(): string {
               <input type="checkbox" id="scrVisionEnabled" onchange="toggleScreenVisionFields()" /> Vision LLM (Layer 3 — sends the screenshot to the gateway)
             </label>
           </div>
+          <div class="field" style="margin-top:8px">
+            <label class="muted" style="font-size:12.5px">OCR engine</label>
+            <select id="scrOcrEngine" onchange="toggleOcrEngineFields()">
+              <option value="winrt">Windows built-in — English only (no Thai pack exists)</option>
+              <option value="tesseract">Tesseract — Thai + English (needs tesseract.exe)</option>
+            </select>
+          </div>
+          <div id="scrOcrTessFields" style="display:none">
+            <div class="field"><input id="scrOcrLanguages" type="text" placeholder="Languages (default tha+eng)" /></div>
+            <div class="field"><input id="scrOcrTessPath" type="text" placeholder="tesseract.exe path (blank = auto-detect)" /></div>
+          </div>
           <div id="scrVisionFields" style="display:none;margin-top:8px">
             <div class="field"><input id="scrVisionModel" type="text" placeholder="Vision model (default qwen-vl-max)" /></div>
             <div class="field"><input id="scrVisionBaseUrl" type="text" placeholder="Vision base URL (default = worker's baseUrl)" /></div>
@@ -458,15 +469,28 @@ function populateScreenSettings() {
   $("scrVisionModel").value = (cfgScreen.vision && cfgScreen.vision.model) || "";
   $("scrVisionBaseUrl").value = (cfgScreen.vision && cfgScreen.vision.baseUrl) || "";
   $("scrVisionKeyEnv").value = (cfgScreen.vision && cfgScreen.vision.apiKeyEnv) || "";
+  $("scrOcrEngine").value = (cfgScreen.ocr && cfgScreen.ocr.engine) || "winrt";
+  $("scrOcrLanguages").value = (cfgScreen.ocr && cfgScreen.ocr.languages) || "";
+  $("scrOcrTessPath").value = (cfgScreen.ocr && cfgScreen.ocr.tesseractPath) || "";
   toggleScreenVisionFields();
+  toggleOcrEngineFields();
 }
 function toggleScreenVisionFields() {
   $("scrVisionFields").style.display = $("scrVisionEnabled").checked ? "block" : "none";
 }
+function toggleOcrEngineFields() {
+  $("scrOcrTessFields").style.display = $("scrOcrEngine").value === "tesseract" ? "block" : "none";
+}
 async function saveScreenSettings() {
   const patch = {
     window: { enabled: $("scrWindowEnabled").checked },
-    ocr: { enabled: $("scrOcrEnabled").checked },
+    ocr: {
+      enabled: $("scrOcrEnabled").checked,
+      engine: $("scrOcrEngine").value,
+      languages: $("scrOcrLanguages").value.trim() || undefined,
+      // blank means "auto-detect" — send null, not "", so the server stores the sentinel.
+      tesseractPath: $("scrOcrTessPath").value.trim() || null,
+    },
     vision: {
       enabled: $("scrVisionEnabled").checked,
       model: $("scrVisionModel").value.trim() || undefined,

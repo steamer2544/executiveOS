@@ -81,6 +81,19 @@
   different local engine (Tesseract `tha.traineddata`), a multimodal LLM (blocked here — see §1), or
   accepting English-only OCR. **Layer 1 window titles still carry Thai fine** (that path is a Win32
   `GetWindowTextW`, not OCR). (Phase 29.3)
+- **Tesseract emits Thai sara-am DECOMPOSED — recompose it or nothing matches.** *Symptom:* OCR returns
+  `กํา` (ก + U+0E4D nikhahit + U+0E32 sara aa) where the owner would type `กำ` (ก + U+0E33), so string
+  comparisons and the LLM both see something subtly wrong. *Cause:* the Thai model's output convention.
+  *Fix:* `normalizeThaiOcr()` in `src/screen/ocr.ts` — and the replace **must be a global regex**
+  (`/ํา/g`); a string first argument to `.replace()` fixes only the FIRST occurrence, leaving every later
+  sara-am word decomposed. `.normalize("NFC")` alone does NOT recompose this pair. (Phase 31)
+- **Adding `tha` to the Tesseract language list hallucinates Thai on screens that have none.** *Symptom:*
+  a purely English screen OCRs to lines like `๓๐๒[35๐5[พ๓๐ร๓พยิ...`. *Measured on one real screenshot:*
+  `-l eng` → 0 Thai chars / 8 English words; `-l tha+eng` → 59 (garbage) Thai chars / 7 English words —
+  so `tha` also costs a little English accuracy. It is **not** a resolution problem (native 1536×960 and
+  the 1280px downscale produce the same garbage). *Fix:* the noise is tolerable (the LLM still read the
+  screen correctly), and `config.screen.ocr.languages` is settable — use `eng` when working in English.
+  A smarter future option: pick the language list from the Layer 1 window title. (Phase 31)
 - **WinRT async needs an STA apartment.** *Symptom:* `Windows.Media.Ocr` / `StorageFile` calls throw
   `AggregateException` at `$task.Wait(-1)`. *Cause:* a bare spawned `powershell` is MTA for WinRT
   purposes. *Fix:* spawn `powershell -Sta`, and await `IAsyncOperation<T>` via the

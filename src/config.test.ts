@@ -4,7 +4,7 @@
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import { mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { randomUUID } from "node:crypto";
-import { loadConfig, updateTranscribeConfig, defaultConfig } from "./config.js";
+import { loadConfig, updateTranscribeConfig, updateScreenConfig, defaultConfig } from "./config.js";
 import { configPath } from "./paths.js";
 
 const DIR = "/tmp/executive-test-config-" + randomUUID();
@@ -108,5 +108,62 @@ describe("multi-repo watch.repos config", () => {
     expect(repos[0]!.name).toBe("x");
     expect(repos[1]!.name).toBe("x (2)");
     expect(repos[2]!.name).toBe("x (3)");
+  });
+});
+
+// Phase 31 — the OCR engine selector (WinRT has no Thai pack; Tesseract does).
+describe("screen.ocr engine config", () => {
+  beforeEach(() => { process.env.EXECUTIVE_HOME = DIR; });
+  afterEach(() => { try { rmSync(DIR, { recursive: true, force: true }); } catch {} delete process.env.EXECUTIVE_HOME; });
+
+  const base = { version: 1, createdAt: "x", timezone: "Asia/Bangkok" };
+
+  it("a screen.ocr block without an engine key defaults to winrt (existing behaviour preserved)", () => {
+    writeConfig({ ...base, screen: { ocr: { enabled: true } } });
+    const c = loadConfig();
+    expect(c.screen!.ocr!.engine).toBe("winrt");
+    expect(c.screen!.ocr!.languages).toBe("tha+eng");
+    expect(c.screen!.ocr!.tesseractPath).toBe(null);
+  });
+
+  it("an invalid engine string falls back to winrt instead of throwing", () => {
+    writeConfig({ ...base, screen: { ocr: { enabled: true, engine: "banana" } } });
+    expect(loadConfig().screen!.ocr!.engine).toBe("winrt");
+  });
+
+  it("engine:tesseract is honoured", () => {
+    writeConfig({ ...base, screen: { ocr: { enabled: true, engine: "tesseract" } } });
+    expect(loadConfig().screen!.ocr!.engine).toBe("tesseract");
+  });
+
+  it("a config with no screen block still has none after load (absence means off)", () => {
+    writeConfig({ ...base });
+    expect(loadConfig().screen).toBeUndefined();
+  });
+});
+
+describe("updateScreenConfig — OCR engine fields", () => {
+  beforeEach(() => { process.env.EXECUTIVE_HOME = DIR; writeConfig(defaultConfig()); });
+  afterEach(() => { try { rmSync(DIR, { recursive: true, force: true }); } catch {} delete process.env.EXECUTIVE_HOME; });
+
+  it("round-trips engine, languages and tesseractPath", () => {
+    const exe = "C:\\Tools\\Tesseract-OCR\\tesseract.exe";
+    updateScreenConfig({ ocr: { engine: "tesseract", languages: "tha", tesseractPath: exe } });
+    const c = loadConfig();
+    expect(c.screen!.ocr!.engine).toBe("tesseract");
+    expect(c.screen!.ocr!.languages).toBe("tha");
+    expect(c.screen!.ocr!.tesseractPath).toBe(exe);
+  });
+
+  it("ignores an invalid engine value rather than writing it", () => {
+    updateScreenConfig({ ocr: { engine: "tesseract" } });
+    updateScreenConfig({ ocr: { engine: "banana" } });
+    expect(loadConfig().screen!.ocr!.engine).toBe("tesseract");
+  });
+
+  it("accepts null tesseractPath (means auto-detect)", () => {
+    updateScreenConfig({ ocr: { tesseractPath: "C:/t/x.exe" } });
+    updateScreenConfig({ ocr: { tesseractPath: null } });
+    expect(loadConfig().screen!.ocr!.tesseractPath).toBe(null);
   });
 });

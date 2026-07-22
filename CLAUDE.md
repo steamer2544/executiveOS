@@ -665,6 +665,40 @@ docs/scopes/           # per-phase specs (the contract handed to the implementer
   tests fail against the pre-fix source. Live-verified the 403 now resolves cleanly with the reason in the
   message instead of rejecting. Files: `src/screen/screen-infer.ts`, `src/screen/screen-infer.test.ts`,
   `GOTCHA.md`.
+- **Phase 31 — DONE** (qwen impl (partial) + architect completion/review/live-validation, this commit):
+  **Tesseract OCR engine — Thai support for screen-sense Layer 2.** `Windows.Media.Ocr` has **no Thai pack
+  and never will** (an elevated `Get-WindowsCapability -Online -Name "Language.OCR*"` lists **36**
+  languages — ar, zh-CN/HK/TW, ja, ko, ru, most of Europe — and **`th-TH` is not among them**), and Layer 3
+  vision is 403'd at the gateway, so the owner's Thai screens were simply unreadable. Layer 2's engine is
+  now **selectable**: `config.screen.ocr.engine` = `"winrt"` (**default — today's behaviour, unchanged**)
+  or `"tesseract"`, plus `languages` (default `"tha+eng"`) and `tesseractPath` (default null →
+  auto-detect). `src/screen/ocr.ts` gains `OcrOptions`, `resolveTesseractPath()`, `normalizeThaiOcr()` and
+  a direct `Bun.spawnSync` runner (**no PowerShell — tesseract.exe is a plain exe**); the WinRT path is
+  factored into `runWinRtOcr()` **byte-identical inside**. Wired through `screen-infer.ts` (engine options
+  only — the Phase 29.2 error-vs-no-signal logic is untouched) and a dashboard Settings selector.
+  Deterministic, on-device, **NO LLM**. Env prepared: Tesseract 5.4 via winget + `tha.traineddata`
+  (tessdata_best). 406 passing tests (18 new). **Live-validated:** on one image the tesseract engine reads
+  `แชท OPM Dev - LINE` / `ติดอยู่ รอ API key จากทีมการเงิน` / `กำหนดส่ง 14 สิงหาคม 2569` (composed `กำ`,
+  0 decomposed pairs left) where the **WinRT engine returns `OPM Dev - LINE` / `API key` / `14 2569` — it
+  silently drops every Thai character**; plus a full `runScreenInference` run on the real screen, a
+  Settings round-trip persisted to disk, and `/api/config` returning the new fields.
+  **Delegation note:** qwen (claude9arm) was given §5+§8; it produced a good skeleton but **died mid-run to
+  a gateway outage** (Cloudflare 524 → LiteLLM `Cannot connect to host vllm.tetra-magellanic.ts.net:8000`
+  — Arm's inference box was down; even a one-word prompt timed out), so the architect finished it.
+  **Architect defects found + fixed:** (1) **`normalizeThaiOcr` used `.replace("ํา", …)` with a STRING
+  first argument → only the FIRST sara-am was recomposed** (`กําหนดส่ง นําทํา` → only word 1 fixed);
+  now `/ํา/g`, with a **sabotage-checked** regression test. (2) qwen wrote the file via a generated
+  `tmp-write-ocr.js` and left it behind (removed) — that whole-file-rewrite habit also flattened an
+  unrelated `→` to `->`. (3) an unused `catch (err)` binding. (4) **the scope contradicted itself** —
+  §5.2 says a bad `tesseractPath` falls back to auto-detect, §9.5 said it must degrade to `""`. Kept the
+  fallback (friendlier) but it now **warns once on stderr** so a typo isn't invisible; §9.5 corrected.
+  **Known limitation (measured, documented in `GOTCHA.md` §2, not fixed):** `-l tha+eng` **hallucinates
+  Thai on screens with no Thai** (one real screenshot: `eng` → 0 Thai chars/8 English words; `tha+eng` →
+  59 garbage Thai chars/7 English words). Not a resolution artifact (native 1536×960 gives the same). The
+  LLM still read the screen correctly; `languages` is configurable as the mitigation, and deriving the
+  language list from the Layer 1 window title is the obvious follow-up. Spec:
+  `docs/scopes/phase-31-tesseract-ocr.md`. Files: `src/screen/{ocr,ocr.test,screen-infer}.ts`,
+  `src/config.ts`, `src/config.test.ts`, `src/ui/page.ts`.
 - **Loop complete (manual trigger):** `auto --apply` runs the whole chain in one command; the human
   reviews/merges the `executive/change-<id>` branch.
 

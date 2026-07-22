@@ -158,7 +158,9 @@ not sit inside an un-awaited callback.
    composed**, proving §5.4 ran).
 4. End-to-end: `runScreenInference` with `engine:"tesseract"` against a real screen showing Thai produces
    suggestions (or a truthful `ocr: no signal` / `ocr: llm unavailable — …`, never a crash).
-5. Pointing `tesseractPath` at a non-existent file degrades to `""` + one stderr line — no crash, and the
-   daemon keeps ticking.
+5. Pointing `tesseractPath` at a non-existent file **falls back to auto-detect and warns once on stderr**
+   (this corrects an earlier draft of this criterion, which said it should degrade to `""` — that
+   contradicted §5.2's documented fallback order. Falling back is the intended behaviour; going silent
+   is not). If no Tesseract exists anywhere, the run degrades to `""` + one stderr line, no crash.
 6. The dashboard Settings card switches the engine and the choice persists across a reload.
 7. `git diff` touches only the files in §3.
