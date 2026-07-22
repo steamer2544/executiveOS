@@ -629,6 +629,25 @@ docs/scopes/           # per-phase specs (the contract handed to the implementer
   untouched; `.executive/tmp` + `screen-inferred.json` gitignored. 383 passing tests. Spec:
   `docs/scopes/phase-29-screen-ocr-vision.md`. Files: `src/screen/*`, `src/config.ts`, `src/paths.ts`,
   `src/report/{types,digest}.ts`, `src/ui/{server,page}.ts`, `src/index.ts`.
+- **Phase 29.1 — DONE** (architect, this commit): **Screen-sense Layer 2 goes live.** Phase 29 shipped
+  code-complete but *never actually captured* on this machine (Defender/AMSI). With the owner's Defender
+  exclusion in place the script finally ran — and immediately exposed two real defects that the AV block
+  had been masking, both in the hard-to-offline-test PowerShell/WinRT primitives: (1) **`screenshot.ts`
+  never wrote a file** — `$dst.Save($out, [ImageFormat]::Jpeg, $params)` doesn't bind, because the 3-arg
+  `Save` overload takes an **`ImageCodecInfo`**, not an `ImageFormat`; fixed by resolving the JPEG encoder
+  via `GetImageEncoders()` matched on `[ImageFormat]::Jpeg.Guid`. (2) **OCR faulted with
+  `AggregateException` on a file that existed** — the screenshot path is built by `"/"`-concatenation, and
+  WinRT `StorageFile.GetFileFromPathAsync` rejects a mixed-separator path (System.Drawing accepts it
+  happily); fixed with `normalize()` on **both** sides (producer returns a native path, `ocrImage`
+  normalizes defensively). **Live-validated end-to-end:** real screenshot (37KB jpeg, correctly downscaled
+  — not cropped) → real Windows.Media.Ocr read 148 chars off the live screen → the text LLM returned
+  block/deadline/task suggestions. 383 tests + typecheck green (the fixes are in live-only paths the mocked
+  tests inject around). **Still owner-gated:** the **Thai OCR pack** is not installed (`AvailableRecognizer
+  Languages` = `en-US` only), so Thai on screen OCRs to garbage; Layer 3 vision remains opt-in.
+  **Environment trap found (NOT a product bug, see `GOTCHA.md` §1):** the owner's work **Zscaler** proxy
+  MITMs TLS, and Bun's `fetch` uses its own CA store → every gateway call died as
+  `UNABLE_TO_GET_ISSUER_CERT_LOCALLY`, which each client swallowed into a polite `"ocr: no signal"`. Turning
+  Zscaler off restored it; no code change. Files: `src/screen/{screenshot,ocr}.ts`, `GOTCHA.md`.
 - **Loop complete (manual trigger):** `auto --apply` runs the whole chain in one command; the human
   reviews/merges the `executive/change-<id>` branch.
 

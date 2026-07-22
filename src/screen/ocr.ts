@@ -8,6 +8,7 @@
 
 import { tmpDir } from "../paths.js";
 import { mkdirSync, writeFileSync, unlinkSync } from "node:fs";
+import { normalize } from "node:path";
 
 // Static script body (AMSI-safe as a -File). $args[0] = image path, $args[1] = optional BCP-47 language.
 const OCR_PS1 = [
@@ -46,6 +47,10 @@ export function ocrImage(path: string, language?: string | null): string {
   if (process.platform !== "win32") {
     return "";
   }
+
+  // WinRT StorageFile.GetFileFromPathAsync requires an OS-native absolute path; a mixed/forward-
+  // slash path faults with an AggregateException. Normalize defensively regardless of caller.
+  path = normalize(path);
 
   const stamp = Date.now() + "-" + Math.random().toString(36).slice(2, 8);
   const scriptPath = tmpDir() + "/ocr-" + stamp + ".ps1";

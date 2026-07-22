@@ -29,6 +29,16 @@
   fire-and-forget behind a cooldown + in-flight lock; a slow/failed call must never block a rebuild tick.
 - **Response parsing must tolerate prose + code fences.** The model wraps JSON in ```json fences or chatty
   text; every parser strips fences and extracts the first `{…}`…last `}` before `JSON.parse`.
+- **A corporate TLS proxy (Zscaler) silently kills every gateway call.** *Symptom:* every LLM feature
+  reports its own polite "nothing found" — screen-infer says `"ocr: no signal"`, the advisor proposes
+  nothing — because each client catches *all* errors and returns `[]`. *Cause:* the proxy re-signs the
+  cert with a corporate root; `curl` succeeds (Windows cert store) but **Bun's `fetch` uses its own
+  bundled CA store** → `UNABLE_TO_GET_ISSUER_CERT_LOCALLY`. *Diagnose:* `echo | openssl s_client -connect
+  gateway.9arm.co:443` — a `Zscaler Inc.` issuer is the tell; or ping the gateway with a bare `fetch` and
+  read the thrown error. *Fix:* turn the proxy off (it is the owner's work VPN, not always on). If it ever
+  must stay on: `NODE_EXTRA_CA_CERTS=<corp-root.pem>` — but note **Bun does NOT honor it from `.env`**
+  (the TLS store initializes before `.env` loads); it must be a real process env var, or use Bun's
+  per-request `fetch(url, { tls: { ca } })`. Not a product bug — do not "fix" it in code. (Phase 29 live)
 
 ## 2. Windows / PowerShell
 
@@ -38,7 +48,19 @@
   `-Command` **and** `-File` alike. *Fix:* there is **no code fix** — the owner adds a Defender exclusion
   for the runtime. **Do NOT obfuscate/encode to evade it** (that is detection-evasion, off-limits even for
   a legit feature). Capture returns `null` → the feature degrades gracefully (no crash, "no signal").
-  (Phase 29)
+  **Resolved on this machine (Phase 29.1):** with the exclusion in place, capture works — a real
+  screenshot + OCR of the live screen was validated end-to-end. (Phase 29)
+- **`Image.Save(path, format, encoderParams)` does not exist.** *Symptom:* the capture `.ps1` exits
+  non-zero with "Cannot find an overload for Save". *Cause:* the 3-argument overload takes an
+  **`ImageCodecInfo`**, not an `ImageFormat` — passing `[ImageFormat]::Jpeg` alongside `EncoderParameters`
+  never binds. *Fix:* resolve the encoder by GUID —
+  `[ImageCodecInfo]::GetImageEncoders() | Where-Object { $_.FormatID -eq [ImageFormat]::Jpeg.Guid }`.
+  (Phase 29.1 · `src/screen/screenshot.ts`)
+- **WinRT `StorageFile.GetFileFromPathAsync` rejects mixed-separator paths.** *Symptom:* OCR throws
+  `AggregateException` even though the file plainly exists. *Cause:* paths built by `"/"`-concatenation
+  (`C:\dir/tmp/shot.jpg`) are fine for `System.Drawing` but WinRT demands an OS-native absolute path.
+  *Fix:* `normalize()` the path before spawning — done on **both** sides (producer `captureScreen`
+  returns a normalized path, consumer `ocrImage` normalizes defensively). (Phase 29.1)
 - **WinRT async needs an STA apartment.** *Symptom:* `Windows.Media.Ocr` / `StorageFile` calls throw
   `AggregateException` at `$task.Wait(-1)`. *Cause:* a bare spawned `powershell` is MTA for WinRT
   purposes. *Fix:* spawn `powershell -Sta`, and await `IAsyncOperation<T>` via the

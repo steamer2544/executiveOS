@@ -12,6 +12,7 @@
 
 import { tmpDir } from "../paths.js";
 import { mkdirSync, statSync, writeFileSync, unlinkSync } from "node:fs";
+import { normalize } from "node:path";
 
 /** Captured screenshot: path on disk, byte size, and format. */
 export interface Screenshot {
@@ -39,11 +40,13 @@ const CAPTURE_PS1 = [
   "$g2 = [System.Drawing.Graphics]::FromImage($dst)",
   "$g2.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic",
   "$g2.DrawImage($full, 0, 0, $w, $h)",
-  "$jpeg = [System.Drawing.Imaging.ImageFormat]::Jpeg",
+  // Save as JPEG with a quality param. The 3-arg Save overload needs an ImageCodecInfo (NOT an
+  // ImageFormat), so resolve the JPEG encoder by its FormatID guid.
+  "$codec = [System.Drawing.Imaging.ImageCodecInfo]::GetImageEncoders() | Where-Object { $_.FormatID -eq [System.Drawing.Imaging.ImageFormat]::Jpeg.Guid } | Select-Object -First 1",
   "$encoder = [System.Drawing.Imaging.Encoder]::Quality",
   "$params = New-Object System.Drawing.Imaging.EncoderParameters(1)",
   "$params.Param[0] = New-Object System.Drawing.Imaging.EncoderParameter($encoder, 70L)",
-  "$dst.Save($out, $jpeg, $params)",
+  "$dst.Save($out, $codec, $params)",
   "$g1.Dispose(); $g2.Dispose(); $full.Dispose(); $dst.Dispose()",
 ].join("\n");
 
@@ -78,7 +81,10 @@ export function captureScreen(_maxBytes: number): Screenshot | null {
     }
 
     const size = statSync(filePath).size;
-    return { path: filePath, bytes: size, format: "jpeg" };
+    // Return an OS-native path (backslashes on Windows). The path is built by "/"-concatenation,
+    // so it can mix separators — harmless for System.Drawing, but WinRT StorageFile (used by the
+    // OCR consumer) rejects a mixed/forward-slash path with an AggregateException.
+    return { path: normalize(filePath), bytes: size, format: "jpeg" };
   } catch {
     process.stderr.write("screenshot: capture command unavailable\n");
     return null;

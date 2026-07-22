@@ -3,11 +3,16 @@
 > **Purpose:** a single doc to resume this project cold if context/memory is lost. Pairs with
 > `CLAUDE.md` (the authoritative phase-by-phase log), `GOTCHA.md` (traps & non-obvious failure modes —
 > read before touching PowerShell/state/tests/LLM), and `README.md` (user-facing overview).
-> Last updated after **Phase 29** (screen OCR/Vision), tip commit `d577133`. **383 passing tests**, all green.
+> Last updated after **Phase 29.1** (screen OCR live). **383 passing tests**, all green.
 
-> **⏭️ Immediate next task (owner-gated, code complete):** turn on screen-sensing (Layer 2/3) — needs a
-> **Windows Defender exclusion** (AMSI blocks the screenshot script) + the **Thai OCR language pack**.
-> See §6 → "Enable screen-sensing". Everything is off-by-default and degrades gracefully until then.
+> **⏭️ Immediate next task:** screen-sensing **Layer 2 is now live** — the Defender exclusion is in place
+> and the full chain (screenshot → on-device OCR → LLM suggestions) was validated end-to-end. What remains
+> is the **Thai OCR language pack** (only `en-US` installed, so Thai on screen OCRs to garbage) and, if
+> wanted, the opt-in **Layer 3 vision** call. See §6.
+>
+> **If every LLM feature suddenly reports "nothing found":** check whether the work **Zscaler** proxy is
+> on — it MITMs TLS and Bun's `fetch` rejects the re-signed cert, and every client swallows that into a
+> polite empty result. `GOTCHA.md` §1 has the diagnosis. Not a product bug.
 
 ---
 
@@ -145,11 +150,10 @@ Every phase = one commit + a `CLAUDE.md` phase entry.
 
 ## 6. Remaining work
 
-### ⏭️ Enable screen-sensing (Layer 2/3) — the immediate next task (code complete, owner-gated)
-All of Phase 29 is built + reviewed; it just can't **capture** on this machine yet. To turn it on:
-1. **Windows Defender exclusion** (unblocks the screenshot): Windows Security → Virus & threat protection →
-   Manage settings → Exclusions → Add → the project folder (or `powershell.exe`). Without this, capture
-   returns null and Layer 2/3 produce no suggestions (no crash — it's a clean no-op).
+### ⏭️ Screen-sensing — Layer 2 is LIVE; two optional steps remain
+Phase 29.1 got the full chain working on this machine (screenshot → OCR → suggestions, validated live).
+1. ~~**Windows Defender exclusion**~~ — **done.** (Windows Security → Virus & threat protection → Manage
+   settings → Exclusions → the project folder.) If capture ever returns null again, re-check it first.
 2. **Thai OCR pack** (for Layer 2 Thai text): Settings → Time & Language → Language & region → Thai →
    Language options → install "Optical character recognition". (English is already present — OCR was
    validated live reading English off a generated image.) Check installed packs in PowerShell:
