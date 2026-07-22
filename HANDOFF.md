@@ -2,7 +2,11 @@
 
 > **Purpose:** a single doc to resume this project cold if context/memory is lost. Pairs with
 > `CLAUDE.md` (the authoritative phase-by-phase log) and `README.md` (user-facing overview).
-> Last updated at **Phase 25**. 260 passing tests, all green.
+> Last updated after **Phase 29** (screen OCR/Vision), tip commit `d577133`. **383 passing tests**, all green.
+
+> **⏭️ Immediate next task (owner-gated, code complete):** turn on screen-sensing (Layer 2/3) — needs a
+> **Windows Defender exclusion** (AMSI blocks the screenshot script) + the **Thai OCR language pack**.
+> See §6 → "Enable screen-sensing". Everything is off-by-default and degrades gracefully until then.
 
 ---
 
@@ -21,7 +25,7 @@ Main loop: **Observe → Understand → Predict → Act → Observe again.**
 
 ---
 
-## 2. Current status — DONE through Phase 25
+## 2. Current status — DONE through Phase 30
 
 The full loop works and is validated (including **live against the real LLM gateway**). Phases (see
 `CLAUDE.md` for the detailed entry on each):
@@ -55,9 +59,18 @@ The full loop works and is validated (including **live against the real LLM gate
 | 23.2 | Hold-to-talk | hold Space to dictate in the dashboard |
 | 24 | Whisper transcription | `config.transcribe` block; `POST /api/transcribe` server-side proxy to Whisper endpoint; MediaRecorder dashboard mic with Web-Speech fallback; scaffolded, needs owner's endpoint+key |
 | 25 | Transcription backends + Settings | `transcribe.mode` = **webspeech / whisper-api / browser-wasm**; dashboard Settings card (mode + fields + Groq/local presets + Save + Download); `POST /api/settings`, `/api/transcribe/download`+`/status`, static `/vendor`+`/models`; `download-model` CLI; browser-wasm serves lib+model from 127.0.0.1 (audio never leaves the machine) |
+| 25.1–25.4 | browser-wasm polish | minimal-dtype model download (~81MB not ~1.6GB); Playwright e2e proves the in-browser transcription end-to-end; single merged language selector |
+| 26 (+26.1) | **Multi-repo watching** | `config.watch.repos[]` → one git(+fs) watcher per repo via `buildWatchers`; State picks `activeRepo` (highest-seq repo-tagged event) + `state.repos[]`; Project/Branch/Task move together. 26.1: sort `repos` by seq (deterministic), not wall-clock |
+| 27 | **Approve → Execute** | approving an **executable code** Advisor proposal (`executable:true`+`repo`) runs Synth→Executor onto an isolated branch (opt-in `applyOnApprove`/`--apply`); a hard `sanitizeExecutable()` filter forces life/money/relationship/goal proposals to record-only. Advisor prompt broadened to all of life; `approve`/`dismiss` CLI |
+| — | FsWatcher temp-file fix | `isIgnoredPath()` now ignores dotfiles/dot-dirs + `.tmp.` infix + temp/backup suffixes (temp scratch was polluting `currentFile`) |
+| 28 | **Screen-sense Layer 1** | poll-based watcher emits `screen.window{title,app}` on change (5th event source, no LLM/image); `State.currentWindow`, digest "Looking at" line. `CharSet.Unicode`+UTF-8 so Thai titles survive |
+| 29 | **Screen-sense Layer 2 + 3** | screenshot → **on-device OCR** (Layer 2) or **`qwen-vl-max` vision** (Layer 3, OpenAI `/v1/chat/completions`) → **suggestions only** in `screen-inferred.json`, merged into the digest. Off by default. **Blocked by Defender/AMSI until an exclusion is added — see §6** |
+| 30 | **State coherence** | `currentFile` pruned to files that still exist on disk (resolves against watched roots); empty `system.task` now **clears** the task; dashboard "Clear task" button |
 
-**Test count:** 260 passing, 100% offline (mock backends). Several phases also **validated live** against
-the 9arm Qwen gateway (`work`, `synth`, `infer`, `propose`); the Phase-25 vendor download runs live too.
+**Test count:** 383 passing, 100% offline (mock backends). Several phases **validated live** against the
+9arm Qwen gateway (`work`, `synth`, `infer`, `propose`); Phase-29 OCR validated live (English, generated
+image); Phase-25 vendor download + browser-wasm e2e run live too. **Not yet live:** Phase-29 vision call
+(owner-run, spends a token) and screenshot capture (Defender-blocked — §6).
 
 ---
 
@@ -66,7 +79,7 @@ the 9arm Qwen gateway (`work`, `synth`, `infer`, `propose`); the Phase-25 vendor
 ```bash
 bun install
 bun run typecheck          # tsc --noEmit (strict) — must stay green
-bun test                   # 260 tests, offline
+bun test                   # 383 tests, offline
 bun run test:e2e           # OPT-IN browser-wasm e2e (real Chromium via Playwright; runs under node, auto-skips
                            #   if playwright/model aren't set up — see test/e2e/README.md)
 
@@ -97,6 +110,23 @@ Every phase = one commit + a `CLAUDE.md` phase entry.
   and the daemon retries. `/no_think` did NOT help (made it worse). Headroom is the lever.
 - Response parsing tolerates code fences / surrounding prose and extracts the JSON (`parseGuesses`,
   `parseDrafts`, etc.).
+- **Two API shapes:** everything text (worker/synth/infer/advisor) uses the **Anthropic** `/v1/messages`
+  shape. **Vision (Phase 29, `qwen-vl-max`) is different** — the gateway's multimodal endpoint is
+  **OpenAI-compatible** `POST /v1/chat/completions` with `image_url` base64 data-URL content parts
+  (`src/screen/vision.ts`, response text at `choices[0].message.content`). Don't force images through the
+  Anthropic client. Default `screen.vision.baseUrl`/`apiKeyEnv` fall back to `config.worker.*` at use time.
+
+### Windows / PowerShell gotchas (hard-won, Phase 28–29)
+- **Defender/AMSI blocks screen capture:** a PowerShell script that does `CopyFromScreen` is flagged
+  "malicious content" and refused — via `-Command` **and** `-File` alike. Not code-fixable without an AV
+  exclusion; do **not** obfuscate to evade it (that's detection-evasion). Capture returns null → graceful.
+- **WinRT needs STA:** `Windows.Media.Ocr` / `StorageFile` async ops fault (`AggregateException`) in an MTA
+  apartment; spawn `powershell -Sta`. Await `IAsyncOperation<T>` via the `[WindowsRuntimeSystemExtensions]
+  .AsTask` generic bridge (see `src/screen/ocr.ts`).
+- **Unicode from PowerShell:** set `[Console]::OutputEncoding = UTF8` **and**, for window titles,
+  `[DllImport(..., CharSet=CharSet.Unicode)]` (the ANSI default mangles Thai to `?`).
+- **`bun -e "...'$WINPATH'..."` eats backslashes** (JS string escapes) — a *test-harness* trap, not a bug;
+  pass Windows paths via `process.env`, not interpolated into the `-e` string.
 
 ---
 
@@ -113,6 +143,23 @@ Every phase = one commit + a `CLAUDE.md` phase entry.
 ---
 
 ## 6. Remaining work
+
+### ⏭️ Enable screen-sensing (Layer 2/3) — the immediate next task (code complete, owner-gated)
+All of Phase 29 is built + reviewed; it just can't **capture** on this machine yet. To turn it on:
+1. **Windows Defender exclusion** (unblocks the screenshot): Windows Security → Virus & threat protection →
+   Manage settings → Exclusions → Add → the project folder (or `powershell.exe`). Without this, capture
+   returns null and Layer 2/3 produce no suggestions (no crash — it's a clean no-op).
+2. **Thai OCR pack** (for Layer 2 Thai text): Settings → Time & Language → Language & region → Thai →
+   Language options → install "Optical character recognition". (English is already present — OCR was
+   validated live reading English off a generated image.) Check installed packs in PowerShell:
+   `[Windows.Media.Ocr.OcrEngine,Windows.Foundation,ContentType=WindowsRuntime]; [Windows.Media.Ocr.OcrEngine]::AvailableRecognizerLanguages | %{ $_.LanguageTag }`
+3. **Turn it on** in the dashboard **Settings** card (OCR and/or Vision toggles). Vision (Layer 3) also needs
+   the gateway key in `.env` (`EXECUTIVE_WORKER_KEY`, reused) — it sends the **whole screenshot** to the
+   gateway, so it's the opt-in escalation; OCR keeps the image local.
+4. **Verify live:** with OCR on, a capture should write suggestions to `.executive/screen-inferred.json` and
+   they appear in the digest / dashboard "Suggestions (unconfirmed)" with Confirm. The vision HTTP path is
+   still owner-run (spends a token). Ethics held: off by default, visible "🔴 reading screen" indicator,
+   own-screen only.
 
 ### Needs the owner (to go live — code is complete)
 Transcription now has **three working backends** (Phase 25); pick one in the dashboard **Settings** card:
@@ -132,9 +179,12 @@ Transcription now has **three working backends** (Phase 25); pick one in the das
 - **SQLite/Drizzle** storage — JSONL is fine until it isn't (tech-stack target, no pain yet).
 - **`rules.md` / `planner.md`** — the vision's remaining 4-layer artifacts (editable decision rules /
   long-term goals). Speculative; rules already live as code in `src/planner/rules.ts`.
-- **Wiring approved proposals to real execution** — today approving a Proposal records + logs it; it has no
-  "hands" for irreversible real-world actions (by design). A future phase could route approved *work*
-  proposals into the autopilot chain.
+- **Wiring approved proposals to real execution** — **partly done (Phase 27):** approving an *executable
+  code* proposal now runs Synth→Executor onto an isolated branch. *Life/money/relationship/goal* proposals
+  are still record-only by design (the `sanitizeExecutable()` filter forces it) — they have no "hands" for
+  irreversible real-world actions, and that boundary is intentional.
+- **Screen-sensing beyond title** is live as Phase 29 (OCR/Vision) but owner-gated on a Defender exclusion
+  (§6). No always-on/hidden capture — deliberately out of scope (third-party consent).
 
 ---
 
@@ -154,6 +204,8 @@ src/
 ├── infer/         # LLM block/deadline guesses (inferred.json)
 ├── advisor/       # proactive proposal queue (advisor.json)
 ├── hooks/         # install-hooks (post-commit test emitter)
+├── screen/        # Layer 1 capture.ts (window title) + Layer 2/3 screenshot.ts/ocr.ts/vision.ts/screen-infer.ts
+├── watchers/      # git + fs + screen (Layer 1) watchers; build.ts (multi-repo watcher assembly)
 ├── ui/            # Bun.serve dashboard (server.ts + page.ts) + models.ts (browser-wasm asset fetch)
 ├── config.ts  paths.ts  bootstrap.ts  index.ts (CLI)
 .executive/        # runtime data (gitignored): config.json, claude.md, events/, state/plan/digest/
