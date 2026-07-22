@@ -155,9 +155,13 @@ Every phase = one commit + a `CLAUDE.md` phase entry.
 Phase 29.1 got the full chain working on this machine (screenshot → OCR → suggestions, validated live).
 1. ~~**Windows Defender exclusion**~~ — **done.** (Windows Security → Virus & threat protection → Manage
    settings → Exclusions → the project folder.) If capture ever returns null again, re-check it first.
-2. **Thai OCR pack** (for Layer 2 Thai text): Settings → Time & Language → Language & region → Thai →
-   Language options → install "Optical character recognition". (English is already present — OCR was
-   validated live reading English off a generated image.) Check installed packs in PowerShell:
+2. ~~**Thai OCR pack**~~ — **does not exist.** Verified with an elevated
+   `Get-WindowsCapability -Online -Name "Language.OCR*"`: Windows offers **36** OCR languages
+   (ar, zh-CN/HK/TW, ja, ko, ru, most of Europe) and **`th-TH` is not one of them**. So Layer 2 is
+   **English-only, permanently** — Thai on screen OCRs to garbage and no install can change that.
+   (Layer 1 window titles still carry Thai correctly — different API.) See `GOTCHA.md` §2 for the
+   alternatives (local Tesseract with `tha.traineddata`, a multimodal LLM, or accept English-only).
+   Check what is actually installed:
    `[Windows.Media.Ocr.OcrEngine,Windows.Foundation,ContentType=WindowsRuntime]; [Windows.Media.Ocr.OcrEngine]::AvailableRecognizerLanguages | %{ $_.LanguageTag }`
 2b. **Layer 3 (vision) is blocked at the gateway** — `qwen-vl-max` → `403 team_model_access_denied` (the
    team may only use `qwen3.6-35b-a3b`). Enabling the toggle is harmless (it reports `vision: unavailable`)

@@ -72,6 +72,15 @@
   (`C:\dir/tmp/shot.jpg`) are fine for `System.Drawing` but WinRT demands an OS-native absolute path.
   *Fix:* `normalize()` the path before spawning — done on **both** sides (producer `captureScreen`
   returns a normalized path, consumer `ocrImage` normalizes defensively). (Phase 29.1)
+- **Windows.Media.Ocr has NO Thai language pack — Thai is unreadable by Layer 2, permanently.**
+  *Symptom:* Thai on screen OCRs to garbage (`แชท` → `FE uazå-uüum%io`); Settings has no OCR checkbox
+  under the Thai language. *Cause:* not a missing install — Windows simply does not ship one.
+  `Get-WindowsCapability -Online -Name "Language.OCR*"` (needs elevation) lists **36** languages
+  including ar/zh-CN/zh-HK/zh-TW/ja/ko/ru and most of Europe — **`th-TH` is not among them**, so
+  `TryCreateFromLanguage("th")` can never succeed. *Fix:* none within the WinRT OCR engine. Options are a
+  different local engine (Tesseract `tha.traineddata`), a multimodal LLM (blocked here — see §1), or
+  accepting English-only OCR. **Layer 1 window titles still carry Thai fine** (that path is a Win32
+  `GetWindowTextW`, not OCR). (Phase 29.3)
 - **WinRT async needs an STA apartment.** *Symptom:* `Windows.Media.Ocr` / `StorageFile` calls throw
   `AggregateException` at `$task.Wait(-1)`. *Cause:* a bare spawned `powershell` is MTA for WinRT
   purposes. *Fix:* spawn `powershell -Sta`, and await `IAsyncOperation<T>` via the
