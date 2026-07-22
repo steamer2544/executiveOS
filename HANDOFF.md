@@ -36,7 +36,7 @@ Main loop: **Observe → Understand → Predict → Act → Observe again.**
 
 ---
 
-## 2. Current status — DONE through Phase 30
+## 2. Current status — DONE through Phase 31
 
 The full loop works and is validated (including **live against the real LLM gateway**). Phases (see
 `CLAUDE.md` for the detailed entry on each):
@@ -75,13 +75,17 @@ The full loop works and is validated (including **live against the real LLM gate
 | 27 | **Approve → Execute** | approving an **executable code** Advisor proposal (`executable:true`+`repo`) runs Synth→Executor onto an isolated branch (opt-in `applyOnApprove`/`--apply`); a hard `sanitizeExecutable()` filter forces life/money/relationship/goal proposals to record-only. Advisor prompt broadened to all of life; `approve`/`dismiss` CLI |
 | — | FsWatcher temp-file fix | `isIgnoredPath()` now ignores dotfiles/dot-dirs + `.tmp.` infix + temp/backup suffixes (temp scratch was polluting `currentFile`) |
 | 28 | **Screen-sense Layer 1** | poll-based watcher emits `screen.window{title,app}` on change (5th event source, no LLM/image); `State.currentWindow`, digest "Looking at" line. `CharSet.Unicode`+UTF-8 so Thai titles survive |
-| 29 | **Screen-sense Layer 2 + 3** | screenshot → **on-device OCR** (Layer 2) or **`qwen-vl-max` vision** (Layer 3, OpenAI `/v1/chat/completions`) → **suggestions only** in `screen-inferred.json`, merged into the digest. Off by default. **Blocked by Defender/AMSI until an exclusion is added — see §6** |
+| 29 | **Screen-sense Layer 2 + 3** | screenshot → **on-device OCR** (Layer 2) or **`qwen-vl-max` vision** (Layer 3, OpenAI `/v1/chat/completions`) → **suggestions only** in `screen-inferred.json`, merged into the digest. Off by default |
 | 30 | **State coherence** | `currentFile` pruned to files that still exist on disk (resolves against watched roots); empty `system.task` now **clears** the task; dashboard "Clear task" button |
+| 29.1 | **Layer 2 goes live** | the Defender exclusion let the capture script actually run, exposing 2 defects it had masked: `Save()` needs an `ImageCodecInfo` (not `ImageFormat`) so **no file was ever written**, and WinRT rejects mixed-separator paths. Real screenshot → real OCR → real suggestions, end to end |
+| 29.2 | **Failure honesty** | `runScreenInference` no longer breaks its "never throws" contract on the vision path (it left `screen-inferred.json` **stale**), and a hard LLM failure (TLS/401/403/timeout) now reports `ocr: llm unavailable — <reason>` instead of the indistinguishable `ocr: no signal`. Verdict on Layer 3: **`qwen-vl-max` is 403 on this gateway** |
+| 31 | **Tesseract OCR engine** | `config.screen.ocr.engine` = `winrt` (default) \| `tesseract` + `languages` + `tesseractPath`; `normalizeThaiOcr()` recomposes Thai sara-am; dashboard selector. **Layer 2 finally reads Thai** — WinRT never can (no `th-TH` pack exists) |
 
-**Test count:** 383 passing, 100% offline (mock backends). Several phases **validated live** against the
-9arm Qwen gateway (`work`, `synth`, `infer`, `propose`); Phase-29 OCR validated live (English, generated
-image); Phase-25 vendor download + browser-wasm e2e run live too. **Not yet live:** Phase-29 vision call
-(owner-run, spends a token) and screenshot capture (Defender-blocked — §6).
+**Test count:** 406 passing, 100% offline (mock backends). Several phases **validated live** against the
+9arm Qwen gateway (`work`, `synth`, `infer`, `propose`); Phase-25 vendor download + browser-wasm e2e run
+live too. **Screen-sensing is now fully live** (real capture → real OCR → real suggestions, both engines
+compared on the same image). **Not live:** the Layer 3 vision call — it is **403 at the gateway**, not a
+code problem (§6).
 
 ---
 
@@ -90,7 +94,7 @@ image); Phase-25 vendor download + browser-wasm e2e run live too. **Not yet live
 ```bash
 bun install
 bun run typecheck          # tsc --noEmit (strict) — must stay green
-bun test                   # 383 tests, offline
+bun test                   # 406 tests, offline
 bun run test:e2e           # OPT-IN browser-wasm e2e (real Chromium via Playwright; runs under node, auto-skips
                            #   if playwright/model aren't set up — see test/e2e/README.md)
 
@@ -100,10 +104,21 @@ bun run src/index.ts ui    # dashboard at localhost:4317 (+ watches git/files); 
 Full command list is in `README.md` / `CLAUDE.md` and `printUsage()` in `src/index.ts`.
 
 **Dev workflow (division of labor):** the architect (Claude) writes a **scope** in `docs/scopes/`, hands it
-to **claude9arm** (a cheaper Qwen worker, driven externally by the owner) to implement, then the architect
-**reviews + runs every acceptance criterion for real** (never trusts the self-report), fixes defects, and
-commits. In this session the architect often implemented directly (qwen relayed by the owner, who was away).
-Every phase = one commit + a `CLAUDE.md` phase entry.
+to **claude9arm** (a cheaper Qwen worker) to implement, then the architect **reviews + runs every acceptance
+criterion for real** (never trusts the self-report), fixes defects, and commits. Every phase = one commit +
+a `CLAUDE.md` phase entry.
+
+- Delegate with `claude-9arm -p "<self-contained prompt>" --allowedTools Bash Read Edit Write Glob Grep`
+  (there is a `qwen-agent` skill for this). The prompt must be **standalone** — qwen has none of the
+  conversation's context — with absolute paths and explicit acceptance criteria.
+- **Delegation depends on Arm's box being up.** Phase 31's runs died to a gateway outage mid-task; when
+  that happens the architect finishes the work rather than blocking. Split jobs so they touch **disjoint
+  files** — a parallel run whose `bun run typecheck` sees another job's half-edited file will try to
+  "fix" files it was told not to touch.
+- **Review qwen's output rather than trusting it.** Real defects found so far: assertions hidden inside
+  un-awaited `setTimeout` (a suite that passes against deliberately broken code), a `.replace()` with a
+  string instead of a global regex (fixed only the first match), whole-file rewrites via a generated
+  `tmp-*.js` script that flatten non-ASCII and leave litter behind.
 
 ---
 
@@ -126,11 +141,35 @@ Every phase = one commit + a `CLAUDE.md` phase entry.
   **OpenAI-compatible** `POST /v1/chat/completions` with `image_url` base64 data-URL content parts
   (`src/screen/vision.ts`, response text at `choices[0].message.content`). Don't force images through the
   Anthropic client. Default `screen.vision.baseUrl`/`apiKeyEnv` fall back to `config.worker.*` at use time.
+- **The team can only use `qwen3.6-35b-a3b`.** Any other model → `403 team_model_access_denied`. That is
+  why Layer 3 vision cannot work here; only Arm can change it.
 
-### Windows / PowerShell gotchas (hard-won, Phase 28–29)
+### Diagnosing "the LLM found nothing" (three different real causes, same symptom)
+Every client used to swallow errors into an empty result, so **an outage looks exactly like a quiet day**.
+Phase 29.2 fixed that for screen-infer (`ocr: llm unavailable — <reason>`); the others still report empty.
+When something LLM-shaped goes silent, check in this order:
+1. **Corporate TLS proxy (Zscaler).** The owner's work VPN MITMs TLS; `curl` works (Windows cert store)
+   but **Bun's `fetch` uses its own CA store** → `UNABLE_TO_GET_ISSUER_CERT_LOCALLY`. Tell:
+   `echo | openssl s_client -connect gateway.9arm.co:443` shows a `Zscaler Inc.` issuer. Fix: turn it off.
+   (`NODE_EXTRA_CA_CERTS` also works, but **Bun ignores it from `.env`** — the TLS store initialises first.)
+2. **Arm's inference box is down.** Cloudflare `524` after ~120s, and the direct call returns
+   `litellm.InternalServerError: Cannot connect to host vllm.tetra-magellanic.ts.net:8000`. Even a
+   one-word prompt times out. Nothing to fix on our side.
+3. **Genuinely no signal** — only conclude this after ruling out 1 and 2 with a bare `fetch` probe.
+
+### Windows / PowerShell gotchas (hard-won, Phase 28–31)
 - **Defender/AMSI blocks screen capture:** a PowerShell script that does `CopyFromScreen` is flagged
   "malicious content" and refused — via `-Command` **and** `-File` alike. Not code-fixable without an AV
   exclusion; do **not** obfuscate to evade it (that's detection-evasion). Capture returns null → graceful.
+  **An exclusion is in place on this machine**, so capture works; if it silently returns null again, check
+  that first. Note this block **masked two real defects for a whole phase** — code that never runs never
+  fails, so a "graceful degradation" path can hide broken code indefinitely.
+- **`Image.Save(path, format, encoderParams)` does not bind** — the 3-arg overload wants an
+  `ImageCodecInfo`; resolve it via `GetImageEncoders()` matched on `[ImageFormat]::Jpeg.Guid`.
+- **WinRT `StorageFile` rejects mixed separators** (`C:\dir/tmp/x.jpg`) with an `AggregateException` even
+  though the file exists — `normalize()` every path before it crosses into PowerShell.
+- **There is no Thai OCR pack for `Windows.Media.Ocr`, and there never will be** — Windows ships 36 OCR
+  languages and `th-TH` is not one. Use `config.screen.ocr.engine = "tesseract"` (Phase 31) for Thai.
 - **WinRT needs STA:** `Windows.Media.Ocr` / `StorageFile` async ops fault (`AggregateException`) in an MTA
   apartment; spawn `powershell -Sta`. Await `IAsyncOperation<T>` via the `[WindowsRuntimeSystemExtensions]
   .AsTask` generic bridge (see `src/screen/ocr.ts`).
@@ -155,27 +194,24 @@ Every phase = one commit + a `CLAUDE.md` phase entry.
 
 ## 6. Remaining work
 
-### ⏭️ Screen-sensing — Layer 2 is LIVE; two optional steps remain
-Phase 29.1 got the full chain working on this machine (screenshot → OCR → suggestions, validated live).
-1. ~~**Windows Defender exclusion**~~ — **done.** (Windows Security → Virus & threat protection → Manage
-   settings → Exclusions → the project folder.) If capture ever returns null again, re-check it first.
-2. ~~**Thai OCR pack**~~ — **does not exist, and is no longer needed (Phase 31).** Verified with an
-   elevated `Get-WindowsCapability -Online -Name "Language.OCR*"`: Windows offers **36** OCR languages
-   (ar, zh-CN/HK/TW, ja, ko, ru, most of Europe) and **`th-TH` is not one of them**, so the WinRT engine
-   is English-only forever. **Solved by switching the engine to Tesseract** (`config.screen.ocr.engine`,
-   or the dashboard Settings card): Tesseract 5.4 + `tha.traineddata` are installed and read Thai
-   correctly, including Thai/English mixed lines. Check what the WinRT engine has:
-   `[Windows.Media.Ocr.OcrEngine,Windows.Foundation,ContentType=WindowsRuntime]; [Windows.Media.Ocr.OcrEngine]::AvailableRecognizerLanguages | %{ $_.LanguageTag }`
-2b. **Layer 3 (vision) is blocked at the gateway** — `qwen-vl-max` → `403 team_model_access_denied` (the
-   team may only use `qwen3.6-35b-a3b`). Enabling the toggle is harmless (it reports `vision: unavailable`)
-   but it will not produce suggestions until Arm allows the model or another multimodal endpoint is used.
-3. **Turn it on** in the dashboard **Settings** card (OCR and/or Vision toggles). Vision (Layer 3) also needs
-   the gateway key in `.env` (`EXECUTIVE_WORKER_KEY`, reused) — it sends the **whole screenshot** to the
-   gateway, so it's the opt-in escalation; OCR keeps the image local.
-4. **Verify live:** with OCR on, a capture should write suggestions to `.executive/screen-inferred.json` and
-   they appear in the digest / dashboard "Suggestions (unconfirmed)" with Confirm. The vision HTTP path is
-   still owner-run (spends a token). Ethics held: off by default, visible "🔴 reading screen" indicator,
-   own-screen only.
+### ✅ Screen-sensing is DONE and running — nothing is blocked
+State on this machine: Defender exclusion in place, `screen.ocr.enabled = true`, `engine = "tesseract"`,
+`languages = "tha+eng"`, Tesseract 5.4 + `tha.traineddata` installed. A capture writes suggestions to
+`.executive/screen-inferred.json`, surfaced in the digest / dashboard "Suggestions (unconfirmed)" with a
+Confirm button. Ethics held: opt-in, visible "🔴 reading screen" indicator, own-screen only.
+Layer 3 (vision) stays off — `qwen-vl-max` is 403 at the gateway; it fails cleanly if enabled.
+
+### ⏭️ Best next task — pick the OCR language from the window title
+`-l tha+eng` **hallucinates Thai on screens that contain none**. Measured on one real screenshot:
+`-l eng` → 0 Thai chars / 8 English words; `-l tha+eng` → **59 garbage Thai chars** / 7 English words —
+so `tha` also costs a little English accuracy. It is *not* a resolution artifact (native 1536×960 gives
+the same garbage), and the LLM still read the screen correctly, so this is noise rather than breakage.
+
+The fix is cheap and uses what already exists: Layer 1 already puts the active window title in
+`State.currentWindow` **with Thai intact** (it is a `GetWindowTextW` call, not OCR). Derive the language
+list from it — Thai characters in the title → `tha+eng`, otherwise `eng` — instead of always sending both.
+`config.screen.ocr.languages` stays the manual override. Everything needed is in `src/state/types.ts`
+(`currentWindow`) and `src/screen/screen-infer.ts` (which already reads the config block).
 
 ### Needs the owner (to go live — code is complete)
 Transcription now has **three working backends** (Phase 25); pick one in the dashboard **Settings** card:
@@ -199,8 +235,12 @@ Transcription now has **three working backends** (Phase 25); pick one in the das
   code* proposal now runs Synth→Executor onto an isolated branch. *Life/money/relationship/goal* proposals
   are still record-only by design (the `sanitizeExecutable()` filter forces it) — they have no "hands" for
   irreversible real-world actions, and that boundary is intentional.
-- **Screen-sensing beyond title** is live as Phase 29 (OCR/Vision) but owner-gated on a Defender exclusion
-  (§6). No always-on/hidden capture — deliberately out of scope (third-party consent).
+- **Screen-sensing beyond title** is fully live (Phase 29/29.1/29.2/31). No always-on/hidden capture —
+  deliberately out of scope (third-party consent), and that boundary was re-affirmed when asked to make
+  listening covert.
+- **A better Thai OCR pipeline** (confidence filtering via Tesseract's TSV output, `--psm` tuning,
+  cropping to the foreground window instead of the whole screen). Only worth it if the noise above
+  actually degrades suggestions — right now it does not.
 
 ---
 
@@ -221,6 +261,7 @@ src/
 ├── advisor/       # proactive proposal queue (advisor.json)
 ├── hooks/         # install-hooks (post-commit test emitter)
 ├── screen/        # Layer 1 capture.ts (window title) + Layer 2/3 screenshot.ts/ocr.ts/vision.ts/screen-infer.ts
+│                  #   ocr.ts holds BOTH engines: runWinRtOcr (PowerShell/WinRT) + Tesseract (plain exe)
 ├── watchers/      # git + fs + screen (Layer 1) watchers; build.ts (multi-repo watcher assembly)
 ├── ui/            # Bun.serve dashboard (server.ts + page.ts) + models.ts (browser-wasm asset fetch)
 ├── config.ts  paths.ts  bootstrap.ts  index.ts (CLI)
