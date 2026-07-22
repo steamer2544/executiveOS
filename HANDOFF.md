@@ -1,7 +1,8 @@
 # ExecutiveOS — Handoff & Plan
 
 > **Purpose:** a single doc to resume this project cold if context/memory is lost. Pairs with
-> `CLAUDE.md` (the authoritative phase-by-phase log) and `README.md` (user-facing overview).
+> `CLAUDE.md` (the authoritative phase-by-phase log), `GOTCHA.md` (traps & non-obvious failure modes —
+> read before touching PowerShell/state/tests/LLM), and `README.md` (user-facing overview).
 > Last updated after **Phase 29** (screen OCR/Vision), tip commit `d577133`. **383 passing tests**, all green.
 
 > **⏭️ Immediate next task (owner-gated, code complete):** turn on screen-sensing (Layer 2/3) — needs a

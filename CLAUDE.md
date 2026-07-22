@@ -662,3 +662,6 @@ bun test                                           # unit tests
 
 - The original vision doc is `read_it_my_bro.md` (Thai).
 - The owner cannot read Chinese — respond in Thai or English only.
+- **`GOTCHA.md`** collects hard-won traps (symptom → cause → fix) — LLM gateway, Windows/PowerShell
+  (AMSI, WinRT `-Sta`, Unicode), State Builder, and testing (vacuous `setTimeout` asserts, `bun -e`
+  backslash trap). Read it before touching those areas. `HANDOFF.md` is the cold-start doc.
