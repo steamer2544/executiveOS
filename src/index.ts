@@ -24,6 +24,7 @@ import { shouldRunAutopilot, freshGuardState } from "./auto/guard.js";
 import { buildDigest, renderDigest, writeDigest, needsYouSignature } from "./report/digest.js";
 import { digestPath } from "./paths.js";
 import { diffNeedsYou, appendNotifications, readNotifications } from "./report/notify.js";
+import { runCompaction } from "./compact/compact.js";
 import type { NeedsYouItem } from "./report/types.js";
 import { installHooks } from "./hooks/install.js";
 import { startUiServer } from "./ui/server.js";
@@ -65,6 +66,7 @@ Commands:
   auto [--apply] [--files a,b]                  Run the whole chain (plan→work→synth→execute); dry-run unless --apply
   report                                        Render a human-readable digest of the current state
   notifications [n]                             Show the last n "Needs you" notifications (default 10)
+  compact [--apply]                             Rewrite historical logs with today's noise filters (dry-run without --apply)
   install-hooks [--test "<cmd>"]                Install a git post-commit hook that auto-emits test results
   ui [--port N] [--no-watch]                    Open a local web dashboard (also watches git+files unless --no-watch)
   infer                                         Ask the LLM to guess block/deadline (suggestions only) → inferred.json
@@ -747,6 +749,37 @@ async function main(): Promise<void> {
         process.exit(1);
       }
       break;
+    }
+
+    case "compact": {
+      await bootstrap();
+      const applyFlag = args.includes("--apply");
+      try {
+        const r = runCompaction({ apply: applyFlag });
+        const line = (label: string, s: { before: number; after: number; samples: string[] }) => {
+          const removed = s.before - s.after;
+          process.stdout.write(
+            label + ": " + s.before + " → " + s.after + "  (" + removed + " removed)\n"
+          );
+          for (const sample of s.samples) {
+            process.stdout.write("    - " + sample.replace(/\s+/g, " ").slice(0, 90) + "\n");
+          }
+        };
+        process.stdout.write("mode: " + r.mode + "\n");
+        line("screen events", r.screen);
+        line("voice notes (system log)", r.notes);
+        line("pending proposals", r.advisor);
+        if (r.backupDir) {
+          process.stdout.write("\noriginals backed up to: " + r.backupDir + "\n");
+          process.stdout.write("restore by copying those files back over .executive/\n");
+        } else {
+          process.stdout.write("\nDry run — nothing written. Re-run with --apply to rewrite.\n");
+        }
+        process.exit(0);
+      } catch (err) {
+        process.stderr.write("Error: " + (err as Error).message + "\n");
+        process.exit(1);
+      }
     }
 
     case "install-hooks": {

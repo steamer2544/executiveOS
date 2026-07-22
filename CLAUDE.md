@@ -731,6 +731,24 @@ docs/scopes/           # per-phase specs (the contract handed to the implementer
   live foreground title normalizes correctly; replaying the real advisor queue merges 10/37 as repeats,
   each verified to be genuinely the same intent. Files: `src/watchers/screen.ts`, `src/planner/rules.ts`,
   `src/state/builder.ts`, `src/capture/note.ts`, `src/advisor/store.ts`, `src/ui/{page,server}.ts` (+ tests).
+- **Phase 32.1 — DONE** (architect impl + self-review + live-applied, this commit): **Log compaction.**
+  Phase 32's filters only govern *new* signals, so the historical log still carried the noise they were
+  written to stop. New `compact [--apply]` (`src/compact/compact.ts`) rewrites the past using the **same
+  pure predicates as the live path** (`normalizeTitle`, `judgeNote`, `isRepeatIntent`) — past and present
+  now agree by construction, not by a second copy of the rules. **Dry-run by default; `--apply` opt-in;
+  every rewritten file is copied to `.executive/backup-<ts>/` first**, so it is reversible by copying the
+  directory back (the project's "inspectable and reversible" rule). `seq` is **never renumbered** —
+  dropping events leaves survivors monotonic and meta.json's next-seq still ahead. Advisor duplicates are
+  marked `rejected` with a note rather than deleted (the record of what was proposed survives). 456
+  passing tests (16 new: idempotence, seq preservation, corrupt-line tolerance, missing-log tolerance,
+  backup integrity). **Defect found + fixed:** `writeJsonl` crashed with ENOENT when a log's directory did
+  not exist (advisor-only home) — it now no-ops rather than conjuring an events dir that `bootstrap` owns.
+  **One test expectation was wrong, not the code:** an interleaved `editor.save` does not "break"
+  window-repeat adjacency — the live watcher would emit nothing there either — so the test was corrected
+  to match live semantics. **Applied live:** screen **875 → 433** events, voice notes **1431 → 1365**
+  (all 66 dropped were fragments like "ก็เลย" / "24 24" — reviewed individually, no real thought lost),
+  a second run removes 0 (idempotent), backup holds the originals. The dashboard is now coherent:
+  Tests `passing` (hook), Deadline `—`, "Looking at" a clean title, and **"No action needed"**.
 - **Loop complete (manual trigger):** `auto --apply` runs the whole chain in one command; the human
   reviews/merges the `executive/change-<id>` branch.
 
