@@ -9,6 +9,7 @@ import {
   existsSync,
   mkdirSync,
 } from "node:fs";
+import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import { bootstrap } from "../bootstrap.js";
@@ -79,24 +80,35 @@ describe("buildState — currentFile / recentFiles", () => {
   afterEach(() => cleanup(TEST_DIR));
 
   it("derives currentFile and recentFiles from editor.save events", () => {
-    // seq 1-7: editor.save events, some duplicates
-    writeRawEvent("editor", 1, "editor.save", { path: "src/a.ts" });
-    writeRawEvent("editor", 2, "editor.save", { path: "src/b.ts" });
-    writeRawEvent("editor", 3, "editor.save", { path: "src/a.ts" });
-    writeRawEvent("editor", 4, "editor.save", { path: "src/c.ts" });
-    writeRawEvent("editor", 5, "editor.save", { path: "src/d.ts" });
-    writeRawEvent("editor", 6, "editor.save", { path: "src/e.ts" });
-    writeRawEvent("editor", 7, "editor.save", { path: "src/f.ts" });
+    // Create real files under TEST_DIR so fileStillExists finds them (cwd fallback).
+    const files = ["src/a.ts", "src/b.ts", "src/c.ts", "src/d.ts", "src/e.ts", "src/f.ts"];
+    for (const f of files) {
+      const fullPath = join(TEST_DIR, f);
+      mkdirSync(join(TEST_DIR, f.substring(0, f.lastIndexOf("/"))), { recursive: true });
+      writeFileSync(fullPath, "// " + f + "\n");
+    }
+    // seq 1-7: editor.save events, some duplicates — use absolute paths so existsSync finds them.
+    writeRawEvent("editor", 1, "editor.save", { path: join(TEST_DIR, "src/a.ts") });
+    writeRawEvent("editor", 2, "editor.save", { path: join(TEST_DIR, "src/b.ts") });
+    writeRawEvent("editor", 3, "editor.save", { path: join(TEST_DIR, "src/a.ts") });
+    writeRawEvent("editor", 4, "editor.save", { path: join(TEST_DIR, "src/c.ts") });
+    writeRawEvent("editor", 5, "editor.save", { path: join(TEST_DIR, "src/d.ts") });
+    writeRawEvent("editor", 6, "editor.save", { path: join(TEST_DIR, "src/e.ts") });
+    writeRawEvent("editor", 7, "editor.save", { path: join(TEST_DIR, "src/f.ts") });
 
     const { state } = buildState(new Date("2026-07-17T00:00:00.000Z"));
 
-    expect(state.currentFile).toBe("src/f.ts");
+    const base = join(TEST_DIR, "src");
+    expect(state.currentFile).toBe(join(base, "f.ts"));
     // Distinct newest→oldest, max 5. a.ts appears at seq 3 (newer than b.ts at seq 2),
     // so the walk sees f,e,d,c,a (b.ts at seq 2 is skipped because a.ts at seq 3 already
     // claimed that path — wait, they're different paths. b.ts is still distinct.)
     // Actually: walk newest→oldest: f(7), e(6), d(5), c(4), a(3), b(2), a(1).
     // Distinct: f, e, d, c, a → b is 6th distinct, cut off.
-    expect(state.recentFiles).toEqual(["src/f.ts", "src/e.ts", "src/d.ts", "src/c.ts", "src/a.ts"]);
+    expect(state.recentFiles).toEqual([
+      join(base, "f.ts"), join(base, "e.ts"), join(base, "d.ts"),
+      join(base, "c.ts"), join(base, "a.ts"),
+    ]);
   });
 });
 
@@ -593,5 +605,137 @@ describe("buildState — currentWindow derivation", () => {
 
     const { state } = buildState(new Date("2026-01-01T00:00:10.000Z"));
     expect(state.currentWindow).toEqual({ title: "Trello", app: "chrome" });
+  });
+});
+
+// ── Part 1: currentFile / recentFiles must exist on disk ──────────────────────
+
+describe("buildState — currentFile existence (Part 1)", () => {
+  const DIR = "/tmp/executive-test-fileexist-" + randomUUID();
+  beforeEach(() => setExecutiveHome(DIR));
+  afterEach(() => cleanup(DIR));
+
+  it("stale file dropped: nonexistent path at highest seq, real file at lower seq", () => {
+    // Create a real temp file that exists on disk
+    const realFile = join(DIR, "src", "real.ts");
+    mkdirSync(join(DIR, "src"), { recursive: true });
+    writeFileSync(realFile, "// real file\n");
+
+    // The nonexistent file has highest seq
+    writeRawEvent("editor", 2, "editor.save", { path: "does-not-exist-xyz.ts" });
+    // The real file has lower seq
+    writeRawEvent("editor", 1, "editor.save", { path: realFile });
+
+    const { state } = buildState(new Date("2026-07-17T00:00:00.000Z"));
+
+    // The stale file should be skipped; the real file becomes currentFile
+    expect(state.currentFile).toBe(realFile);
+    expect(state.recentFiles).toEqual([realFile]);
+  });
+
+  it("all editor.save paths nonexistent → currentFile null, recentFiles empty", () => {
+    writeRawEvent("editor", 1, "editor.save", { path: "ghost-1.ts" });
+    writeRawEvent("editor", 2, "editor.save", { path: "ghost-2.ts" });
+
+    const { state } = buildState(new Date("2026-07-17T00:00:00.000Z"));
+
+    expect(state.currentFile).toBeNull();
+    expect(state.recentFiles).toEqual([]);
+  });
+
+  it("existing file kept: a real file on disk becomes currentFile", () => {
+    const realFile = join(DIR, "src", "keep-me.ts");
+    mkdirSync(join(DIR, "src"), { recursive: true });
+    writeFileSync(realFile, "// keep me\n");
+
+    writeRawEvent("editor", 1, "editor.save", { path: realFile });
+
+    const { state } = buildState(new Date("2026-07-17T00:00:00.000Z"));
+
+    expect(state.currentFile).toBe(realFile);
+    expect(state.recentFiles).toEqual([realFile]);
+  });
+
+  it("a directory is NOT a currentFile (isFile check, not just existsSync)", () => {
+    // Regression: bare watcher paths can resolve to a real DIRECTORY (e.g. "src/state").
+    const aDir = join(DIR, "src", "adir");
+    const aFile = join(DIR, "src", "afile.ts");
+    mkdirSync(aDir, { recursive: true });
+    writeFileSync(aFile, "// file\n");
+
+    writeRawEvent("editor", 1, "editor.save", { path: aFile });
+    writeRawEvent("editor", 2, "editor.save", { path: aDir }); // highest seq, but it's a dir
+
+    const { state } = buildState(new Date("2026-07-17T00:00:00.000Z"));
+
+    // The directory must be skipped even though it exists on disk.
+    expect(state.currentFile).toBe(aFile);
+    expect(state.recentFiles).toEqual([aFile]);
+  });
+
+  it("resolves a watcher-relative path against config.watch.fs.paths (not just repo root)", () => {
+    // Regression: the FsWatcher watches "<root>/src", so editor.save records a path
+    // relative to THAT dir ("foo.ts", not "src/foo.ts"). The existence check must
+    // resolve against the watched dir, or every real file is wrongly dropped.
+    const watchedDir = join(DIR, "watched-src");
+    mkdirSync(watchedDir, { recursive: true });
+    writeFileSync(join(watchedDir, "foo.ts"), "// foo\n");
+    // config.json points the fs watcher at watchedDir.
+    mkdirSync(DIR, { recursive: true });
+    writeFileSync(join(DIR, "config.json"), JSON.stringify({ watch: { fs: { paths: [watchedDir] } } }));
+
+    // editor.save path is RELATIVE to the watched dir.
+    writeRawEvent("editor", 1, "editor.save", { path: "foo.ts" });
+
+    const { state } = buildState(new Date("2026-07-17T00:00:00.000Z"));
+
+    expect(state.currentFile).toBe("foo.ts");
+    expect(state.recentFiles).toEqual(["foo.ts"]);
+  });
+});
+
+// ── Part 2: clearable task/project (three-way semantics) ──────────────────────
+
+describe("buildState — clearable task (Part 2)", () => {
+  const DIR = "/tmp/executive-test-clear-" + randomUUID();
+  beforeEach(() => setExecutiveHome(DIR));
+  afterEach(() => cleanup(DIR));
+
+  it("empty task clears: task set then cleared → null", () => {
+    writeRawEvent("system", 1, "system.task", { task: "fix login" });
+    writeRawEvent("system", 2, "system.task", { task: "" });
+
+    const { state } = buildState(new Date("2026-07-17T00:00:00.000Z"));
+
+    expect(state.currentTask).toBeNull();
+  });
+
+  it("absent task key leaves task unchanged: set task, then set project only", () => {
+    writeRawEvent("system", 1, "system.task", { task: "fix login" });
+    writeRawEvent("system", 2, "system.task", { project: "myshi" });
+
+    const { state } = buildState(new Date("2026-07-17T00:00:00.000Z"));
+
+    expect(state.currentTask).toBe("fix login");
+    expect(state.currentProject).toBe("myshi");
+  });
+
+  it("clear then branch fallback: feat/dark-mode branch, clear explicit task → branch-derived", () => {
+    writeRawEvent("git", 1, "git.branch_switch", { to: "feat/dark-mode" });
+    writeRawEvent("system", 2, "system.task", { task: "old" });
+    writeRawEvent("system", 3, "system.task", { task: "" });
+
+    const { state } = buildState(new Date("2026-07-17T00:00:00.000Z"));
+
+    expect(state.currentTask).toBe("dark mode");
+  });
+
+  it("whitespace-only clears: task set then whitespace-only → null", () => {
+    writeRawEvent("system", 1, "system.task", { task: "fix login" });
+    writeRawEvent("system", 2, "system.task", { task: "   " });
+
+    const { state } = buildState(new Date("2026-07-17T00:00:00.000Z"));
+
+    expect(state.currentTask).toBeNull();
   });
 });

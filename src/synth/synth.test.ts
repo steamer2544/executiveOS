@@ -342,6 +342,12 @@ describe("runSynth — selectFiles fallback to State", () => {
     const eventsDirPath = join(EXEC_HOME, "events");
     mkdirSync(eventsDirPath, { recursive: true });
 
+    // buildState's Phase-30 currentFile existence check resolves editor.save paths
+    // against config.watch.repos (+ cwd). Point it at the temp repo so the fixture
+    // files created under `dir` are found — mirrors production, where the watched
+    // repo is a configured root (here `dir` is neither the process cwd nor default).
+    writeFileSync(join(EXEC_HOME, "config.json"), JSON.stringify({ watch: { repos: [{ path: dir, name: "testrepo" }] } }));
+
     const editorLog = eventsDirPath + "/editor.jsonl";
     appendFileSync(editorLog, JSON.stringify({ source: "editor", type: "editor.save", seq: 1, ts: "2026-07-17T00:00:01.000Z", data: { path: "src/index.ts" } }) + "\n");
     appendFileSync(editorLog, JSON.stringify({ source: "editor", type: "editor.save", seq: 2, ts: "2026-07-17T00:00:02.000Z", data: { path: "src/util.ts" } }) + "\n");

@@ -563,6 +563,37 @@ docs/scopes/           # per-phase specs (the contract handed to the implementer
   Spec: `docs/scopes/phase-28-screen-window-watcher.md`. Files: `src/screen/capture.ts`,
   `src/watchers/{screen,build}.ts`, `src/config.ts`, `src/events/{types,store}.ts`, `src/index.ts`,
   `src/state/{types,builder}.ts`, `src/report/{types,digest}.ts`, `src/ui/page.ts` (+ test-fixture bumps).
+- **FsWatcher temp-file fix — DONE** (architect, commit `d3a522c`): surfaced by running the real `ui`
+  dashboard — it showed `editing report\.tmp-notify-test`. The FsWatcher only ignored
+  `.git`/`node_modules`/`.executive`, so temp/scratch files written into a watched tree (atomic-write temps
+  like `page.ts.tmp.<pid>.<rand>`, `.tmp-notify-test`, vim swaps, `*.tmp`) were recorded as `editor.save`
+  and — since state is "newest event wins" with no expiry — `currentFile` stuck on a deleted temp. Extracted
+  the policy into a pure, exported **`isIgnoredPath()`** and broadened it: ignore any dotfile/dot-dir segment
+  (never `.`/`..`), a `.tmp.`/`.temp.` infix, and temp/backup suffixes. Verified against the real log: **292
+  temp-ish captures filtered, 0 of 278 real source files lost.** 22 new tests. Files: `src/watchers/fs.ts`,
+  `src/watchers/fs.test.ts`.
+- **Phase 30 — DONE** (qwen impl + architect review + live-validated, this commit): **State coherence —
+  prune stale `currentFile` + clearable task.** Fixes the two root causes of the incoherent dashboard seen
+  live. **Part 1 (`currentFile`/`recentFiles` must be a real file on disk):** the newest `editor.save` could
+  be a deleted temp → stuck as `currentFile`; now each path is kept only if it resolves to an existing
+  **regular file**. **Part 2 (clearable task/project):** an empty `system.task` used to be *silently
+  ignored* (no way to clear); now `system.task` is three-way — key absent → unchanged, non-empty → set,
+  empty/whitespace → **clear to null** (then the Phase-15/16 branch/repo fallback applies). A dashboard
+  **"Clear task"** button POSTs an empty `system.task` via the existing `/api/emit` (no whitelist change).
+  Deterministic, NO LLM. **Architect defects found + fixed (Part 1 was broken as delivered):** (1) **wrong
+  resolution roots** — the FsWatcher watches `<repo>/src` by default, so `editor.save` paths are relative to
+  *that* dir (`synth/foo.ts`, not `src/synth/foo.ts`); qwen resolved only against the repo root/cwd → **every
+  real file resolved wrong → `currentFile` always null.** Added `fileResolutionRoots()` that resolves against
+  the actual watched dirs (`repos[].filePaths ?? path+"/src"`, legacy `fs.paths`, plus cwd + cwd/src). (2)
+  **`existsSync` matched directories** — bare watcher paths (`state`, `synth`) resolve to real dirs and were
+  kept as "files"; switched to an `isFile()` (`statSync().isFile()`) check. (3) fixed an out-of-scope test
+  breakage: `synth.test.ts`'s State-fallback fixture used non-existent paths (now filtered) — pointed its
+  `config.watch.repos` at the temp repo so the fixtures resolve. Added regression tests (directory-not-file,
+  watcher-relative resolution) that fail on the pre-fix code. **Live-validated:** the real polluted log now
+  yields `currentFile: state\builder.ts` (real file; temps/dirs gone); `emit`/CLI clear → task null; clear on
+  a `feat/…` branch → branch task revealed; the GUI "Clear task" button round-trips `"งานเก่า opm"` → HTTP
+  200 → null. 362 passing tests. Spec: `docs/scopes/phase-30-state-coherence.md`. Files: `src/state/builder.ts`,
+  `src/ui/page.ts`, `src/state/builder.test.ts`, `src/synth/synth.test.ts`.
 - **Loop complete (manual trigger):** `auto --apply` runs the whole chain in one command; the human
   reviews/merges the `executive/change-<id>` branch.
 

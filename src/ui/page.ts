@@ -212,7 +212,8 @@ async function refresh() {
     const dg = d.digest; $("summary").textContent = d.summary || "";
     const n = dg.now;
     $("now").innerHTML = n.available ? rows([
-      ["Project", dash(n.project)], ["Task", dash(n.task)],
+      ["Project", dash(n.project)],
+      ["Task", dash(n.task) + (n.task ? \` <button class="ghost" style="font-size:11px;padding:2px 8px" onclick="clearTask()">Clear task</button>\` : "")],
       ["Tests", n.tests ? \`<span class="pill \${n.tests==='failing'?'ask':'act'}">\${esc(n.tests)}</span>\` : dash(null)],
       ["Blocked", n.blocked ? \`<span class="pill ask">yes</span> \${esc(n.blockedReason||"")}\` : "no"],
       ["Branch", dash(n.branch)], ["Deadline", dash(n.deadline)],
@@ -305,6 +306,7 @@ function emitBlock() { const reason = $("blockReason").value.trim(); if (!reason
 function emitUnblock() { emit("system.unblocked", {}); }
 function emitDeadline() { const d = $("deadline").value; if (!d) return toast("pick a date"); emit("system.task", { deadline: d }); }
 function emitTask() { const t = $("task").value.trim(); if (!t) return toast("enter a task"); emit("system.task", { task: t }); $("task").value=""; }
+function clearTask() { emit("system.task", { task: "" }); }
 
 // ── Listening: routes by transcribe.mode (webspeech | whisper-api | browser-wasm) ──
 // Listens to YOU (your own dictation); status is always shown visibly.

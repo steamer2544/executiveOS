@@ -3,10 +3,12 @@
 // 100% rule-based. No decision-making, no LLM.
 // Reads JSONL event logs, walks events in seq order, derives a compact snapshot.
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync, statSync } from "node:fs";
+import { isAbsolute, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import type { ExecEvent, EventSource } from "../events/types.js";
 import { eventLogPath, execRoot, statePath, contextPath } from "../paths.js";
+import { loadConfig } from "../config.js";
 import {
   type State,
   type Context,
@@ -53,6 +55,65 @@ export function taskFromBranch(branch: string | null): string | null {
 
   const human = rest.replace(/[-_/]+/g, " ").replace(/\s+/g, " ").trim();
   return human.length > 0 ? human : null;
+}
+
+/** Candidate roots an editor.save path may be relative to.
+ *
+ *  CRITICAL: the FsWatcher watches `<repo>/src` by default (buildWatchers uses
+ *  `entry.filePaths ?? [entry.path + "/src"]` and legacy `fs.paths ?? [cwd + "/src"]`),
+ *  so fs.watch records paths relative to THAT dir (e.g. "synth/foo.ts", not
+ *  "src/synth/foo.ts"). Resolving only against the repo root therefore misses every
+ *  real file. We must resolve against the actual watched dirs, plus repo roots and
+ *  cwd (+ their /src) as fallbacks. Broad roots bias toward keeping (the intended
+ *  side; a same-named collision is far rarer than dropping a real current file). */
+function fileResolutionRoots(config: {
+  watch?: {
+    repos?: Array<{ path?: string; filePaths?: string[] } | null> | null;
+    fs?: { paths?: string[] };
+  };
+}): string[] {
+  const roots = new Set<string>();
+  const add = (r?: string) => { if (r) roots.add(r); };
+  const repos = config.watch?.repos;
+  if (repos && repos.length > 0) {
+    for (const e of repos) {
+      if (!e || typeof e.path !== "string") continue;
+      const watched = e.filePaths ?? [e.path + "/src"];
+      for (const w of watched) add(w);
+      add(e.path);
+    }
+  } else if (config.watch?.fs) {
+    const watched = config.watch.fs.paths ?? [process.cwd() + "/src"];
+    for (const w of watched) add(w);
+  }
+  add(process.cwd());
+  add(process.cwd() + "/src");
+  return [...roots];
+}
+
+/** True if `fp` resolves to an existing regular FILE (not a directory). ENOENT or
+ *  unreadable → false. A directory is never a valid `currentFile`. */
+function isExistingFile(fp: string): boolean {
+  try {
+    return statSync(fp).isFile();
+  } catch {
+    return false;
+  }
+}
+
+/** True if `p` (an editor.save path, relative to a watched dir) is an existing file
+ *  under any candidate root. Defensive: an unexpected throw → keep (bias toward
+ *  keeping, never throw). Directories and vanished temp paths are dropped. */
+function fileStillExists(p: string, roots: string[]): boolean {
+  try {
+    if (isAbsolute(p)) return isExistingFile(p);
+    for (const root of roots) {
+      if (isExistingFile(resolve(root, p))) return true;
+    }
+    return false;
+  } catch {
+    return true; // uncertain → keep
+  }
 }
 
 // ─── readEventsSync ─────────────────────────────────────────────────────────
@@ -119,16 +180,32 @@ export function buildState(now?: Date): { state: State; context: Context } {
   for (const e of allEvents) {
     if (e.type === "system.task") {
       const d = e.data ?? {};
-      if (typeof d.project === "string" && (d.project as string).length > 0)
-        currentProject = d.project as string;
-      if (typeof d.task === "string" && (d.task as string).length > 0)
-        currentTask = d.task as string;
+      // project: absent → unchanged; non-empty → set; empty/whitespace → clear (null)
+      if ("project" in d) {
+        const v = typeof d.project === "string" ? d.project.trim() : "";
+        currentProject = v.length > 0 ? v : null;
+      }
+      // task: absent → unchanged; non-empty → set; empty/whitespace → clear (null)
+      if ("task" in d) {
+        const v = typeof d.task === "string" ? d.task.trim() : "";
+        currentTask = v.length > 0 ? v : null;
+      }
+      // deadline: unchanged — only set on non-empty (no clearing for deadline)
       if (typeof d.deadline === "string" && (d.deadline as string).length > 0)
         deadline = d.deadline as string;
     }
   }
 
   // --- currentFile, recentFiles (editor.save) ---
+  // Only include files that still exist on disk, resolved against the dirs the
+  // FsWatcher actually watches (see fileResolutionRoots). loadConfig() may throw
+  // if .executive/ hasn't been bootstrapped (e.g. in tests) — fall back to cwd-only.
+  let fileRoots: string[];
+  try {
+    fileRoots = fileResolutionRoots(loadConfig());
+  } catch {
+    fileRoots = fileResolutionRoots({});
+  }
   let currentFile: string | null = null;
   const recentFilesSet: string[] = [];
   // Walk newest → oldest to collect distinct paths
@@ -136,7 +213,7 @@ export function buildState(now?: Date): { state: State; context: Context } {
     const e = allEvents[i]!;
     if (e.type === "editor.save") {
       const p = str(e.data ?? {}, "path");
-      if (p && !recentFilesSet.includes(p)) {
+      if (p && !recentFilesSet.includes(p) && fileStillExists(p, fileRoots)) {
         recentFilesSet.push(p);
         if (currentFile === null) currentFile = p;
       }
