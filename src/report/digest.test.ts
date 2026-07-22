@@ -4,7 +4,7 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { test, expect } from "bun:test";
-import { statePath, planPath, autoReportPath, execReportPath, proposalPath, digestPath, inferredPath, execRoot } from "../paths.js";
+import { statePath, planPath, autoReportPath, execReportPath, proposalPath, digestPath, inferredPath, screenInferredPath, execRoot } from "../paths.js";
 import { buildDigest, renderDigest, needsYouSignature } from "./digest.js";
 import type { NeedsYouItem } from "./types.js";
 import type { State } from "../state/types.js";
@@ -739,6 +739,62 @@ test("suggestions: none when inferred has an error", () => {
       generatedAt: "x", backend: "anthropic", error: "network down",
       block: null, deadline: null, raw: "",
     }));
+    const d = buildDigest();
+    expect(d.suggestions).toEqual([]);
+  } finally { cleanup(dir); unsetHome(); }
+});
+
+test("suggestions: merges inferred.json + screen-inferred.json, dedup by text", () => {
+  const dir = createTempHome();
+  try {
+    setHome(dir);
+    seedState({ blocked: false, deadline: null });
+    writeFileSync(inferredPath(), JSON.stringify({
+      generatedAt: "x", backend: "mock", error: null,
+      block: { likely: true, reason: "waiting on vendor" },
+      deadline: { likely: false, date: null, note: "" }, raw: "",
+    }));
+    writeFileSync(screenInferredPath(), JSON.stringify({
+      generatedAt: "x", layer: "vision",
+      suggestions: [
+        { kind: "task", text: "Possible task (from screen) — fix login bug", emit: { type: "system.task", data: { task: "fix login bug" } } },
+        { kind: "block", text: "Possible block — waiting on vendor", emit: { type: "system.blocked", data: { reason: "waiting on vendor" } } }, // exact dup of the inferred.json one
+      ],
+    }));
+    const d = buildDigest();
+    // The duplicate block text appears only once.
+    expect(d.suggestions.filter((s) => s.kind === "block").length).toBe(1);
+    // The screen-only task suggestion is present.
+    expect(d.suggestions.some((s) => s.kind === "task" && s.text.includes("fix login bug"))).toBe(true);
+  } finally { cleanup(dir); unsetHome(); }
+});
+
+test("suggestions: screen block/deadline guesses are suppressed the same as text-infer ones", () => {
+  const dir = createTempHome();
+  try {
+    setHome(dir);
+    seedState({ blocked: true, blockedReason: "known", deadline: "2026-09-01" });
+    writeFileSync(screenInferredPath(), JSON.stringify({
+      generatedAt: "x", layer: "ocr",
+      suggestions: [
+        { kind: "block", text: "Possible block (from screen) — idle", emit: { type: "system.blocked", data: { reason: "idle" } } },
+        { kind: "deadline", text: "Possible deadline (from screen, 2026-10-01) — confirm?", emit: { type: "system.task", data: { deadline: "2026-10-01" } } },
+        { kind: "task", text: "Possible task (from screen) — review PR", emit: { type: "system.task", data: { task: "review PR" } } },
+      ],
+    }));
+    const d = buildDigest();
+    expect(d.suggestions.some((s) => s.kind === "block")).toBe(false);
+    expect(d.suggestions.some((s) => s.kind === "deadline")).toBe(false);
+    // Task suggestions have no deterministic-state equivalent, so they are never suppressed.
+    expect(d.suggestions.some((s) => s.kind === "task" && s.text.includes("review PR"))).toBe(true);
+  } finally { cleanup(dir); unsetHome(); }
+});
+
+test("suggestions: missing screen-inferred.json is a clean no-op (digest still builds)", () => {
+  const dir = createTempHome();
+  try {
+    setHome(dir);
+    seedState({ blocked: false });
     const d = buildDigest();
     expect(d.suggestions).toEqual([]);
   } finally { cleanup(dir); unsetHome(); }

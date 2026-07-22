@@ -109,3 +109,13 @@ export function modelsDir(): string {
 export function vendorDir(): string {
   return execRoot() + "/vendor";
 }
+
+/** Absolute path to .executive/screen-inferred.json (Layer 2/3 screen-sensing suggestions). */
+export function screenInferredPath(): string {
+  return execRoot() + "/screen-inferred.json";
+}
+
+/** Absolute path to .executive/tmp/ (scratch dir for transient screenshots, deleted after use). */
+export function tmpDir(): string {
+  return execRoot() + "/tmp";
+}

@@ -66,7 +66,7 @@ export interface Digest {
 
 /** An LLM guess the owner can confirm with one click. `emit` is exactly what confirming sends. */
 export interface Suggestion {
-  kind: "block" | "deadline";
+  kind: "block" | "deadline" | "task";
   text: string; // human-readable line
   emit: { type: string; data: Record<string, unknown> };
 }

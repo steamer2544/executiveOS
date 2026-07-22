@@ -108,6 +108,36 @@ describe("ui server", () => {
     }
   });
 
+  it("/api/config exposes the screen block but never the vision key VALUE; /api/settings persists a screen toggle", async () => {
+    await (await import("../bootstrap.js")).bootstrap();
+    // A vision config that NAMES an env var holding the key — the key value must never surface.
+    const { updateScreenConfig } = await import("../config.js");
+    updateScreenConfig({ vision: { enabled: true, apiKeyEnv: "EXECUTIVE_WORKER_KEY" } });
+    process.env.EXECUTIVE_WORKER_KEY = "vision-secret-key-abc";
+    try {
+      server = startUiServer({ port: 0 });
+      const base = "http://127.0.0.1:" + server.port;
+      const j = await (await fetch(base + "/api/config")).json();
+      // the screen block IS exposed (settings editor needs it) …
+      expect(j.screen.vision.enabled).toBe(true);
+      expect(j.screen.vision.apiKeyEnv).toBe("EXECUTIVE_WORKER_KEY");
+      // … but the actual key VALUE from the env var must never appear anywhere in the response.
+      expect(JSON.stringify(j)).not.toContain("vision-secret-key-abc");
+
+      // toggling OCR via /api/settings persists (a fresh /api/config reflects it).
+      const res = await fetch(base + "/api/settings", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ screen: { ocr: { enabled: true } } }),
+      });
+      expect((await res.json()).ok).toBe(true);
+      const cfg2 = await (await fetch(base + "/api/config")).json();
+      expect(cfg2.screen.ocr.enabled).toBe(true);
+      expect(cfg2.screen.vision.enabled).toBe(true); // unchanged by the partial patch
+    } finally {
+      delete process.env.EXECUTIVE_WORKER_KEY;
+    }
+  });
+
   it("/api/transcribe returns a clear error when mode is not whisper-api", async () => {
     await (await import("../bootstrap.js")).bootstrap();
     server = startUiServer({ port: 0 });

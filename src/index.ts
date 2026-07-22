@@ -1,7 +1,8 @@
 // CLI entry point for ExecutiveOS.
 // Parse process.argv hand-rolled (no CLI framework).
 
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, renameSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { bootstrap } from "./bootstrap.js";
 import { append, read, tail } from "./events/store.js";
 import type { EventSource } from "./events/types.js";
@@ -30,6 +31,18 @@ import { runInference, writeInference } from "./infer/infer.js";
 import { inferredPath } from "./paths.js";
 import { runAdvisor, decideProposal } from "./advisor/advisor.js";
 import { readStore, pending } from "./advisor/store.js";
+import { runScreenInference } from "./screen/screen-infer.js";
+import { screenInferredPath } from "./paths.js";
+import { setScreenActivity } from "./ui/server.js";
+
+/** Atomically write a ScreenInferResult to .executive/screen-inferred.json (mirrors writeInference). */
+function writeScreenInferred(result: { layer: string; suggestions: unknown[] }): void {
+  const path = screenInferredPath();
+  const record = { generatedAt: new Date().toISOString(), layer: result.layer, suggestions: result.suggestions };
+  const tmp = path + "." + randomUUID();
+  writeFileSync(tmp, JSON.stringify(record, null, 2) + "\n");
+  renameSync(tmp, path);
+}
 
 const VALID_SOURCES: EventSource[] = ["git", "terminal", "editor", "system", "screen"];
 
@@ -310,6 +323,10 @@ async function main(): Promise<void> {
       let advisorRunning = false;
       let lastAdvisorAt: number | null = null;
 
+      // ── Screen inference state ─────────────────────────────────────────
+      let screenRunning = false;
+      let lastScreenAt: number | null = null;
+
       // ── Needs-you alert state ─────────────────────────────────────────────
       let lastNeedsSignature: string | null = null;
       let lastNeedsItems: NeedsYouItem[] = [];
@@ -445,6 +462,30 @@ async function main(): Promise<void> {
                   })
                   .catch((e) => process.stderr.write("Advisor failed: " + (e as Error).message + "\n"))
                   .finally(() => { advisorRunning = false; });
+              }
+            }
+
+            // ── Screen inference (OCR/vision suggestions; behind config.screen.ocr/vision.enabled) ──
+            const screenOn = config.screen?.ocr?.enabled === true || config.screen?.vision?.enabled === true;
+            if (screenOn && !screenRunning) {
+              const screenCooldown = Math.min(
+                config.screen?.ocr?.cooldownMs ?? 300000,
+                config.screen?.vision?.cooldownMs ?? 600000,
+              );
+              const nowMs = Date.now();
+              if (lastScreenAt === null || nowMs - lastScreenAt >= screenCooldown) {
+                screenRunning = true;
+                lastScreenAt = nowMs;
+                setScreenActivity(true, config.screen?.ocr?.enabled ? "ocr" : "vision");
+                runScreenInference(config)
+                  .then((result) => {
+                    writeScreenInferred(result);
+                    if (result.suggestions.length > 0) {
+                      process.stdout.write("Screen infer: +" + result.suggestions.length + " suggestion(s) (" + result.layer + ") — see report\n");
+                    }
+                  })
+                  .catch((e) => process.stderr.write("Screen infer failed: " + (e as Error).message + "\n"))
+                  .finally(() => { screenRunning = false; setScreenActivity(false, null); });
               }
             }
           } catch (planErr) {
@@ -945,10 +986,33 @@ async function main(): Promise<void> {
         }
 
         const server = startUiServer({ port });
+
+        // Periodic screen inference (mirrors the `watch` daemon's wiring — see runRebuild —
+        // but `ui` is its own process, so it needs its own trigger for the live "reading
+        // screen" indicator to work when the owner runs `ui` alone, without `watch`).
+        let uiScreenRunning = false;
+        let uiLastScreenAt: number | null = null;
+        const screenTimer = setInterval(() => {
+          const cfg = loadConfig(); // re-read in case Settings changed it via the dashboard
+          const screenOn = cfg.screen?.ocr?.enabled === true || cfg.screen?.vision?.enabled === true;
+          if (!screenOn || uiScreenRunning) return;
+          const cooldown = Math.min(cfg.screen?.ocr?.cooldownMs ?? 300000, cfg.screen?.vision?.cooldownMs ?? 600000);
+          const nowMs = Date.now();
+          if (uiLastScreenAt !== null && nowMs - uiLastScreenAt < cooldown) return;
+          uiScreenRunning = true;
+          uiLastScreenAt = nowMs;
+          setScreenActivity(true, cfg.screen?.ocr?.enabled ? "ocr" : "vision");
+          runScreenInference(cfg)
+            .then((result) => writeScreenInferred(result))
+            .catch((e) => process.stderr.write("Screen infer failed: " + (e as Error).message + "\n"))
+            .finally(() => { uiScreenRunning = false; setScreenActivity(false, null); });
+        }, 30000);
+
         process.stdout.write("ExecutiveOS dashboard: http://localhost:" + server.port + "\n");
         process.stdout.write(manager ? "Watching git + files for activity.\n" : "Dashboard only (--no-watch).\n");
         process.stdout.write("(Ctrl-C to stop)\n");
         process.on("SIGINT", async () => {
+          clearInterval(screenTimer);
           server.stop();
           if (manager) await manager.stopAll();
           process.stdout.write("\nstopped\n");

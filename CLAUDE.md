@@ -594,6 +594,41 @@ docs/scopes/           # per-phase specs (the contract handed to the implementer
   a `feat/…` branch → branch task revealed; the GUI "Clear task" button round-trips `"งานเก่า opm"` → HTTP
   200 → null. 362 passing tests. Spec: `docs/scopes/phase-30-state-coherence.md`. Files: `src/state/builder.ts`,
   `src/ui/page.ts`, `src/state/builder.test.ts`, `src/synth/synth.test.ts`.
+- **Phase 29 — DONE** (qwen impl of Job1/Job2 + architect [owner] did config/paths/types/digest-merge +
+  architect review/fixes/live-validation, this commit): **Screen-sense Layer 2 + 3 — screenshot OCR +
+  Vision LLM.** Both layers are **OFF by default, independently toggle-able, SUGGESTIONS ONLY** (never emit
+  an event or mutate state — they write `.executive/screen-inferred.json`, surfaced in the existing
+  "Suggestions (unconfirmed)" card with one-click Confirm). **Layer 2:** screenshot → **on-device**
+  Windows.Media.Ocr → the existing text LLM → block/deadline/task suggestions (image never leaves the
+  machine). **Layer 3:** screenshot → the multimodal **`qwen-vl-max`** on the 9arm gateway via a **new
+  OpenAI-compatible** `/v1/chat/completions` client (NOT the Anthropic `/v1/messages` shape) — opt-in, or an
+  **escalation** when OCR text is too thin. New `src/screen/{screenshot,ocr,vision,screen-infer}.ts` (+
+  vision/screen-infer tests); `config.screen.ocr`/`vision` + `updateScreenConfig` (whitelisted, atomic, never
+  writes a raw key — only the `apiKeyEnv` NAME); `Suggestion.kind` gains `"task"`; the digest merges
+  `inferred.json` + `screen-inferred.json` deduped by text; daemon + `ui` each get a cooldown+in-flight-lock
+  **fire-and-forget** trigger; a visible **"🔴 reading screen"** indicator; Settings toggles.
+  **Architect defects found + fixed (all in the hard-to-offline-test OS primitives — the mocked tests passed
+  because they inject mocks, so the broken PowerShell was never exercised):** (1) **`screenshot.ts` cropped
+  instead of downscaling** — the bitmap was `w×h` but `CopyFromScreen` blits the full `$screen.Size` (a 1:1
+  copy, not a scaling blit) → only the top-left corner was captured; rewrote to capture at native res then
+  `DrawImage`-scale into the target. (2) **`ocr.ts`'s PowerShell was invalid** (a bad generic param
+  `[$1]` + a comma-assignment) → it always parse-errored to `""`; rewrote with the canonical WinRT
+  `AsTask(...)` await bridge + `-Sta` (WinRT `StorageFile`/OCR faults in the MTA apartment a bare spawned
+  powershell uses) — **validated live: OCR read "Hello OCR 123" off a generated image** (English pack
+  present; Thai needs the owner's Thai OCR pack). (3) both scripts now run from a temp `.ps1` via `-File`
+  (cleaner than a giant inline `-Command`). **CRITICAL environment finding (owner action):** **Windows
+  Defender/AMSI blocks the screenshot script as "malicious content"** (a `CopyFromScreen` screen-grab from
+  spawned PowerShell trips the AV heuristic, `-Command` **and** `-File` alike) — so on this machine Layer 2/3
+  **capture** returns null and produces no suggestions **until the owner adds a Defender exclusion** for the
+  runtime (I did NOT obfuscate to evade the AV heuristic — that would be detection-evasion). It **degrades
+  gracefully** (verified live: capture→null → `runScreenInference` → `{layer:"ocr",suggestions:[],"no
+  signal"}`, no crash, daemon keeps ticking). Vision's live gateway call is **owner-run** (spends a token);
+  offline the request builder + `extractOpenAiText` parser are tested. Added a `/api/config` test asserting
+  the screen block is exposed **without** the vision key VALUE + a settings round-trip. **Scope guardrails
+  all hold:** Planner/Worker/Executor/Synth/Autopilot/Advisor + Phase 28's `capture.ts`/`watchers/screen.ts`
+  untouched; `.executive/tmp` + `screen-inferred.json` gitignored. 383 passing tests. Spec:
+  `docs/scopes/phase-29-screen-ocr-vision.md`. Files: `src/screen/*`, `src/config.ts`, `src/paths.ts`,
+  `src/report/{types,digest}.ts`, `src/ui/{server,page}.ts`, `src/index.ts`.
 - **Loop complete (manual trigger):** `auto --apply` runs the whole chain in one command; the human
   reviews/merges the `executive/change-<id>` branch.
 

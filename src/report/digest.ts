@@ -9,9 +9,9 @@ import type { Plan } from "../planner/types.js";
 import type { AutoReport } from "../auto/types.js";
 import type { ExecReport } from "../executor/types.js";
 import type { Proposal } from "../worker/types.js";
-import { statePath, planPath, autoReportPath, execReportPath, proposalPath, digestPath, inferredPath, execRoot } from "../paths.js";
+import { statePath, planPath, autoReportPath, execReportPath, proposalPath, digestPath, inferredPath, screenInferredPath, execRoot } from "../paths.js";
 import type { InferenceResult } from "../infer/types.js";
-import type { Digest, DigestOptions, NeedsYouItem } from "./types.js";
+import type { Digest, DigestOptions, NeedsYouItem, Suggestion } from "./types.js";
 
 // ── Defensive JSON reader ────────────────────────────────────────────────────
 
@@ -169,15 +169,25 @@ export function buildDigest(opts?: DigestOptions): Digest {
   }
 
   // ── Suggestions (LLM guesses, unconfirmed) ─────────────────────────────────
-  // Shown only when they add NEW information vs. the deterministic state:
+  // Merged from two independent sources — the Phase 19 text infer (inferred.json) and the
+  // Phase 29 screen infer (screen-inferred.json) — deduped by `text`. Shown only when they add
+  // NEW information vs. the deterministic state:
   //   - a block guess only if not already blocked;
-  //   - a deadline guess only if no deadline is set.
+  //   - a deadline guess only if no deadline is set;
+  //   - a task guess always shown (no equivalent deterministic field to compare against).
   const suggestions: Digest["suggestions"] = [];
+  const seenSuggestionText = new Set<string>();
+  function pushSuggestion(s: Suggestion): void {
+    if (seenSuggestionText.has(s.text)) return;
+    seenSuggestionText.add(s.text);
+    suggestions.push(s);
+  }
+
   const rawInfer = readJson<InferenceResult>(inferredPath());
   if (rawInfer && !rawInfer.error) {
     if (rawInfer.block?.likely && !(rawState?.blocked === true)) {
       const reason = rawInfer.block.reason || "unspecified";
-      suggestions.push({
+      pushSuggestion({
         kind: "block",
         text: "Possible block — " + reason,
         emit: { type: "system.blocked", data: { reason } },
@@ -185,11 +195,20 @@ export function buildDigest(opts?: DigestOptions): Digest {
     }
     // Only actionable when the model gave a concrete date to confirm.
     if (rawInfer.deadline?.likely && rawInfer.deadline.date && !(rawState?.deadline)) {
-      suggestions.push({
+      pushSuggestion({
         kind: "deadline",
         text: "Possible deadline (" + rawInfer.deadline.date + ") — " + (rawInfer.deadline.note || "confirm?"),
         emit: { type: "system.task", data: { deadline: rawInfer.deadline.date } },
       });
+    }
+  }
+
+  const rawScreen = readJson<{ generatedAt: string; layer: string; suggestions: Suggestion[] }>(screenInferredPath());
+  if (rawScreen && Array.isArray(rawScreen.suggestions)) {
+    for (const s of rawScreen.suggestions) {
+      if (s.kind === "block" && rawState?.blocked === true) continue;
+      if (s.kind === "deadline" && rawState?.deadline) continue;
+      pushSuggestion(s);
     }
   }
 

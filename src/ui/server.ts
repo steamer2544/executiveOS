@@ -9,12 +9,22 @@ import { buildState, writeState } from "../state/builder.js";
 import { plan, writePlan } from "../planner/planner.js";
 import { buildDigest } from "../report/digest.js";
 import { append } from "../events/store.js";
-import { loadConfig, updateTranscribeConfig, TRANSCRIBE_PRESETS } from "../config.js";
+import { loadConfig, updateTranscribeConfig, updateScreenConfig, TRANSCRIBE_PRESETS } from "../config.js";
 import { modelsDir, vendorDir } from "../paths.js";
 import { readStore, pending } from "../advisor/store.js";
 import { runAdvisor, decideProposal } from "../advisor/advisor.js";
 import { downloadWasmAssets, wasmAssetsStatus } from "./models.js";
 import { renderPage } from "./page.js";
+
+/** Live "is a screen capture in flight" flag, set by the periodic screen-infer trigger in
+ *  src/index.ts (case "ui" and case "watch" both call this — only the "ui" process's own
+ *  calls are observable here, since "watch" runs as a separate OS process). Read by
+ *  GET /api/state so the dashboard can show a "🔴 reading screen" indicator. */
+export const screenActivity: { active: boolean; layer: "ocr" | "vision" | null } = { active: false, layer: null };
+export function setScreenActivity(active: boolean, layer: "ocr" | "vision" | null): void {
+  screenActivity.active = active;
+  screenActivity.layer = layer;
+}
 
 /** Content types for the locally-served browser-wasm assets. */
 const STATIC_TYPES: Record<string, string> = {
@@ -93,7 +103,7 @@ export function startUiServer(opts: UiServerOptions) {
           const cfg = loadConfig();
           // The transcribe block carries NO secret — the real key lives only in process.env[apiKeyEnv],
           // never in config — so it is safe to hand the whole block to the local settings editor.
-          return Response.json({ capture: cfg.capture, transcribe: cfg.transcribe, presets: TRANSCRIBE_PRESETS });
+          return Response.json({ capture: cfg.capture, transcribe: cfg.transcribe, presets: TRANSCRIBE_PRESETS, screen: cfg.screen ?? null });
         } catch (err) {
           return Response.json({ error: (err as Error).message }, { status: 500 });
         }
@@ -101,12 +111,18 @@ export function startUiServer(opts: UiServerOptions) {
 
       if (req.method === "POST" && url.pathname === "/api/settings") {
         try {
-          const body = (await req.json()) as { transcribe?: Record<string, unknown> };
-          if (!body.transcribe || typeof body.transcribe !== "object") {
-            return Response.json({ ok: false, error: "need { transcribe: {...} }" }, { status: 400 });
+          const body = (await req.json()) as { transcribe?: Record<string, unknown>; screen?: Record<string, unknown> };
+          if ((!body.transcribe || typeof body.transcribe !== "object") && (!body.screen || typeof body.screen !== "object")) {
+            return Response.json({ ok: false, error: "need { transcribe: {...} } and/or { screen: {...} }" }, { status: 400 });
           }
-          const transcribe = updateTranscribeConfig(body.transcribe);
-          return Response.json({ ok: true, transcribe });
+          const result: { ok: true; transcribe?: unknown; screen?: unknown } = { ok: true };
+          if (body.transcribe && typeof body.transcribe === "object") {
+            result.transcribe = updateTranscribeConfig(body.transcribe);
+          }
+          if (body.screen && typeof body.screen === "object") {
+            result.screen = updateScreenConfig(body.screen);
+          }
+          return Response.json(result);
         } catch (err) {
           return Response.json({ ok: false, error: (err as Error).message }, { status: 400 });
         }
@@ -180,7 +196,7 @@ export function startUiServer(opts: UiServerOptions) {
 
       if (req.method === "GET" && url.pathname === "/api/state") {
         try {
-          return Response.json(currentState());
+          return Response.json({ ...currentState(), screenActivity });
         } catch (err) {
           return Response.json({ error: (err as Error).message }, { status: 500 });
         }

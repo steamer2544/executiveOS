@@ -65,6 +65,7 @@ export function renderPage(): string {
   <div>
     <h1>ExecutiveOS</h1>
     <div class="sub" id="summary">loading…</div>
+    <div class="mono" id="screenIndicator" style="font-size:11.5px;margin-top:2px"></div>
   </div>
   <div style="margin-left:auto"><button class="ghost" onclick="refresh()">↻ Refresh</button></div>
 </header>
@@ -125,6 +126,32 @@ export function renderPage(): string {
             <span id="dlStatus" class="muted" style="font-size:12.5px"></span>
           </div>
           <div class="muted" style="font-size:12px">Downloads the model + runtime to <span class="mono">.executive/</span> once, then runs 100% offline — your audio never leaves the machine.</div>
+        </div>
+
+        <div style="border-top:1px solid var(--line);margin-top:14px;padding-top:14px">
+          <div class="muted" style="font-size:12.5px;margin-bottom:8px">
+            Screen sensing (OFF by default). Reads your active window / screen contents to suggest block/deadline/task — never auto-acts, you confirm everything below.
+          </div>
+          <div class="field">
+            <label class="muted" style="font-size:12.5px;min-width:70px;display:flex;align-items:center;gap:6px">
+              <input type="checkbox" id="scrWindowEnabled" /> Window title (Layer 1)
+            </label>
+            <label class="muted" style="font-size:12.5px;min-width:70px;display:flex;align-items:center;gap:6px">
+              <input type="checkbox" id="scrOcrEnabled" /> Local OCR (Layer 2 — image stays on this machine)
+            </label>
+            <label class="muted" style="font-size:12.5px;min-width:70px;display:flex;align-items:center;gap:6px">
+              <input type="checkbox" id="scrVisionEnabled" onchange="toggleScreenVisionFields()" /> Vision LLM (Layer 3 — sends the screenshot to the gateway)
+            </label>
+          </div>
+          <div id="scrVisionFields" style="display:none;margin-top:8px">
+            <div class="field"><input id="scrVisionModel" type="text" placeholder="Vision model (default qwen-vl-max)" /></div>
+            <div class="field"><input id="scrVisionBaseUrl" type="text" placeholder="Vision base URL (default = worker's baseUrl)" /></div>
+            <div class="field"><input id="scrVisionKeyEnv" type="text" placeholder="Key env-var name (default = worker's apiKeyEnv)" /></div>
+          </div>
+          <div class="field" style="margin-top:8px">
+            <button onclick="saveScreenSettings()">Save screen settings</button>
+            <span id="screenStatus" class="muted" style="font-size:12.5px"></span>
+          </div>
         </div>
 
         <div class="field">
@@ -210,6 +237,11 @@ async function refresh() {
   try {
     const r = await fetch("/api/state"); const d = await r.json();
     const dg = d.digest; $("summary").textContent = d.summary || "";
+    const sa = d.screenActivity || { active: false, layer: null };
+    const scrOn = !!((cfgScreen.ocr && cfgScreen.ocr.enabled) || (cfgScreen.vision && cfgScreen.vision.enabled));
+    $("screenIndicator").innerHTML = sa.active
+      ? '<span style="color:var(--danger);font-weight:700">🔴 reading screen (' + esc(sa.layer || "") + ')</span>'
+      : '<span class="muted">screen sensing: ' + (scrOn ? "on" : "off") + '</span>';
     const n = dg.now;
     $("now").innerHTML = n.available ? rows([
       ["Project", dash(n.project)],
@@ -313,6 +345,7 @@ function clearTask() { emit("system.task", { task: "" }); }
 let capture = { enabled: false, from: "09:00", to: "18:00" };
 let cfgT = { mode: "webspeech", baseUrl: "", model: "", apiKeyEnv: "", language: null, wasmModel: "Xenova/whisper-base" };
 let presets = {};
+let cfgScreen = { window: {}, ocr: {}, vision: {} };
 let recog = null, listening = false, userStopped = false;
 let mediaRec = null, chunks = [];
 const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -418,6 +451,36 @@ async function saveSettings() {
     toast("settings saved ✓"); setListenUI();
   } catch (e) { toast("error: " + e.message); }
 }
+function populateScreenSettings() {
+  $("scrWindowEnabled").checked = !!(cfgScreen.window && cfgScreen.window.enabled);
+  $("scrOcrEnabled").checked = !!(cfgScreen.ocr && cfgScreen.ocr.enabled);
+  $("scrVisionEnabled").checked = !!(cfgScreen.vision && cfgScreen.vision.enabled);
+  $("scrVisionModel").value = (cfgScreen.vision && cfgScreen.vision.model) || "";
+  $("scrVisionBaseUrl").value = (cfgScreen.vision && cfgScreen.vision.baseUrl) || "";
+  $("scrVisionKeyEnv").value = (cfgScreen.vision && cfgScreen.vision.apiKeyEnv) || "";
+  toggleScreenVisionFields();
+}
+function toggleScreenVisionFields() {
+  $("scrVisionFields").style.display = $("scrVisionEnabled").checked ? "block" : "none";
+}
+async function saveScreenSettings() {
+  const patch = {
+    window: { enabled: $("scrWindowEnabled").checked },
+    ocr: { enabled: $("scrOcrEnabled").checked },
+    vision: {
+      enabled: $("scrVisionEnabled").checked,
+      model: $("scrVisionModel").value.trim() || undefined,
+      baseUrl: $("scrVisionBaseUrl").value.trim() || undefined,
+      apiKeyEnv: $("scrVisionKeyEnv").value.trim() || undefined,
+    },
+  };
+  try {
+    const r = await fetch("/api/settings", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ screen: patch }) });
+    const j = await r.json(); if (!j.ok) throw new Error(j.error || "failed");
+    cfgScreen = j.screen || cfgScreen;
+    toast("screen settings saved ✓");
+  } catch (e) { toast("error: " + e.message); }
+}
 async function refreshDlStatus() {
   try {
     const s = await (await fetch("/api/transcribe/status")).json();
@@ -485,9 +548,11 @@ async function loadCaptureConfig() {
     if (j.capture) capture = j.capture;
     if (j.transcribe) cfgT = j.transcribe;
     if (j.presets) presets = j.presets;
+    if (j.screen) cfgScreen = j.screen;
   } catch {}
   const sel = $("lang"); if (sel) sel.value = cfgT.language || "";
   populateSettings();
+  populateScreenSettings();
   setListenUI();
 }
 // Schedule tick: auto-start within work hours (once enabled + mic granted), auto-stop outside.

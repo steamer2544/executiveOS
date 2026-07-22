@@ -98,11 +98,27 @@ export interface Config {
     language?: string | null; // hint ("th") or null to auto-detect (best for mixed). Default null.
     wasmModel?: string;       // browser-wasm model id (HF/Xenova). Default "Xenova/whisper-base".
   };
-  /** Screen-sensing (Layer 1 here). Each layer is independently toggle-able; all OFF by default. */
+  /** Screen-sensing. Each layer is independently toggle-able; all OFF by default. */
   screen?: {
     window?: {
       enabled?: boolean; // Layer 1: emit the active window title/process on change. Default false.
       pollMs?: number;   // poll cadence. Default 3000.
+    };
+    /** Layer 2: local screenshot → on-device OCR → text LLM suggestions. Image never leaves the machine. */
+    ocr?: {
+      enabled?: boolean;   // Default false.
+      cooldownMs?: number; // min ms between OCR captures in the daemon. Default 300000 (5 min).
+      minChars?: number;   // OCR text shorter than this is "too thin" → eligible to escalate. Default 40.
+    };
+    /** Layer 3: screenshot → multimodal vision LLM (qwen-vl-max) on the owner's gateway. Opt-in escalation. */
+    vision?: {
+      enabled?: boolean;         // Default false.
+      cooldownMs?: number;       // Default 600000 (10 min).
+      escalateFromOcr?: boolean; // a thin OCR result triggers a vision call. Default true.
+      baseUrl?: string;          // OpenAI-compatible base (no trailing /v1). Default = config.worker.baseUrl.
+      model?: string;            // Default "qwen-vl-max".
+      apiKeyEnv?: string;        // env var NAME holding the key. Default = config.worker.apiKeyEnv.
+      maxImageBytes?: number;    // cap before sending; downscale to fit. Default 2000000.
     };
   };
 }
@@ -361,6 +377,20 @@ export function loadConfig(): Config {
       parsed.screen.window.enabled = parsed.screen.window.enabled ?? false;
       parsed.screen.window.pollMs = parsed.screen.window.pollMs ?? 3000;
     }
+    if (parsed.screen.ocr) {
+      parsed.screen.ocr.enabled = parsed.screen.ocr.enabled ?? false;
+      parsed.screen.ocr.cooldownMs = parsed.screen.ocr.cooldownMs ?? 300000;
+      parsed.screen.ocr.minChars = parsed.screen.ocr.minChars ?? 40;
+    }
+    if (parsed.screen.vision) {
+      parsed.screen.vision.enabled = parsed.screen.vision.enabled ?? false;
+      parsed.screen.vision.cooldownMs = parsed.screen.vision.cooldownMs ?? 600000;
+      parsed.screen.vision.escalateFromOcr = parsed.screen.vision.escalateFromOcr ?? true;
+      parsed.screen.vision.model = parsed.screen.vision.model ?? "qwen-vl-max";
+      parsed.screen.vision.maxImageBytes = parsed.screen.vision.maxImageBytes ?? 2000000;
+      // baseUrl/apiKeyEnv intentionally NOT defaulted from config.worker here — read lazily at
+      // use time (src/screen/vision.ts) so changing `worker` later still applies to vision calls.
+    }
   }
 
   return parsed;
@@ -398,6 +428,51 @@ export function updateTranscribeConfig(patch: Record<string, unknown>): Config["
   writeFileSync(tmp, raw);
   renameSync(tmp, configPath());
   return t;
+}
+
+/**
+ * Persist an owner edit to the `screen` config block (Window / OCR / Vision toggles) from the
+ * dashboard settings UI. ONLY the screen block is writable this way, whitelisted + type-checked
+ * field by field, written atomically (temp + rename). Never writes a raw API key — only the
+ * `apiKeyEnv` NAME. Patch shape: `{ window?: {...}, ocr?: {...}, vision?: {...} }`.
+ */
+export function updateScreenConfig(patch: Record<string, unknown>): Config["screen"] {
+  const config = loadConfig();
+  if (!config.screen) config.screen = {};
+  const s = config.screen;
+
+  const windowPatch = patch.window as Record<string, unknown> | undefined;
+  if (windowPatch && typeof windowPatch === "object") {
+    if (!s.window) s.window = {};
+    if (typeof windowPatch.enabled === "boolean") s.window.enabled = windowPatch.enabled;
+    if (typeof windowPatch.pollMs === "number") s.window.pollMs = windowPatch.pollMs;
+  }
+
+  const ocrPatch = patch.ocr as Record<string, unknown> | undefined;
+  if (ocrPatch && typeof ocrPatch === "object") {
+    if (!s.ocr) s.ocr = {};
+    if (typeof ocrPatch.enabled === "boolean") s.ocr.enabled = ocrPatch.enabled;
+    if (typeof ocrPatch.cooldownMs === "number") s.ocr.cooldownMs = ocrPatch.cooldownMs;
+    if (typeof ocrPatch.minChars === "number") s.ocr.minChars = ocrPatch.minChars;
+  }
+
+  const visionPatch = patch.vision as Record<string, unknown> | undefined;
+  if (visionPatch && typeof visionPatch === "object") {
+    if (!s.vision) s.vision = {};
+    if (typeof visionPatch.enabled === "boolean") s.vision.enabled = visionPatch.enabled;
+    if (typeof visionPatch.cooldownMs === "number") s.vision.cooldownMs = visionPatch.cooldownMs;
+    if (typeof visionPatch.escalateFromOcr === "boolean") s.vision.escalateFromOcr = visionPatch.escalateFromOcr;
+    if (typeof visionPatch.baseUrl === "string") s.vision.baseUrl = visionPatch.baseUrl.trim();
+    if (typeof visionPatch.model === "string") s.vision.model = visionPatch.model.trim();
+    if (typeof visionPatch.apiKeyEnv === "string") s.vision.apiKeyEnv = visionPatch.apiKeyEnv.trim();
+    if (typeof visionPatch.maxImageBytes === "number") s.vision.maxImageBytes = visionPatch.maxImageBytes;
+  }
+
+  const raw = JSON.stringify(config, null, 2) + "\n";
+  const tmp = configPath() + ".tmp";
+  writeFileSync(tmp, raw);
+  renameSync(tmp, configPath());
+  return s;
 }
 
 /**
