@@ -21,6 +21,17 @@
   speaks the **OpenAI-compatible** `POST /v1/chat/completions` with `image_url` base64 data-URL content
   parts (text at `choices[0].message.content`). Don't try to push images through the Anthropic client.
   (Phase 29 · `src/screen/vision.ts`)
+- **The gateway team is restricted to `qwen3.6-35b-a3b` — vision is NOT available.** *Symptom:* Layer 3
+  returns `HTTP 403 team_model_access_denied: This team can only access models=['qwen3.6-35b-a3b']. Tried
+  to access qwen-vl-max`. *Cause:* per-team model allow-list on the gateway, nothing to do with our code.
+  *Fix:* none available to us — Layer 3 needs either a different multimodal endpoint/key or the owner
+  asking Arm to allow the model. **Layer 2 (on-device OCR → text LLM) is the working screen path** and it
+  keeps the image local anyway. The failure is now reported as `vision: unavailable — …`, not silently.
+  (Phase 29.2 live)
+- **Never let a hard failure return the same value as "found nothing".** Every LLM client used to
+  `catch { return [] }`, so a TLS error, a 401 and a genuinely empty answer were indistinguishable
+  downstream — the digest just said "no signal". `screen-infer` now throws inside `defaultTextInfer` and
+  reports `ocr: llm unavailable — <reason>`. Apply the same rule to any new client. (Phase 29.2)
 - **The auth token loads from `.env` in the *cwd*.** *Symptom:* live calls 401 in a test/temp dir.
   *Cause:* Bun auto-loads `.env` from the working directory only. *Fix:* run from a dir that has `.env`
   (key `EXECUTIVE_WORKER_KEY`), or copy it in. The key lives **only** in the env var — never in

@@ -210,6 +210,93 @@ describe("runScreenInference", () => {
     }
   });
 
+  // Phase 29.2 — a hard LLM failure must be distinguishable from a genuine "no signal".
+  // Before the fix, a TLS/401/403 error was swallowed into "ocr: no signal", which is exactly
+  // what hid a corporate TLS proxy for hours.
+  test("ocr: a throwing textInfer reports 'llm unavailable', not 'no signal'", async () => {
+    const config = makeConfig({
+      screen: { ocr: { enabled: true, minChars: 40 }, vision: { enabled: false } },
+    });
+
+    const result = await runScreenInference(config, {
+      capture: () => ({ path: "x.jpg", bytes: 1000, format: "jpeg" }),
+      ocr: () => "a".repeat(50),
+      textInfer: async () => {
+        throw new Error("HTTP 403: team_model_access_denied");
+      },
+    });
+
+    expect(result.ran).toBe(true);
+    expect(result.layer).toBe("ocr");
+    expect(result.suggestions).toEqual([]);
+    expect(result.message).toContain("llm unavailable");
+    expect(result.message).toContain("403");
+    expect(result.message).not.toContain("no signal");
+  });
+
+  test("ocr: an empty-but-successful textInfer still reports 'no signal'", async () => {
+    const config = makeConfig({
+      screen: { ocr: { enabled: true, minChars: 40 }, vision: { enabled: false } },
+    });
+
+    const result = await runScreenInference(config, {
+      capture: () => ({ path: "x.jpg", bytes: 1000, format: "jpeg" }),
+      ocr: () => "a".repeat(50),
+      textInfer: async () => [],
+    });
+
+    expect(result.message).toBe("ocr: no signal");
+  });
+
+  // Phase 29.2 — visionComplete throws on HTTP failure; runScreenInference promises never to.
+  // Before the fix this test rejected instead of resolving.
+  test("vision: a throwing vision call resolves with 'unavailable' instead of rejecting", async () => {
+    const config = makeConfig({
+      screen: { ocr: { enabled: false }, vision: { enabled: true } },
+    });
+
+    const tmpPath = join(tmpdir(), "screen-infer-test-vision-throw-" + Date.now() + ".jpg");
+    writeFileSync(tmpPath, "fake-jpeg-bytes");
+
+    try {
+      const result = await runScreenInference(config, {
+        capture: () => ({ path: tmpPath, bytes: 15, format: "jpeg" }),
+        vision: async () => {
+          throw new Error("vision HTTP 403: team_model_access_denied");
+        },
+      });
+
+      expect(result.ran).toBe(true);
+      expect(result.layer).toBe("vision");
+      expect(result.suggestions).toEqual([]);
+      expect(result.message).toContain("vision: unavailable");
+      expect(result.message).toContain("403");
+    } finally {
+      if (existsSync(tmpPath)) unlinkSync(tmpPath);
+    }
+  });
+
+  test("vision: the temp screenshot is still cleaned up when vision throws", async () => {
+    const config = makeConfig({
+      screen: { ocr: { enabled: false }, vision: { enabled: true } },
+    });
+
+    const tmpPath = join(tmpdir(), "screen-infer-test-vision-cleanup-" + Date.now() + ".jpg");
+    writeFileSync(tmpPath, "fake-jpeg-bytes");
+
+    try {
+      await runScreenInference(config, {
+        capture: () => ({ path: tmpPath, bytes: 15, format: "jpeg" }),
+        vision: async () => {
+          throw new Error("boom");
+        },
+      });
+      expect(existsSync(tmpPath)).toBe(false);
+    } finally {
+      if (existsSync(tmpPath)) unlinkSync(tmpPath);
+    }
+  });
+
   test("task suggestion round-trips with correct emit shape", async () => {
     const config = makeConfig({
       screen: {

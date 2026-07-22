@@ -69,7 +69,19 @@ export async function runScreenInference(
         const text = ocr(shot.path, null);
         const minChars = config.screen?.ocr?.minChars ?? 40;
         if (text.trim().length >= minChars) {
-          const suggestions = await textInfer(config, text);
+          // A hard failure (TLS/401/403/timeout) must NOT masquerade as "no signal" — that
+          // ambiguity once cost hours of debugging a corporate TLS proxy. Report it distinctly.
+          let suggestions: Suggestion[];
+          try {
+            suggestions = await textInfer(config, text);
+          } catch (e) {
+            return {
+              ran: true,
+              layer: "ocr",
+              suggestions: [],
+              message: "ocr: llm unavailable — " + errText(e),
+            };
+          }
           return {
             ran: true,
             layer: "ocr",
@@ -164,11 +176,24 @@ export async function runScreenInference(
       '{"block":{"likely":true,"reason":"short reason"},"deadline":{"likely":true,"date":"YYYY-MM-DD","note":"note"},"task":{"likely":true,"task":"task name","note":"note"}}\n' +
       "Set likely:false when you have no signal. These are suggestions for a human to confirm.";
 
-    const rawText = await vision(
-      { baseUrl, model, apiKey, maxTokens: vMaxTokens, timeoutMs: vTimeoutMs },
-      PROMPT,
-      dataUrl,
-    );
+    // visionComplete throws on HTTP/network failure (unlike the OCR text path, which used to
+    // swallow everything). Catch it here so this function honours its "never throws" contract —
+    // an uncaught rejection would also leave screen-inferred.json stale at the daemon call site.
+    let rawText: string;
+    try {
+      rawText = await vision(
+        { baseUrl, model, apiKey, maxTokens: vMaxTokens, timeoutMs: vTimeoutMs },
+        PROMPT,
+        dataUrl,
+      );
+    } catch (e) {
+      return {
+        ran: true,
+        layer: "vision",
+        suggestions: [],
+        message: "vision: unavailable — " + errText(e),
+      };
+    }
 
     // Tolerant JSON extraction: strip ```json fences, find first {…last}.
     let parsed: { block?: { likely?: boolean; reason?: string }; deadline?: { likely?: boolean; date?: string; note?: string }; task?: { likely?: boolean; task?: string; note?: string } };
@@ -236,13 +261,22 @@ export async function runScreenInference(
   }
 }
 
+/** Short, log-safe description of a thrown value. */
+function errText(e: unknown): string {
+  const m = e instanceof Error ? e.message : String(e);
+  return m.length > 200 ? m.slice(0, 200) + "…" : m;
+}
+
 /**
  * Default text inference: uses config.worker backend to turn OCR'd text into suggestions.
  * Mock backend → deterministic empty; Anthropic → POST to gateway.
- * Never throws — returns [] on any error.
+ *
+ * THROWS on a hard failure (no baseUrl, network/TLS error, non-2xx, unusable response) so the
+ * caller can report "llm unavailable" instead of an indistinguishable "no signal". Returns []
+ * only when the model genuinely found nothing.
  */
 async function defaultTextInfer(config: Config, text: string): Promise<Suggestion[]> {
-  try {
+  {
     const backend = config.worker?.backend ?? "mock";
 
     if (backend === "mock") {
@@ -259,7 +293,7 @@ async function defaultTextInfer(config: Config, text: string): Promise<Suggestio
     const timeoutMs = llmTimeoutMs(config);
 
     if (!baseUrl) {
-      return [];
+      throw new Error("worker.baseUrl is not configured");
     }
 
     const PROMPT =
@@ -297,13 +331,15 @@ async function defaultTextInfer(config: Config, text: string): Promise<Suggestio
       });
 
       if (!res.ok) {
-        return [];
+        const body = await res.text().catch(() => "");
+        throw new Error("HTTP " + res.status + ": " + body.slice(0, 200));
       }
 
       const json = (await res.json()) as unknown;
       const rawText = extractAnthropicContent(json);
       if (!rawText) {
-        return [];
+        // Typically max_tokens exhausted by the model's think phase (see GOTCHA.md §1).
+        throw new Error("empty response from model");
       }
 
       // Tolerant JSON extraction.
@@ -324,7 +360,7 @@ async function defaultTextInfer(config: Config, text: string): Promise<Suggestio
       try {
         parsed = JSON.parse(s) as typeof parsed;
       } catch {
-        return [];
+        throw new Error("could not parse model response as JSON");
       }
 
       // Map → Suggestion[].
@@ -357,9 +393,6 @@ async function defaultTextInfer(config: Config, text: string): Promise<Suggestio
     } finally {
       clearTimeout(timer);
     }
-  } catch {
-    // Any error → empty suggestions. Never throw out.
-    return [];
   }
 }
 

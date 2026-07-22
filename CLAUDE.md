@@ -648,6 +648,23 @@ docs/scopes/           # per-phase specs (the contract handed to the implementer
   MITMs TLS, and Bun's `fetch` uses its own CA store → every gateway call died as
   `UNABLE_TO_GET_ISSUER_CERT_LOCALLY`, which each client swallowed into a polite `"ocr: no signal"`. Turning
   Zscaler off restored it; no code change. Files: `src/screen/{screenshot,ocr}.ts`, `GOTCHA.md`.
+- **Phase 29.2 — DONE** (architect, this commit): **Screen-sense failure honesty + Layer 3 verdict.**
+  Running Layer 3 live for the first time returned **`HTTP 403 team_model_access_denied`** — the 9arm
+  gateway team is allow-listed to `qwen3.6-35b-a3b` only, so **`qwen-vl-max` is not reachable and Layer 3
+  cannot work on this gateway** (not a code bug; Layer 2 is the working screen path and keeps the image
+  local anyway). That call also exposed two real defects: (1) **`runScreenInference` broke its own
+  "never throws" contract** — `visionComplete` throws on HTTP/network failure and nothing caught it, so
+  the daemon's `.catch()` fired and `screen-inferred.json` was left **stale** instead of updated; now
+  caught → `{layer:"vision", suggestions:[], message:"vision: unavailable — …"}`. (2) **A hard failure
+  was indistinguishable from "found nothing"** — `defaultTextInfer` did `catch { return [] }` for
+  *everything*, so a TLS error / 401 / 403 / timeout all surfaced as the reassuring `"ocr: no signal"`.
+  That exact ambiguity is what hid the Zscaler TLS interception for hours this session. `defaultTextInfer`
+  now **throws** on hard failures (no baseUrl, non-2xx + body snippet, empty content, unparseable JSON)
+  and the caller reports `"ocr: llm unavailable — <reason>"`; a genuine empty result still says
+  `"ocr: no signal"`. 387 passing tests (4 new). **Sabotage-checked** per `GOTCHA.md` §4: 3 of the 4 new
+  tests fail against the pre-fix source. Live-verified the 403 now resolves cleanly with the reason in the
+  message instead of rejecting. Files: `src/screen/screen-infer.ts`, `src/screen/screen-infer.test.ts`,
+  `GOTCHA.md`.
 - **Loop complete (manual trigger):** `auto --apply` runs the whole chain in one command; the human
   reviews/merges the `executive/change-<id>` branch.
 

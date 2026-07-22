@@ -3,12 +3,13 @@
 > **Purpose:** a single doc to resume this project cold if context/memory is lost. Pairs with
 > `CLAUDE.md` (the authoritative phase-by-phase log), `GOTCHA.md` (traps & non-obvious failure modes —
 > read before touching PowerShell/state/tests/LLM), and `README.md` (user-facing overview).
-> Last updated after **Phase 29.1** (screen OCR live). **383 passing tests**, all green.
+> Last updated after **Phase 29.2** (screen OCR live + failure honesty). **387 passing tests**, all green.
 
 > **⏭️ Immediate next task:** screen-sensing **Layer 2 is now live** — the Defender exclusion is in place
 > and the full chain (screenshot → on-device OCR → LLM suggestions) was validated end-to-end. What remains
-> is the **Thai OCR language pack** (only `en-US` installed, so Thai on screen OCRs to garbage) and, if
-> wanted, the opt-in **Layer 3 vision** call. See §6.
+> is the **Thai OCR language pack** (only `en-US` installed, so Thai on screen OCRs to garbage). See §6.
+> **Layer 3 (vision) is a dead end on this gateway:** the team is allow-listed to `qwen3.6-35b-a3b`, so
+> `qwen-vl-max` returns 403. It fails cleanly; Layer 2 is the path that works (and keeps the image local).
 >
 > **If every LLM feature suddenly reports "nothing found":** check whether the work **Zscaler** proxy is
 > on — it MITMs TLS and Bun's `fetch` rejects the re-signed cert, and every client swallows that into a
@@ -158,6 +159,9 @@ Phase 29.1 got the full chain working on this machine (screenshot → OCR → su
    Language options → install "Optical character recognition". (English is already present — OCR was
    validated live reading English off a generated image.) Check installed packs in PowerShell:
    `[Windows.Media.Ocr.OcrEngine,Windows.Foundation,ContentType=WindowsRuntime]; [Windows.Media.Ocr.OcrEngine]::AvailableRecognizerLanguages | %{ $_.LanguageTag }`
+2b. **Layer 3 (vision) is blocked at the gateway** — `qwen-vl-max` → `403 team_model_access_denied` (the
+   team may only use `qwen3.6-35b-a3b`). Enabling the toggle is harmless (it reports `vision: unavailable`)
+   but it will not produce suggestions until Arm allows the model or another multimodal endpoint is used.
 3. **Turn it on** in the dashboard **Settings** card (OCR and/or Vision toggles). Vision (Layer 3) also needs
    the gateway key in `.env` (`EXECUTIVE_WORKER_KEY`, reused) — it sends the **whole screenshot** to the
    gateway, so it's the opt-in escalation; OCR keeps the image local.
