@@ -118,6 +118,14 @@ bun run test:e2e           # OPT-IN browser-wasm e2e (real Chromium via Playwrig
 bun run src/index.ts init  # create .executive/ (also adds .executive/ to .gitignore in a repo)
 bun run src/index.ts ui    # dashboard at localhost:4317 (+ watches git/files); the main entry point now
 ```
+
+**Daily use is `ui` alone** — it runs the watchers, rebuilds state + plan + digest + the durable
+notification log on `state.intervalMs`, and runs screen-sense Layer 2. It does **not** carry the
+`watch` daemon's Advisor / infer / autopilot triggers, but all three are `enabled: false` by default,
+so nothing is lost until the owner turns one on. Consequences to know:
+- **Advisor proposals are manual under `ui`:** run `propose` (or the dashboard's "Ask for proposals").
+  To get them automatically, set `config.advisor.enabled = true` **and** run `watch` alongside.
+- `ui` and `watch` together are safe but redundant — both would rebuild state and tick the digest.
 Full command list is in `README.md` / `CLAUDE.md` and `printUsage()` in `src/index.ts`.
 
 **Dev workflow (division of labor):** the architect (Claude) writes a **scope** in `docs/scopes/`, hands it
