@@ -165,6 +165,20 @@
   millisecond resolution → non-deterministic. Order by `seq`. (see §3, Phase 26.1)
 - **Isolate runtime data with `EXECUTIVE_HOME`.** Point it at a temp dir so tests never touch the real
   `.executive/`. All path helpers resolve under `execRoot()` which honors it.
+- **Sabotage-check the threshold *exactly*, not just either side of it.** Phase 33 broke four things on
+  purpose; three tests caught it, but flipping a session-break comparison from `>=` to `>` **escaped**,
+  because the fixtures used gaps of 14 and 16 minutes and never one of exactly 15. *Fix:* for any
+  constant a rule compares against, assert the boundary value itself. A sabotage that survives is telling
+  you the suite has a hole, so run the check on every new threshold.
+- **A test named for an invariant may not test it.** `planner.test.ts`'s "RULES and planner do not import
+  event store" only asserted `RULES.length === 4` — it would have passed happily if `rules.ts` had
+  started reading the event log, and it broke for the *wrong* reason (a legitimate 5th rule) in Phase 33.
+  *Fix:* if the name makes an architectural claim, check the claim (read the source, assert on its
+  imports) and put the count in its own test.
+- **When a test fails, ask whether the fixture or the code is wrong.** Phase 33 hit this twice: a
+  needs-you item is keyed on the action `kind`, so two `resolve_block` plans with different reasons are
+  correctly *one* item; and a "session" fixture used 1-hour gaps that all exceed the 15-minute break.
+  Both times the code was right. (Same lesson as Phase 32.1's window-adjacency expectation.)
 
 ## 5. Config & secrets
 

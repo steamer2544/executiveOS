@@ -3,13 +3,19 @@
 > **Purpose:** a single doc to resume this project cold if context/memory is lost. Pairs with
 > `CLAUDE.md` (the authoritative phase-by-phase log), `GOTCHA.md` (traps & non-obvious failure modes —
 > read before touching PowerShell/state/tests/LLM), and `README.md` (user-facing overview).
-> Last updated after **Phase 31** (Tesseract OCR engine). **406 passing tests**, all green.
+> Last updated after **Phase 33.1** (Advisor validated live). **506 passing tests**, all green.
 
-> **⏭️ Immediate next task:** screen-sensing Layer 2 is **live and now reads Thai** — the config on this
-> machine is already switched to `engine:"tesseract"`. Nothing is blocking. The best next improvement is
-> **deriving the Tesseract language list from the Layer 1 window title**: `-l tha+eng` hallucinates Thai
-> on English-only screens (measured — `GOTCHA.md` §2), so using `eng` unless the window title actually
-> contains Thai would cut the noise.
+> **⏭️ Immediate next task:** nothing is blocking. Two good candidates, both cheap:
+> **(a) Derive the Tesseract OCR language list from the Layer 1 window title** — `-l tha+eng`
+> hallucinates Thai on English-only screens (measured — `GOTCHA.md` §2), and the window title already
+> carries real Thai (it is `GetWindowTextW`, not OCR), so Thai-in-title → `tha+eng`, else `eng`.
+> **(b) Feed `State.patterns` to the digest/dashboard** — Phase 33 computes them and the Planner uses
+> them, but the owner cannot see the numbers a proposal cites without reading `state.json`.
+>
+> **Phase 33 set the method for anything new: read the real event log and calibrate before writing a
+> rule.** Doing that killed two rules that sounded obvious (app-switch thrash is p50=**26**/30min — the
+> *baseline*, not an anomaly; repo switches are p99=**0** because only one repo is ever tagged), and
+> proved a proposed 3-hour session threshold would have **never fired** (longest real session: 1.87h).
 > **Layer 3 (vision) is a dead end on this gateway:** the team is allow-listed to `qwen3.6-35b-a3b`, so
 > `qwen-vl-max` returns 403. It fails cleanly; Layer 2 is the path that works (and keeps the image local).
 > **If the gateway starts timing out (524):** check Arm's inference box — the LiteLLM proxy reports
@@ -36,7 +42,7 @@ Main loop: **Observe → Understand → Predict → Act → Observe again.**
 
 ---
 
-## 2. Current status — DONE through Phase 31
+## 2. Current status — DONE through Phase 33.1
 
 The full loop works and is validated (including **live against the real LLM gateway**). Phases (see
 `CLAUDE.md` for the detailed entry on each):
@@ -80,12 +86,23 @@ The full loop works and is validated (including **live against the real LLM gate
 | 29.1 | **Layer 2 goes live** | the Defender exclusion let the capture script actually run, exposing 2 defects it had masked: `Save()` needs an `ImageCodecInfo` (not `ImageFormat`) so **no file was ever written**, and WinRT rejects mixed-separator paths. Real screenshot → real OCR → real suggestions, end to end |
 | 29.2 | **Failure honesty** | `runScreenInference` no longer breaks its "never throws" contract on the vision path (it left `screen-inferred.json` **stale**), and a hard LLM failure (TLS/401/403/timeout) now reports `ocr: llm unavailable — <reason>` instead of the indistinguishable `ocr: no signal`. Verdict on Layer 3: **`qwen-vl-max` is 403 on this gateway** |
 | 31 | **Tesseract OCR engine** | `config.screen.ocr.engine` = `winrt` (default) \| `tesseract` + `languages` + `tesseractPath`; `normalizeThaiOcr()` recomposes Thai sara-am; dashboard selector. **Layer 2 finally reads Thai** — WinRT never can (no `th-TH` pack exists) |
+| 32 | **Signal hygiene** | five fixes read off the *real* 3,241-event log: `normalizeTitle()` kills spinner/unread-count title churn (51% of screen events were spinner frames; 790→386), `deadline` becomes clearable + an overdue one says so, post-commit hook installed, `judgeNote()` drops junk **voice** notes (typed `capture` always kept), Advisor dedup by intent+word-overlap instead of exact title |
+| 32.1 | **Log compaction** | `compact [--apply]` rewrites history with the **same pure predicates as the live path** (so past and present agree by construction); dry-run default, backup to `.executive/backup-<ts>/`, `seq` never renumbered. Applied: screen 875→433, voice notes 1431→1365 |
+| 33 | **Signal → Judgment** | (a) **real bug:** `ui` never persisted `digest.md`/`notifications.jsonl` — the refresh lived inline in `case "watch"` — so Phase 14's durable log was dead in the mode the owner actually runs; extracted `runDigestTick` (`src/report/tick.ts`) and wired both daemons. (b) `State.patterns` (pure, builder-computed, keeps the Planner's "State only" contract) + 3 pattern rules: `checkpoint_work`/`grinding_on_file`/`long_session`, all `ask`. (c) Advisor proposals must cite checkable `evidence`; generic advice + busywork banned in the prompt; `parseDrafts` **drops ungrounded drafts** |
+| 33.1 | **Advisor live-validated** | the first real gateway call failed and exposed 3 defects the mock could never surface: `max_tokens` starvation (**3/3 runs**, output exactly 4096 → floor raised to 8192), a failure message that couldn't distinguish "out of budget" from "bad response", and the model reading raw ms as the wrong unit (`sessionMs: 2173707` → "~36 hours"; it is 36 **minutes**) → `patternsExplained` sends units in words |
 
-**Test count:** 406 passing, 100% offline (mock backends). Several phases **validated live** against the
+**Test count:** 506 passing, 100% offline (mock backends). Several phases **validated live** against the
 9arm Qwen gateway (`work`, `synth`, `infer`, `propose`); Phase-25 vendor download + browser-wasm e2e run
-live too. **Screen-sensing is now fully live** (real capture → real OCR → real suggestions, both engines
-compared on the same image). **Not live:** the Layer 3 vision call — it is **403 at the gateway**, not a
-code problem (§6).
+live too. **Screen-sensing is fully live** (real capture → real OCR → real suggestions, both engines
+compared on the same image), and the **Advisor is live-validated end to end** (Phase 33.1). **Not live:**
+the Layer 3 vision call — it is **403 at the gateway**, not a code problem (§6).
+
+**Where the system stands qualitatively (measured 2026-07-23, before Phase 33):** sensing was far ahead
+of reasoning — State was accurate and near-fully auto-sensed (Layer 2 OCR summarised the owner's live
+work from pixels alone), yet `plan.json` was `topAction: null`: **3,174 sensed events had produced 0
+decisions**, because all four Planner rules only fired when something was *broken*. Phase 33 closed that
+gap; the Planner now says things like *"113 edit(s) over 11.5h with no commit — checkpoint before the
+change gets too big to review"* and it reaches the "Needs you" queue.
 
 ---
 
@@ -94,7 +111,7 @@ code problem (§6).
 ```bash
 bun install
 bun run typecheck          # tsc --noEmit (strict) — must stay green
-bun test                   # 406 tests, offline
+bun test                   # 506 tests, offline
 bun run test:e2e           # OPT-IN browser-wasm e2e (real Chromium via Playwright; runs under node, auto-skips
                            #   if playwright/model aren't set up — see test/e2e/README.md)
 
@@ -134,8 +151,26 @@ a `CLAUDE.md` phase entry.
   `llmMaxTokens(config, floor=4096)` + `llmTimeoutMs(config, floor=120000)` in `src/config.ts`, used by the
   worker/synth/infer/advisor factories. Latency is variable (6s–>120s); occasional timeouts are expected
   and the daemon retries. `/no_think` did NOT help (made it worse). Headroom is the lever.
+- **The floor is per-caller, and 4096 is not universally enough.** Phase 33.1: the Advisor hit
+  `stop_reason: max_tokens` on **3/3** live runs (output exactly 4096) once its prompt started demanding
+  evidence per proposal — a longer/stricter prompt buys more *thinking*, not just more output. It floors
+  at **8192** (`llmMaxTokens(config, 8192)`) and completes at ~4.5k. **If you tighten a prompt, re-measure
+  the budget live** — probe the gateway directly and look at `stop_reason` + `usage.output_tokens`.
+- **A truncated answer is partly salvageable.** `salvageTruncatedArray()` (`src/advisor/anthropic.ts`)
+  recovers the *completed* elements of a JSON array cut off mid-object (string-aware, so braces and
+  escaped quotes inside strings don't fool it) rather than throwing away a good answer for one bad tail.
+- **Never hand the model raw milliseconds.** It read `sessionMs: 2173707` as "~36 hours" — it is 36
+  *minutes* — and repeated the same class of error on another run, so it is systematic, not a fluke.
+  `explainPatterns()` sends units in words next to the raw numbers. Prefer pre-formatted values in any
+  new prompt payload.
 - Response parsing tolerates code fences / surrounding prose and extracts the JSON (`parseGuesses`,
   `parseDrafts`, etc.).
+- **Make the LLM justify itself, then check the justification.** Phase 33 made every Advisor proposal
+  carry an `evidence` string (ungrounded drafts are dropped at parse time). It measurably killed the
+  horoscope-grade output — but it does **not** stop the model inventing a *subject*: one live run cited
+  `sameFileSaves30m: 9` and `currentFile` correctly while proposing work on an "invoice quotation flow"
+  that appears nowhere in the context. The evidence line is what makes that visible in seconds; treat it
+  as an audit trail, not a guarantee.
 - **Two API shapes:** everything text (worker/synth/infer/advisor) uses the **Anthropic** `/v1/messages`
   shape. **Vision (Phase 29, `qwen-vl-max`) is different** — the gateway's multimodal endpoint is
   **OpenAI-compatible** `POST /v1/chat/completions` with `image_url` base64 data-URL content parts
@@ -201,7 +236,13 @@ State on this machine: Defender exclusion in place, `screen.ocr.enabled = true`,
 Confirm button. Ethics held: opt-in, visible "🔴 reading screen" indicator, own-screen only.
 Layer 3 (vision) stays off — `qwen-vl-max` is 403 at the gateway; it fails cleanly if enabled.
 
-### ⏭️ Best next task — pick the OCR language from the window title
+### ⏭️ Candidate A — surface `State.patterns` in the digest / dashboard
+Phase 33 computes `patterns` (`sessionMs`, `msSinceLastCommit`, `editsSinceLastCommit`,
+`sameFileSaves30m`, `repoSwitches1h`) and the Planner + Advisor both reason over them, but the owner
+cannot see the numbers a proposal cites without opening `state.json`. A "Working pattern" line in the
+digest and a Now-card row would close that loop. Cheap and read-only — the values already exist.
+
+### ⏭️ Candidate B — pick the OCR language from the window title
 `-l tha+eng` **hallucinates Thai on screens that contain none**. Measured on one real screenshot:
 `-l eng` → 0 Thai chars / 8 English words; `-l tha+eng` → **59 garbage Thai chars** / 7 English words —
 so `tha` also costs a little English accuracy. It is *not* a resolution artifact (native 1536×960 gives
@@ -251,12 +292,16 @@ src/
 ├── events/        # JSONL EventStore, seq, types
 ├── watchers/      # git + fs watchers
 ├── state/         # State Builder (state.json/context.json) — incl. task/project inference
-├── planner/       # rule-based Planner (plan.json) + rules.ts
+│                  #   patterns.ts = behavioural metrics (pure) so the Planner can read State only
+├── planner/       # rule-based Planner (plan.json) + rules.ts (4 breakage rules + 3 pattern rules)
 ├── worker/        # LLM Worker (Proposal) — mock|anthropic + identity (claude.md)
 ├── executor/      # applies ChangeSet on isolated branch (git, deterministic)
 ├── synth/         # Synthesizer (Proposal→ChangeSet)
 ├── auto/          # Autopilot orchestrator + guard (continuous-autonomy dedup)
 ├── report/        # Digest (digest.md, "Needs you") + notify (notifications.jsonl)
+│                  #   tick.ts = the shared digest+notification step BOTH `watch` and `ui` must call
+├── capture/       # judgeNote() — drops junk voice notes before they reach the Advisor
+├── compact/       # `compact` — rewrites history with the same predicates as the live path
 ├── infer/         # LLM block/deadline guesses (inferred.json)
 ├── advisor/       # proactive proposal queue (advisor.json)
 ├── hooks/         # install-hooks (post-commit test emitter)
