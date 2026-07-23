@@ -20,39 +20,17 @@
 > backlog item present at startup is suppressed by the first-tick guard (avoids a restart nudge-storm)
 > and only surfaces in the dashboard/digest.
 
-> **⏭️ Immediate next task — Phase 36: make it speak first.** Phase 35 answers and acts, but the owner
-> still has to open the dashboard to start the conversation — the exact failure that made the system go
-> unused in the first place. The substrate exists: `runDigestTick` already knows the moment an item
-> *enters* the "Needs you" queue (that is what `notifications.jsonl` records) and the agent can now
-> phrase it. What is missing is a channel that reaches the owner with the dashboard closed
-> (**Discord**, the owner's pick) plus a reply path back into `runTurn`.
+> **Design record (built in Phase 36, kept for the reasoning):** Discord is **text-first, voice
+> deferred** — the dashboard already does two-way voice locally (hold-Space in, `speechSynthesis` out),
+> so Discord's job is *reach*, not richness. A Discord reply enters the **same** `runTurn`/
+> `conversation.jsonl` as the dashboard (one brain, not a second assistant); the confirm chip became
+> Discord buttons carrying the same `pendingId`. **Who decides when to speak: rules pick the moment, the
+> LLM only writes the sentence** — measured, not principled: the Advisor queued the same decision 4× with
+> no cross-tick memory (P32); an "app-switch = distraction" rule died at p50 = **26 per 30 min**, the
+> owner's baseline not an anomaly (P33). An LLM asked "interrupt now?" every tick fires on all of it. The
+> `rules+llm` dial was **deliberately cut** until the `rules` baseline is read from `nudges.jsonl`.
 >
-> **Discord, decided:** **text first, voice deferred.** A bot posting and reading text is
-> straightforward; carrying a voice conversation means joining a voice channel and streaming audio,
-> which is a large amount of machinery for something the dashboard **already does well** — Phase 35
-> gives full two-way voice locally (hold-Space dictation in, `speechSynthesis` out). So Discord's job
-> is reach, not richness. Revisit voice-on-Discord only if the owner actually misses it in use.
-> A reply typed in Discord must enter the **same** `runTurn` and the **same** `conversation.jsonl` as
-> the dashboard — one conversation, one brain, not a second assistant with its own memory. The Phase
-> 35 confirm chip becomes Discord buttons carrying the same `pendingId` through `resumeTurn`.
-> **Needed from the owner before it can run live** (write the code first — none of it blocks
-> development): a **bot token** (into `.env`, never `config.json` — same rule as every other secret),
-> and whether nudges go to a **DM** or a channel in **his own private server**.
->
-> **Who decides when to speak — settle this with evidence, not principle.** The default is that
-> **rules** pick the moment and the **LLM writes the message** (it may absolutely ask the owner
-> questions — that is the point). The reason is not architectural purity, it is measured, in this
-> repo: the Advisor once queued the same decision four separate times because it has no memory across
-> ticks (Phase 32); its hit rate was 61% with generic filler inside that (Phase 33); and a rule that
-> *sounded* obvious — "frequent app switching means distraction" — died on contact with the log,
-> because switching runs at p50 = **26 per 30 min**, i.e. it is the owner's baseline, not an anomaly
-> (Phase 33). An LLM asked "should I interrupt now?" every tick would have fired on all of that.
-> So make it a **dial, not a law**: `agent.proactive.trigger: "rules" | "rules+llm"` (default
-> `rules`), with `maxPerDay` and `quietHours` **owned by the rules** — under `rules+llm` the model may
-> propose extra nudges but still spends the same budget, and silence is enforced once it is gone. Log
-> whether the owner answered or ignored each nudge, and decide from that after two weeks.
->
-> **⚠️ Phase 35 left exactly one thing unmeasured: does the gateway support native tool calling?** Every
+> **⚠️ Phase 35/36 left one thing unmeasured: does the gateway support native tool calling?** Every
 > probe returned **524 — including a 1-word prompt with no tools** — so Arm's box was down and this is
 > unmeasured, not negative. Run `bun scripts/probe-tools.ts` from the repo root when the box is back and
 > record the verdict in `GOTCHA.md` §1. Both protocols are implemented and tested and `auto` downgrades
