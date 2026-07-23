@@ -11,10 +11,20 @@
 > unused in the first place. The substrate exists: `runDigestTick` already knows the moment an item
 > *enters* the "Needs you" queue (that is what `notifications.jsonl` records) and the agent can now
 > phrase it. What is missing is a channel that reaches the owner with the dashboard closed
-> (Telegram/LINE/Discord) plus a reply path back into `runTurn`. **Outward-facing — needs an explicit
-> channel choice from the owner before any code is written.** Keep the boundary Phase 35 set: **the
-> Planner decides what is worth interrupting for; the agent only phrases it.** Never let the LLM decide
-> when to interrupt.
+> (**Discord**, the owner's pick) plus a reply path back into `runTurn`.
+>
+> **Who decides when to speak — settle this with evidence, not principle.** The default is that
+> **rules** pick the moment and the **LLM writes the message** (it may absolutely ask the owner
+> questions — that is the point). The reason is not architectural purity, it is measured, in this
+> repo: the Advisor once queued the same decision four separate times because it has no memory across
+> ticks (Phase 32); its hit rate was 61% with generic filler inside that (Phase 33); and a rule that
+> *sounded* obvious — "frequent app switching means distraction" — died on contact with the log,
+> because switching runs at p50 = **26 per 30 min**, i.e. it is the owner's baseline, not an anomaly
+> (Phase 33). An LLM asked "should I interrupt now?" every tick would have fired on all of that.
+> So make it a **dial, not a law**: `agent.proactive.trigger: "rules" | "rules+llm"` (default
+> `rules`), with `maxPerDay` and `quietHours` **owned by the rules** — under `rules+llm` the model may
+> propose extra nudges but still spends the same budget, and silence is enforced once it is gone. Log
+> whether the owner answered or ignored each nudge, and decide from that after two weeks.
 >
 > **⚠️ Phase 35 left exactly one thing unmeasured: does the gateway support native tool calling?** Every
 > probe returned **524 — including a 1-word prompt with no tools** — so Arm's box was down and this is
