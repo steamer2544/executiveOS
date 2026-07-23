@@ -94,6 +94,26 @@ export interface Config {
      *  isolated-branch rule still apply to a trusted tool. */
     trustedTools?: string[];
     commandTimeoutMs?: number;  // wall-clock cap on run_command. Default 60000.
+    /** Proactive nudges (Phase 36) — the runtime speaks FIRST instead of waiting to be asked.
+     *  RULES pick the moment (budget + quiet hours below); the LLM only writes the sentence.
+     *  OFF by default. */
+    proactive?: {
+      enabled?: boolean;  // Default false.
+      maxPerDay?: number; // hard cap on nudges per local calendar day. Default 6.
+      minGapMs?: number;  // minimum spacing between two nudges. Default 1800000 (30 min).
+      quietFrom?: string; // start of the do-not-disturb window "HH:MM". Default "22:00".
+      quietTo?: string;   // end of it. Wraps midnight. from === to disables quiet hours. Default "08:00".
+    };
+  };
+  /** Discord channel (Phase 36) — how a nudge reaches the owner with the dashboard closed,
+   *  and how their reply gets back into the SAME conversation. OFF by default.
+   *  The bot token lives ONLY in .env; this block holds the env var NAME, never the token. */
+  discord?: {
+    enabled?: boolean;       // Default false.
+    tokenEnv?: string;       // env var NAME holding the bot token. Default "EXECUTIVE_DISCORD_TOKEN".
+    ownerId?: string | null; // the ONLY Discord user id the bot obeys. null → the channel refuses
+                             // to start. This is an authentication boundary: the agent it feeds has
+                             // write tools on this machine, and anyone can DM a bot.
   };
   /** Voice/text capture (defaults applied when absent). The dashboard listens to YOU (your own
    *  dictated notes) and, during work hours, can start listening automatically. OFF by default. */
@@ -229,6 +249,18 @@ export function defaultConfig(): Config {
       speak: false,
       trustedTools: [],
       commandTimeoutMs: 60000,
+      proactive: {
+        enabled: false,
+        maxPerDay: 6,
+        minGapMs: 1800000,
+        quietFrom: "22:00",
+        quietTo: "08:00",
+      },
+    },
+    discord: {
+      enabled: false,
+      tokenEnv: "EXECUTIVE_DISCORD_TOKEN",
+      ownerId: null,
     },
     capture: {
       enabled: false,
@@ -399,6 +431,23 @@ export function loadConfig(): Config {
   parsed.agent.trustedTools = parsed.agent.trustedTools ?? [];
   parsed.agent.commandTimeoutMs =
     parsed.agent.commandTimeoutMs ?? defaults.agent!.commandTimeoutMs!;
+  if (!parsed.agent.proactive) {
+    parsed.agent.proactive = defaults.agent!.proactive!;
+  }
+  const pDefaults = defaults.agent!.proactive!;
+  parsed.agent.proactive.enabled = parsed.agent.proactive.enabled ?? pDefaults.enabled!;
+  parsed.agent.proactive.maxPerDay = parsed.agent.proactive.maxPerDay ?? pDefaults.maxPerDay!;
+  parsed.agent.proactive.minGapMs = parsed.agent.proactive.minGapMs ?? pDefaults.minGapMs!;
+  parsed.agent.proactive.quietFrom = parsed.agent.proactive.quietFrom ?? pDefaults.quietFrom!;
+  parsed.agent.proactive.quietTo = parsed.agent.proactive.quietTo ?? pDefaults.quietTo!;
+
+  // Merge missing discord fields with defaults (absent block = the channel is off).
+  if (!parsed.discord) {
+    parsed.discord = defaults.discord!;
+  }
+  parsed.discord.enabled = parsed.discord.enabled ?? defaults.discord!.enabled!;
+  parsed.discord.tokenEnv = parsed.discord.tokenEnv ?? defaults.discord!.tokenEnv!;
+  parsed.discord.ownerId = parsed.discord.ownerId ?? defaults.discord!.ownerId!;
 
   // Merge missing capture fields with defaults.
   if (!parsed.capture) {

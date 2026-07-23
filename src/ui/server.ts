@@ -16,6 +16,7 @@ import { runAdvisor, decideProposal } from "../advisor/advisor.js";
 import { downloadWasmAssets, wasmAssetsStatus } from "./models.js";
 import { judgeNote } from "../capture/note.js";
 import { runTurn, resumeTurn } from "../agent/loop.js";
+import { markNudgeAnswered } from "../proactive/proactive.js";
 import { readConversation, readPending, clearConversation, clearPending } from "../agent/session.js";
 import type { ConfirmDecision } from "../agent/types.js";
 import { renderPage } from "./page.js";
@@ -340,6 +341,10 @@ export function startUiServer(opts: UiServerOptions) {
             const body = (await req.json()) as { message?: string; via?: "text" | "voice" };
             const message = (body.message ?? "").trim();
             if (!message) return Response.json({ ok: false, error: "empty message" }, { status: 400 });
+            // Answering here closes the loop on any open proactive nudge too — the
+            // owner may reply in the dashboard to a nudge Discord delivered. Derived
+            // from the log, so it works across processes.
+            markNudgeAnswered();
             const turn = await runTurn(message, { config, via: body.via ?? "text" });
             return Response.json({ ok: true, ...turn });
           } catch (err) {

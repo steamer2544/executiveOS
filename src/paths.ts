@@ -129,3 +129,8 @@ export function conversationPath(): string {
 export function agentPendingPath(): string {
   return execRoot() + "/agent-pending.json";
 }
+
+/** Absolute path to .executive/nudges.jsonl (proactive nudges sent + whether they were answered). */
+export function nudgeLogPath(): string {
+  return execRoot() + "/nudges.jsonl";
+}

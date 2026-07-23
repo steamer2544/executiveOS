@@ -949,6 +949,51 @@ docs/scopes/           # per-phase specs (the contract handed to the implementer
   aborted attempt kept port 4571 and silently answered a later run. Spec:
   `docs/scopes/phase-35-conversational-agent.md`. Files: `src/agent/*`, `src/config.ts`, `src/paths.ts`,
   `src/ui/{server,page,ui.test}.ts`, `src/index.ts`, `scripts/probe-tools.ts`.
+- **Phase 36 — DONE** (architect scope + contract + wiring, qwen impl of the two engines, architect
+  review/fixes/sabotage-check, this commit): **Make it speak first — proactive nudges over Discord.**
+  The system was **pull** — everything it knew sat behind a page the owner had to remember to open, the
+  measured reason it went unused. Now it reaches out. Two new subsystems behind default-OFF gates.
+  **`src/proactive/`** (channel-agnostic engine): `rules.ts` is **pure** (no I/O, no `Date.now()`) and is
+  where the judgment lives — RULES pick the moment, the LLM only writes the sentence (measured: the
+  Advisor queued the same decision 4× with no cross-tick memory (P32), an "app-switch = distraction" rule
+  died at p50=26/30min (P33); an LLM asked "interrupt now?" every tick fires on all of it). `decideNudge`
+  evaluates in a fixed order — disabled → **first-tick guard** → nothing-new → quiet-hours (wraps midnight)
+  → min-gap → daily-budget → 24h repeat-suppression → send, **at most one nudge per tick**. `compose.ts`
+  has the LLM write a 1–2 sentence Thai nudge with a **deterministic fallback that is a requirement, not
+  an error path** (the gateway 524s regularly; a nudge that does not fire because the LLM was down is the
+  exact failure this phase fixes). `log.ts` → append-only **`nudges.jsonl`** (`sent`/`answered`/
+  `suppressed`) — the evidence for whether the rules pick good moments (sent-vs-answered per source),
+  which is why `rules+llm` was **cut from scope**: a second unmeasured nudge source now would make the
+  baseline uninterpretable. `openNudgeId` derives the open nudge from the log (survives restart), so the
+  answered-signal works across the daemon and the dashboard both. **`src/channel/`**: a `Channel`
+  interface + a **hand-rolled Discord adapter** (`discord.ts`) — zero new deps, gateway over `WebSocket`
+  (IDENTIFY intents `4096`=DIRECT_MESSAGES so no privileged `MESSAGE_CONTENT` intent is needed; heartbeat
+  echoes the real `lastSeq`; 5s reconnect, no RESUME), REST over `fetch` (lazy DM channel, 3-button
+  confirm rows, ≤2000-char truncation, `send` never throws). **`ownerId` is an authentication boundary,
+  enforced in the adapter** — the agent it feeds has write tools on this machine and anyone can DM a bot;
+  a message from any other id is dropped with no reply. **One conversation, one brain:** a Discord reply
+  enters the *same* `runTurn`/`resumeTurn` and `conversation.jsonl` as the dashboard; the confirm chip
+  becomes Discord buttons carrying the same `pendingId`. Wired into BOTH `watch` and `ui` (the P33 lesson:
+  a capability in one daemon is dead in the mode the owner runs). Config: `agent.proactive`
+  (enabled/maxPerDay=6/minGapMs=30m/quiet 22:00–08:00) + `discord` (enabled/tokenEnv/ownerId); the bot
+  token lives ONLY in `.env` (`EXECUTIVE_DISCORD_TOKEN`). 628 passing tests (+50). **Sabotage-checked**
+  (`GOTCHA.md` §4): deleting the first-tick guard, the midnight-wrap, and the `ownerId` check each fail
+  exactly the tests written to prevent them (6 tests, all confirmed red then restored). **qwen defects
+  found + fixed:** (1) the heartbeat sent a hardcoded `0` instead of `lastSeq` and IDENTIFY spun up a
+  0ms-interval heartbeat before HELLO — both fixed, + a test that asserted "a heartbeat was sent" but only
+  passed *because of* the `0` bug (rewritten to the real contract); (2) a loose `custom_id` regex accepted
+  any decision word → tightened to `run|trust|no` + a test; (3) mangled Thai in a test string
+  (`นี้วลอด`→`นี้ตลอด`) and in the compose prompt (duplicated `"คุณ"/"คุณ"`); (4) `ProactiveState` carried
+  an `awaitingReplyId` that would be silently lost on every restart — removed, derived from the log
+  instead. **Both qwen runs died at the report stage to `ContextWindowExceededError`** (99k input before
+  work — the P34.2 trap, even run from outside the repo); the code + tests were already written, so the
+  architect reviewed and finished. **Known designed behavior (not a bug):** the engine nudges on items
+  that *enter* the queue while the daemon runs (`DigestTickResult.added`); a backlog item already present
+  at startup is suppressed by the first-tick guard and not re-nudged (still visible in the dashboard/
+  digest) — deliberate, to avoid a nudge-storm on every restart. **NOT run live** — needs the owner's bot
+  token + the already-made decision (DM, hand-rolled client). Spec:
+  `docs/scopes/phase-36-proactive-discord.md`. Files: `src/proactive/*`, `src/channel/*`, `src/config.ts`,
+  `src/paths.ts`, `src/ui/server.ts`, `src/index.ts`, `.env.example`.
 - **Loop complete (manual trigger):** `auto --apply` runs the whole chain in one command; the human
   reviews/merges the `executive/change-<id>` branch.
 

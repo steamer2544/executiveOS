@@ -26,13 +26,19 @@ import { buildDigest, renderDigest, writeDigest } from "./report/digest.js";
 import { digestPath } from "./paths.js";
 import { readNotifications } from "./report/notify.js";
 import { runDigestTick, createDigestTickState, type DigestTickResult } from "./report/tick.js";
+import type { NeedsYouItem } from "./report/types.js";
 import { runCompaction } from "./compact/compact.js";
 import { installHooks } from "./hooks/install.js";
 import { startUiServer } from "./ui/server.js";
 import { runInference, writeInference } from "./infer/infer.js";
 import { inferredPath } from "./paths.js";
 import { runAdvisor, decideProposal } from "./advisor/advisor.js";
-import { runTurn } from "./agent/loop.js";
+import { runTurn, resumeTurn } from "./agent/loop.js";
+import type { Config } from "./config.js";
+import type { Channel, InboundMessage } from "./channel/types.js";
+import { createDiscordChannel } from "./channel/discord.js";
+import { runProactiveTick, markNudgeAnswered } from "./proactive/proactive.js";
+import { createProactiveState, type ProactiveState } from "./proactive/types.js";
 import { readStore, pending } from "./advisor/store.js";
 import { runScreenInference } from "./screen/screen-infer.js";
 import { screenInferredPath } from "./paths.js";
@@ -113,6 +119,103 @@ function printDigestTick(result: DigestTickResult): void {
   } else if (result.cleared) {
     process.stdout.write("✓ Needs-you queue cleared.\n");
   }
+}
+
+// ── Outward channel + proactive nudges (Phase 36) ─────────────────────────────
+// Shared by `watch` and `ui`, for the Phase 33 reason: a capability wired into only
+// one of the two daemons is dead in whichever one the owner actually runs.
+
+/**
+ * Start the outward channel, or return null when it is off or unconfigured.
+ *
+ * Both the token and the owner id are required. A channel with no owner id would
+ * obey ANY Discord user, and the agent behind it has write tools on this machine —
+ * so "not configured" must mean "does not start", never "starts unlocked".
+ */
+async function startChannel(
+  cfg: Config,
+  onInbound: (m: InboundMessage) => Promise<void>,
+): Promise<Channel | null> {
+  if (cfg.discord?.enabled !== true) return null;
+  const tokenEnv = cfg.discord.tokenEnv ?? "EXECUTIVE_DISCORD_TOKEN";
+  const token = process.env[tokenEnv] ?? "";
+  const ownerId = cfg.discord.ownerId ?? "";
+  if (!token) {
+    process.stderr.write("Discord: enabled but " + tokenEnv + " is not set in .env — channel off.\n");
+    return null;
+  }
+  if (!ownerId) {
+    process.stderr.write("Discord: enabled but config.discord.ownerId is null — channel off.\n");
+    return null;
+  }
+  const channel = createDiscordChannel({ token, ownerId });
+  channel.onInbound(onInbound);
+  await channel.start();
+  process.stdout.write("Discord: connected — nudges will reach you with the dashboard closed.\n");
+  return channel;
+}
+
+/**
+ * Carry an inbound Discord message into the SAME agent turn the dashboard uses.
+ * One conversation, one brain — not a second assistant with its own memory.
+ */
+function makeInboundHandler(
+  getChannel: () => Channel | null,
+): (m: InboundMessage) => Promise<void> {
+  return async (m) => {
+    const channel = getChannel();
+    if (!channel) return;
+    const cfg = loadConfig();
+    if (cfg.agent?.enabled !== true) {
+      await channel.send({ text: "ตอนนี้ agent ปิดอยู่ครับ — เปิดได้ที่การ์ด Autonomy ในแดชบอร์ด" });
+      return;
+    }
+    try {
+      let turn;
+      if (m.kind === "text") {
+        // Answering counts as answering the open nudge — that pairing is the whole
+        // point of the log: after two weeks, sent-vs-answered says whether the rules
+        // picked good moments.
+        markNudgeAnswered();
+        turn = await runTurn(m.text, { config: cfg, via: "text" });
+      } else {
+        turn = await resumeTurn(m.pendingId, m.decision, { config: cfg });
+      }
+      const text = turn.reply || (turn.pending ? turn.pending.preview : "(ไม่มีคำตอบ)");
+      await channel.send({
+        text,
+        confirm: turn.pending ? { pendingId: turn.pending.id } : undefined,
+      });
+    } catch (err) {
+      await channel.send({ text: "ขอโทษครับ พัง: " + (err as Error).message });
+    }
+  };
+}
+
+/**
+ * The tick side: hand this tick's newly-arrived "Needs you" items to the proactive
+ * rules. Fire-and-forget with an in-flight lock, like every other network-touching
+ * trigger in the daemons — a slow gateway must never stall the rebuild timer.
+ *
+ * Config is re-read each tick so the dashboard's Autonomy toggle takes effect without
+ * a restart. (The *channel* still needs a restart — its token comes from `.env`.)
+ */
+function makeNudgeRunner(
+  getChannel: () => Channel | null,
+  proactiveState: ProactiveState,
+): (added: NeedsYouItem[]) => void {
+  let running = false;
+  return (added) => {
+    const channel = getChannel();
+    if (!channel || running) return;
+    running = true;
+    runProactiveTick({ added, state: proactiveState, channel, config: loadConfig() })
+      .then((r) => {
+        if (r.sent) process.stdout.write("Nudge sent → Discord: " + r.sent.text + "\n");
+      })
+      .catch((e) => process.stderr.write("Nudge failed: " + (e as Error).message + "\n"))
+      .finally(() => { running = false; });
+  };
 }
 
 async function main(): Promise<void> {
@@ -349,6 +452,12 @@ async function main(): Promise<void> {
       // ── Needs-you alert state (shared shape with `ui` — see src/report/tick.ts) ──
       const digestTickState = createDigestTickState();
 
+      // ── Outward channel + proactive nudges ────────────────────────────────
+      const watchProactive = createProactiveState();
+      let watchChannel: Channel | null = null;
+      const watchNudge = makeNudgeRunner(() => watchChannel, watchProactive);
+      watchChannel = await startChannel(config, makeInboundHandler(() => watchChannel));
+
       // ── Periodic state rebuild ───────────────────────────────────────────
       const stateIntervalMs = config.state?.intervalMs ?? 30000;
 
@@ -418,7 +527,9 @@ async function main(): Promise<void> {
             // ── Digest refresh + Needs-you alert (read-only; never acts) ──
             // Shared with the `ui` command via runDigestTick — see src/report/tick.ts.
             try {
-              printDigestTick(runDigestTick(digestTickState));
+              const tick = runDigestTick(digestTickState);
+              printDigestTick(tick);
+              watchNudge(tick.added);
             } catch (digestErr) {
               process.stderr.write("Digest refresh failed: " + (digestErr as Error).message + "\n");
             }
@@ -503,6 +614,7 @@ async function main(): Promise<void> {
       process.on("SIGINT", async () => {
         process.stdout.write("\nStopping watchers...\n");
         clearInterval(rebuildTimer);
+        if (watchChannel) await watchChannel.stop();
         await manager.stopAll();
         // Write final line to log file
         try {
@@ -1058,6 +1170,13 @@ async function main(): Promise<void> {
         // notification log dead. Same tick, same rules as the `watch` daemon.
         const uiDigestState = createDigestTickState();
         const uiStateIntervalMs = loadConfig().state?.intervalMs ?? 30000;
+
+        // Outward channel + proactive nudges — same wiring as `watch`.
+        const uiProactive = createProactiveState();
+        let uiChannel: Channel | null = null;
+        const uiNudge = makeNudgeRunner(() => uiChannel, uiProactive);
+        uiChannel = await startChannel(loadConfig(), makeInboundHandler(() => uiChannel));
+
         const digestTimer = setInterval(() => {
           try {
             // Rebuild state + plan FIRST. ui/server.ts only does this inside
@@ -1067,7 +1186,9 @@ async function main(): Promise<void> {
             const built = buildState();
             writeState(built);
             writePlan(plan(built.state, built.context));
-            printDigestTick(runDigestTick(uiDigestState));
+            const tick = runDigestTick(uiDigestState);
+            printDigestTick(tick);
+            uiNudge(tick.added);
           } catch (digestErr) {
             process.stderr.write("Digest refresh failed: " + (digestErr as Error).message + "\n");
           }
@@ -1170,6 +1291,7 @@ async function main(): Promise<void> {
           clearInterval(digestTimer);
           clearInterval(autonomyTimer);
           server.stop();
+          if (uiChannel) await uiChannel.stop();
           if (manager) await manager.stopAll();
           process.stdout.write("\nstopped\n");
           process.exit(0);

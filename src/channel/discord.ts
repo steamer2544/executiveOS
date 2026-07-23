@@ -1,0 +1,369 @@
+// Discord channel adapter — hand-rolled Gateway + REST over WebSocket/fetch.
+//
+// Phase 36: the runtime speaks first. This adapter connects the proactive nudge
+// system to Discord DMs so the owner gets interrupted even with the dashboard closed.
+//
+// Zero runtime dependencies: the gateway is a plain WebSocket, REST uses globalThis.fetch.
+// The bot token is read from process.env only — never a literal, never logged.
+
+import type { Channel, InboundMessage, OutboundMessage, WebSocketLike } from "./types.js";
+
+// ── types ────────────────────────────────────────────────────────────────────
+
+/** Options passed to createDiscordChannel. */
+export interface DiscordChannelOptions {
+  token: string;
+  /** Discord user id allowed to talk to the bot. Anything else is ignored. */
+  ownerId: string;
+  /** Injected in tests. Default: globalThis.WebSocket / globalThis.fetch. */
+  wsFactory?: (url: string) => WebSocketLike;
+  fetchImpl?: typeof fetch;
+}
+
+/**
+ * One line in the Discord Gateway wire protocol.
+ * op 2 = IDENTIFY, op 1 = HEARTBEAT.
+ */
+interface GatewayPayload {
+  op: number;
+  d?: unknown;
+  s?: number;
+  t?: string;
+}
+
+// ── constants ────────────────────────────────────────────────────────────────
+
+const GATEWAY_URL = "wss://gateway.discord.gg/?v=10&encoding=json";
+const DISCORD_CONTENT_LIMIT = 2000;
+const TRUNCATE_SUFFIX = " …";
+
+// ── public API ───────────────────────────────────────────────────────────────
+
+/**
+ * Create a Channel backed by Discord's Gateway + REST APIs.
+ *
+ * The adapter opens a persistent WebSocket to the Gateway (receive path) and
+ * uses fetch for outbound messages (send path). Both are injected in tests.
+ */
+export function createDiscordChannel(opts: DiscordChannelOptions): Channel {
+  const { token, ownerId, wsFactory, fetchImpl } = opts;
+
+  let handler: ((m: InboundMessage) => Promise<void>) | null = null;
+  let dmChannelId: string | null = null;
+  let ws: WebSocketLike | null = null;
+  let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+  let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  let stopped = false;
+  /** Last gateway sequence number seen; echoed in every heartbeat. */
+  let lastSeq: number | null = null;
+
+  // ── REST helpers ─────────────────────────────────────────────────────────
+
+  /** Resolve the DM channel id, caching it for the process lifetime. */
+  async function resolveDmChannel(): Promise<string> {
+    if (dmChannelId) return dmChannelId;
+    const fetch = fetchImpl ?? globalThis.fetch;
+    const res = await fetch("https://discord.com/api/v10/users/@me/channels", {
+      method: "POST",
+      headers: {
+        Authorization: `Bot ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ recipient_id: ownerId }),
+    });
+    if (!res.ok) {
+      throw new Error(`create DM failed: ${res.status} ${res.statusText}`);
+    }
+    const data = (await res.json()) as { id: string };
+    dmChannelId = data.id;
+    return dmChannelId;
+  }
+
+  /** Send a message to the DM channel. Never throws. */
+  async function sendDiscordMessage(
+    content: string,
+    components?: unknown
+  ): Promise<{ ok: boolean; error?: string }> {
+    const fetch = fetchImpl ?? globalThis.fetch;
+    try {
+      const channelId = await resolveDmChannel();
+      const body: Record<string, unknown> = { content: truncateContent(content) };
+      if (components) body.components = components;
+
+      const res = await fetch(`https://discord.com/api/v10/channels/${channelId}/messages`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bot ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(body),
+      });
+
+      if (!res.ok) {
+        const text = await res.text().catch(() => "");
+        return {
+          ok: false,
+          error: `${res.status}: ${text.slice(0, 200)}`,
+        };
+      }
+      return { ok: true };
+    } catch (e) {
+      return { ok: false, error: `network: ${String(e)}` };
+    }
+  }
+
+  /**
+ * Acknowledge an interaction before the 3-second deadline.
+ * Sends a DEFERRED_UPDATE_MESSAGE (type 6).
+ */
+  async function ackInteraction(interactionId: string, interactionToken: string): Promise<void> {
+    const fetch = fetchImpl ?? globalThis.fetch;
+    try {
+      await fetch(`https://discord.com/api/v10/interactions/${interactionId}/${interactionToken}/callback`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bot ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ type: 6 }),
+      });
+    } catch {
+      // Best effort — if this fails Discord will show "interaction failed"
+      // but we still try to call the handler.
+    }
+  }
+
+  /** Truncate content to Discord's 2000-char limit. */
+  function truncateContent(text: string): string {
+    if (text.length <= DISCORD_CONTENT_LIMIT) return text;
+    return text.slice(0, DISCORD_CONTENT_LIMIT - TRUNCATE_SUFFIX.length) + TRUNCATE_SUFFIX;
+  }
+
+  // ── button components ────────────────────────────────────────────────────
+
+  /** Build the Discord components array for a confirm message. */
+  function buildConfirmComponents(pendingId: string): unknown {
+    return [
+      {
+        type: 1, // ActionRow
+        components: [
+          {
+            type: 2, // Button
+            style: 1, // Primary
+            label: "ทำเลย",
+            custom_id: `confirm:${pendingId}:run`,
+          },
+          {
+            type: 2,
+            style: 2, // Secondary
+            label: "ไว้ใจ tool นี้ตลอด",
+            custom_id: `confirm:${pendingId}:trust`,
+          },
+          {
+            type: 2,
+            style: 4, // Danger
+            label: "ไม่",
+            custom_id: `confirm:${pendingId}:no`,
+          },
+        ],
+      },
+    ];
+  }
+
+  // ── gateway helpers ──────────────────────────────────────────────────────
+
+  /** Send an op to the gateway. */
+  function sendToGateway(payload: GatewayPayload): void {
+    if (ws && !stopped) {
+      ws.send(JSON.stringify(payload));
+    }
+  }
+
+  /**
+   * Send a heartbeat (op 1) carrying the last sequence number seen.
+   * `null` until the first dispatch — sending 0 there is a lie about how much of
+   * the stream we have, and the gateway may invalidate the session over it.
+   */
+  function sendHeartbeat(): void {
+    sendToGateway({ op: 1, d: lastSeq });
+  }
+
+  /** Send IDENTIFY (op 2). The heartbeat is started by HELLO, which owns the interval. */
+  function sendIdentify(): void {
+    sendToGateway({
+      op: 2,
+      d: {
+        token,
+        intents: 4096, // DIRECT_MESSAGES
+        properties: { os: "windows", browser: "executiveos", device: "executiveos" },
+      },
+    });
+  }
+
+  /** Start the heartbeat interval. */
+  function startHeartbeat(intervalMs: number): void {
+    stopHeartbeat();
+    heartbeatTimer = setInterval(sendHeartbeat, intervalMs);
+  }
+
+  /** Stop the heartbeat interval. */
+  function stopHeartbeat(): void {
+    if (heartbeatTimer) {
+      clearInterval(heartbeatTimer);
+      heartbeatTimer = null;
+    }
+  }
+
+  /** Handle a HELLO payload — start heartbeat and IDENTIFY. */
+  function handleHello(d: { heartbeat_interval: number }): void {
+    sendIdentify();
+    startHeartbeat(d.heartbeat_interval);
+  }
+
+  /** Process a MESSAGE_CREATE event. */
+  function handleMessageCreate(d: { author: { id: string }; content: string }): void {
+    // Security boundary: only the owner's messages are accepted.
+    if (d.author.id !== ownerId) return;
+    if (!handler) return;
+    handler({ kind: "text", text: d.content });
+  }
+
+  /**
+   * Process an INTERACTION_CREATE event.
+   * 1. Ack the interaction immediately (3s deadline).
+   * 2. Parse custom_id and call the handler.
+   */
+  function handleInteractionCreate(d: {
+    id: string;
+    token: string;
+    member?: { user?: { id: string } };
+    user?: { id: string };
+    data?: { custom_id: string };
+  }): void {
+    const senderId = d.member?.user?.id ?? d.user?.id;
+    if (senderId !== ownerId) return;
+    if (!handler) return;
+    if (!d.data?.custom_id) return;
+
+    const match = d.data.custom_id.match(/^confirm:(.+):(run|trust|no)$/);
+    if (!match) return;
+
+    const pendingId = match[1]!;
+    const decision = match[2] as "run" | "trust" | "no";
+
+    // Ack before calling handler (3-second Discord deadline).
+    void ackInteraction(d.id, d.token).then(() => {
+      const h = handler;
+      if (h) h({ kind: "confirm", pendingId, decision });
+    });
+  }
+
+  /** Dispatch an incoming gateway event. */
+  function dispatch(payload: GatewayPayload): void {
+    const { op, t, d, s } = payload;
+
+    // Every payload can carry a sequence number; the heartbeat has to echo the
+    // latest one back. (We still do not RESUME — a fresh IDENTIFY after a drop is
+    // enough for a personal nudge bot.)
+    if (typeof s === "number") lastSeq = s;
+
+    if (op !== 0) return; // only handle dispatch events (op 0)
+
+    switch (t) {
+      case "MESSAGE_CREATE":
+        handleMessageCreate(d as { author: { id: string }; content: string });
+        break;
+      case "INTERACTION_CREATE":
+        handleInteractionCreate(d as {
+          id: string;
+          token: string;
+          member?: { user?: { id: string } };
+          user?: { id: string };
+          data?: { custom_id: string };
+        });
+        break;
+    }
+  }
+
+  /** Open the WebSocket connection. */
+  function connect(): void {
+    if (stopped) return;
+    // wsFactory is a function in tests; in production we use the global WebSocket constructor.
+    // Create the instance directly — the factory pattern is for test injection only.
+    const factory = wsFactory;
+    if (factory) {
+      ws = factory(GATEWAY_URL);
+    } else {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const WS = globalThis.WebSocket as any;
+      ws = new WS(GATEWAY_URL);
+    }
+
+    const socket = ws;
+    if (!socket) return;
+
+    socket.onmessage = (ev: { data: string }) => {
+      let payload: GatewayPayload;
+      try {
+        payload = JSON.parse(ev.data) as GatewayPayload;
+      } catch {
+        return; // skip malformed messages
+      }
+
+      // op 10 = HELLO
+      if (payload.op === 10) {
+        handleHello(payload.d as { heartbeat_interval: number });
+        return;
+      }
+
+      // op 0 = dispatch
+      dispatch(payload);
+    };
+
+    socket.onclose = () => {
+      if (stopped) return;
+      stopHeartbeat();
+      // Reconnect after fixed 5s delay.
+      reconnectTimer = setTimeout(connect, 5000);
+    };
+
+    socket.onerror = () => {
+      // Errors are non-fatal — the close handler will trigger reconnect.
+    };
+  }
+
+  // ── Channel implementation ───────────────────────────────────────────────
+
+  return {
+    name: "discord",
+
+    send(msg: OutboundMessage): Promise<{ ok: boolean; error?: string }> {
+      if (msg.confirm) {
+        return sendDiscordMessage(msg.text, buildConfirmComponents(msg.confirm.pendingId));
+      }
+      return sendDiscordMessage(msg.text);
+    },
+
+    onInbound(h: (m: InboundMessage) => Promise<void>): void {
+      handler = h;
+    },
+
+    async start(): Promise<void> {
+      stopped = false;
+      connect();
+    },
+
+    async stop(): Promise<void> {
+      stopped = true;
+      stopHeartbeat();
+      if (reconnectTimer) {
+        clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+      }
+      if (ws) {
+        try { ws.close(); } catch { /* best effort */ }
+        ws = null;
+      }
+    },
+  };
+}
