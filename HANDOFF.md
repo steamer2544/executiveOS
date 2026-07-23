@@ -3,8 +3,22 @@
 > **Purpose:** a single doc to resume this project cold if context/memory is lost. Pairs with
 > `CLAUDE.md` (the authoritative phase-by-phase log), `GOTCHA.md` (traps & non-obvious failure modes —
 > read before touching PowerShell/state/tests/LLM), and `README.md` (user-facing overview).
-> Last updated after **Phase 35** (the Jarvis layer — a conversational agent with hands). **578
+> Last updated after **Phase 36** (make it speak first — proactive nudges over Discord). **628
 > passing tests**, all green.
+>
+> **✅ Phase 36 is DONE and committed** (`dc9fa09`) — the long "next task" write-up just below describes
+> what was *built*, kept for its reasoning. **What is actually left is to take it LIVE and then measure:**
+> the code has never run against real Discord. The owner must supply a **bot token** in `.env` under
+> `EXECUTIVE_DISCORD_TOKEN` and their **Discord user id** in `config.discord.ownerId` (the channel
+> refuses to start without the id — it is the auth boundary; anyone can DM a bot and the agent behind it
+> has write tools). Then set `discord.enabled` + `agent.proactive.enabled` + `agent.enabled` true and run
+> `ui` **alone** (running `watch` too opens a second channel + nudge runner on the same token). **Then
+> leave it ~2 weeks and read `.executive/nudges.jsonl`** — `sent` vs `answered` per source is the whole
+> point. **Do NOT add `agent.proactive.trigger: "rules+llm"` until that baseline exists** (it was
+> deliberately cut from Phase 36): a second, unmeasured nudge source makes the ratio uninterpretable.
+> Known designed behavior: the engine nudges on items that *enter* the queue while the daemon runs; a
+> backlog item present at startup is suppressed by the first-tick guard (avoids a restart nudge-storm)
+> and only surfaces in the dashboard/digest.
 
 > **⏭️ Immediate next task — Phase 36: make it speak first.** Phase 35 answers and acts, but the owner
 > still has to open the dashboard to start the conversation — the exact failure that made the system go
