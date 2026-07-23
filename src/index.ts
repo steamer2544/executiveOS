@@ -1021,6 +1021,13 @@ async function main(): Promise<void> {
         const uiStateIntervalMs = loadConfig().state?.intervalMs ?? 30000;
         const digestTimer = setInterval(() => {
           try {
+            // Rebuild state + plan FIRST. ui/server.ts only does this inside
+            // GET /api/state — i.e. while a browser tab is polling — so without this
+            // the digest would be derived from a stale plan.json whenever the
+            // dashboard is closed, which is exactly when the durable log matters most.
+            const built = buildState();
+            writeState(built);
+            writePlan(plan(built.state, built.context));
             printDigestTick(runDigestTick(uiDigestState));
           } catch (digestErr) {
             process.stderr.write("Digest refresh failed: " + (digestErr as Error).message + "\n");
