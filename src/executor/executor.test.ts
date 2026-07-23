@@ -646,7 +646,11 @@ describe("applyChangeSet — passing test command", () => {
     try {
       const cs = makeChangeSet({
         id: "pass-test-1",
-        test: "true",
+        // `exit 0` (not `true`) — the runner uses shell:true, which is cmd.exe on
+        // Windows, where `true`/`false` are not commands: the whole spawn failed and
+        // testPassed was false for the wrong reason. `exit 0`/`exit 1` work in both
+        // cmd and POSIX sh, so this asserts the pass path on every platform.
+        test: "exit 0",
       });
       const config = makeConfig();
       const report = applyChangeSet(cs, { apply: true, repoRoot: dir, config });

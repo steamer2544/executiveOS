@@ -116,6 +116,22 @@
 - **Playwright's Chromium pipe transport hangs under Bun.** *Fix:* the e2e driver runs under **`node`**
   (`bun run test:e2e` shells to `node …`), while the UI server it drives runs as a `bun` subprocess.
   (Phase 25.4 · `test/e2e/`)
+- **`rename()` onto an existing file fails with `EPERM` on Windows for no lasting reason.** *Symptom:*
+  `StoreSink error: EPERM: operation not permitted, rename 'meta.json.<uuid>' -> 'meta.json'` in a
+  running `ui`, then the daemon carries on. *Cause:* Windows refuses to replace a destination while any
+  other handle is open on it, and antivirus / the search indexer opens a file for a few ms right after
+  it is written — an atomic temp+rename is therefore *probabilistically* fragile, not reliably atomic.
+  *Impact:* that event lost its `seq` and was never persisted. *Fix:* `renameOverwrite()` retries
+  `EPERM`/`EBUSY`/`EACCES` with a short synchronous backoff (~180ms total) and rethrows anything else
+  immediately; a genuine second writer still surfaces instead of being papered over. (Phase 34.1 ·
+  `src/events/seq.ts`) **The same fragility applies to every other temp+rename in the tree**
+  (`writeState`, `writePlan`, `writeDigest`, the config updaters) — they just haven't been observed
+  losing the race yet.
+- **`true` and `false` are not commands in `cmd.exe`.** *Symptom:* an executor test that runs
+  `test: "true"` reports `testPassed:false`, and its sibling `test: "false"` passes for the wrong reason
+  (the spawn failed either way). *Cause:* `spawnSync(cmd, { shell: true })` is `cmd.exe` on Windows, where
+  those POSIX binaries don't exist. *Fix:* use **`exit 0` / `exit 1`**, which work in both `cmd` and
+  POSIX `sh`. (Phase 34.1 · `src/executor/executor.test.ts`)
 
 ## 3. State Builder (the derivation everyone reads from)
 

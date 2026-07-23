@@ -840,6 +840,31 @@ docs/scopes/           # per-phase specs (the contract handed to the implementer
   `advisor.json` existed before the flip. Killing it and re-running from a fresh dir gave the clean result
   above. Check for leftover daemons before trusting a live daemon test.)* Files: `src/config.ts`,
   `src/ui/{server,page}.ts`, `src/index.ts` (+ tests).
+- **Phase 34.1 — DONE** (architect, this commit): **Three defects surfaced by simply reading the `ui`
+  console.** A normal `bun run src/index.ts ui` printed two lines that were treated as noise; both were
+  real. (1) **`StoreSink error: EPERM … rename meta.json.<uuid> -> meta.json`** — `nextSeq()` reserves a
+  seq with an atomic temp+rename, but on Windows `rename` cannot replace a destination while any other
+  handle is open on it, and AV/the search indexer opens `meta.json` for a few ms right after it is
+  written. The throw cost that **event its seq, so it was never persisted at all**. New
+  `renameOverwrite()` retries `EPERM`/`EBUSY`/`EACCES` with a synchronous backoff (5/10/15… ms, ~180ms
+  total) and rethrows anything else **immediately** — a genuine second writer (a stale daemon, the case
+  `seq.ts`'s own header warns about) still surfaces loudly rather than being papered over; the temp file
+  is unlinked when it does give up. Verified there was no stale daemon this time (`Get-Process bun` → one
+  process, the owner's), so this was the transient-lock case. (2) **`[Bun.serve]: request timed out after
+  10 seconds`** — `startUiServer` never set `idleTimeout`, and Bun's 10s default is shorter than
+  `/api/state` takes to rebuild state+plan+digest from a multi-thousand-event log (and far shorter than
+  `/api/propose`/`/api/transcribe`, which wait on the gateway); the dashboard just showed a dead request.
+  Now `idleTimeout: 120`. (3) **A pre-existing red test, unrelated to the above but found by running the
+  full suite:** `executor.test.ts`'s "passing test command" used `test: "true"`, and the runner is
+  `spawnSync(cmd, {shell:true})` = **`cmd.exe` on Windows, where `true` is not a command** → the spawn
+  failed and `testPassed` was false for the wrong reason. Worse, the sibling failing-test case (`"false"`,
+  since fixed to `exit 1`) had been **passing for the wrong reason** for the same reason. Both now use
+  `exit 0`/`exit 1`, which are valid in `cmd` **and** POSIX `sh`, so the pair actually asserts the
+  executor's pass/fail paths on every platform — the fix is entirely in the test; `executor.ts` is
+  untouched. New `src/events/seq.test.ts` (3 tests, incl. a timing assert that a non-retryable `ENOENT`
+  does **not** burn the retry budget — it fails if someone widens the retryable set). 519 passing tests
+  (+13), typecheck green. `GOTCHA.md` §2 gained both Windows traps. Files: `src/events/{seq,seq.test}.ts`,
+  `src/ui/server.ts`, `src/executor/executor.test.ts`, `GOTCHA.md`.
 - **Loop complete (manual trigger):** `auto --apply` runs the whole chain in one command; the human
   reviews/merges the `executive/change-<id>` branch.
 

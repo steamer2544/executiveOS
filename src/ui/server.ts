@@ -90,6 +90,10 @@ export function startUiServer(opts: UiServerOptions) {
   return Bun.serve({
     port: opts.port,
     hostname: opts.hostname ?? "127.0.0.1",
+    // Bun's default is 10s, which a real event log outgrows: /api/state rebuilds
+    // state+plan+digest from every JSONL log, and /api/propose|/api/transcribe
+    // wait on a remote gateway. A timed-out request shows up as a dead dashboard.
+    idleTimeout: 120,
     async fetch(req): Promise<Response> {
       const url = new URL(req.url);
 

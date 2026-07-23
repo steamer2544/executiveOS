@@ -4,7 +4,7 @@
 // daemon is the writer; manual `emit` from a second process while the
 // daemon runs is a known unsupported edge case.
 
-import { existsSync, readFileSync, writeFileSync, renameSync, mkdirSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, renameSync, mkdirSync, unlinkSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { execRoot } from "../paths.js";
 
@@ -62,7 +62,43 @@ export function nextSeq(): number {
   // Atomic write: write to temp then rename.
   const tmpPath = path + "." + randomUUID();
   writeFileSync(tmpPath, JSON.stringify({ lastSeq: next }) + "\n");
-  renameSync(tmpPath, path);
+  renameOverwrite(tmpPath, path);
 
   return next;
+}
+
+/**
+ * rename() onto an existing file, tolerating a transient Windows EPERM/EBUSY.
+ *
+ * On Windows the destination cannot be replaced while another handle is open on
+ * it, and an antivirus scan or the search indexer opens meta.json for a few ms
+ * right after we write it. That surfaced as `StoreSink error: EPERM ... rename`
+ * and cost the event its seq (so it was never persisted). Retry briefly with a
+ * synchronous backoff — the lock is measured in milliseconds — and only give up
+ * (rethrow) if it is really held, which means a genuine second writer.
+ */
+export function renameOverwrite(from: string, to: string, attempts = 8): void {
+  for (let i = 0; ; i++) {
+    try {
+      renameSync(from, to);
+      return;
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      const retryable = code === "EPERM" || code === "EBUSY" || code === "EACCES";
+      if (!retryable || i >= attempts - 1) {
+        try {
+          unlinkSync(from);
+        } catch {
+          // best effort: don't mask the original failure with a cleanup error
+        }
+        throw err;
+      }
+      sleepSync(5 * (i + 1)); // 5,10,15… ms — ~180ms total before giving up
+    }
+  }
+}
+
+/** Block the current thread for `ms`. Atomics.wait needs a SharedArrayBuffer view. */
+function sleepSync(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
