@@ -54,6 +54,8 @@ export function renderPage(): string {
   .prop .detail { color:var(--muted); margin-bottom:8px; }
   /* The observation a proposal rests on — lets the owner check it, not just trust it. */
   .prop .evidence { color:var(--muted); font-size:12px; font-style:italic; margin-bottom:8px; opacity:.85; }
+  .auto-row { display:flex; gap:10px; align-items:flex-start; padding:7px 0; font-size:13px; cursor:pointer; }
+  .auto-row input { margin-top:2px; flex:none; }
   .prop input { margin-bottom:8px; }
   .prop .acts { display:flex; gap:8px; }
   .prop .empty { color:var(--muted); }
@@ -173,6 +175,27 @@ export function renderPage(): string {
         </div>
       </div>
     </div>
+  </section>
+
+  <section class="card" id="autonomyCard">
+    <h2>Autonomy</h2>
+    <div class="muted" style="font-size:12px;margin-bottom:10px">
+      What runs on its own while this dashboard is open. All off by default; each takes effect
+      on the next tick, no restart.
+    </div>
+    <label class="auto-row">
+      <input type="checkbox" id="autoAdvisor" onchange="saveAutonomy()" />
+      <span><b>Advisor</b> — proposes work + life actions for you to approve. Costs an LLM call.</span>
+    </label>
+    <label class="auto-row">
+      <input type="checkbox" id="autoInfer" onchange="saveAutonomy()" />
+      <span><b>Infer</b> — guesses blockers and deadlines. Suggestions only, you confirm. Costs an LLM call.</span>
+    </label>
+    <label class="auto-row">
+      <input type="checkbox" id="autoAutopilot" onchange="saveAutonomy()" />
+      <span><b>Autopilot</b> — runs plan→work→synth→execute when the Planner says <i>act</i>.</span>
+    </label>
+    <div id="applyState" class="muted" style="font-size:12px;margin-top:8px"></div>
   </section>
 
   <section class="card" id="proposalsCard">
@@ -578,11 +601,44 @@ async function loadCaptureConfig() {
     if (j.transcribe) cfgT = j.transcribe;
     if (j.presets) presets = j.presets;
     if (j.screen) cfgScreen = j.screen;
+    if (j.autonomy) populateAutonomy(j.autonomy);
   } catch {}
   const sel = $("lang"); if (sel) sel.value = cfgT.language || "";
   populateSettings();
   populateScreenSettings();
   setListenUI();
+}
+
+// ── Autonomy toggles ────────────────────────────────────────────────────────
+// autopilotApply is REPORTED but never sent back: arming repo-writing autonomy
+// stays a deliberate config.json edit (see updateAutonomyConfig in src/config.ts).
+function populateAutonomy(a) {
+  $("autoAdvisor").checked = !!a.advisorEnabled;
+  $("autoInfer").checked = !!a.inferEnabled;
+  $("autoAutopilot").checked = !!a.autopilotEnabled;
+  const note = $("applyState");
+  if (a.autopilotApply) {
+    note.innerHTML = a.autopilotEnabled
+      ? "⚠️ <b>autopilot.apply is ON</b> — approved changes will be committed to an isolated <code>executive/change-*</code> branch (never merged). Edit <code>config.json</code> to disarm."
+      : "<code>autopilot.apply</code> is ON in config.json — turning Autopilot on above will let it commit to an isolated branch.";
+  } else {
+    note.textContent = "autopilot.apply is off — Autopilot will dry-run only and write nothing to your repo.";
+  }
+}
+
+async function saveAutonomy() {
+  const patch = {
+    advisorEnabled: $("autoAdvisor").checked,
+    inferEnabled: $("autoInfer").checked,
+    autopilotEnabled: $("autoAutopilot").checked,
+  };
+  try {
+    const r = await fetch("/api/autonomy", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(patch),
+    });
+    const j = await r.json();
+    if (j.autonomy) populateAutonomy(j.autonomy);
+  } catch {}
 }
 // Schedule tick: auto-start within work hours (once enabled + mic granted), auto-stop outside.
 setInterval(() => {

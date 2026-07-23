@@ -119,13 +119,15 @@ bun run src/index.ts init  # create .executive/ (also adds .executive/ to .gitig
 bun run src/index.ts ui    # dashboard at localhost:4317 (+ watches git/files); the main entry point now
 ```
 
-**Daily use is `ui` alone** — it runs the watchers, rebuilds state + plan + digest + the durable
-notification log on `state.intervalMs`, and runs screen-sense Layer 2. It does **not** carry the
-`watch` daemon's Advisor / infer / autopilot triggers, but all three are `enabled: false` by default,
-so nothing is lost until the owner turns one on. Consequences to know:
-- **Advisor proposals are manual under `ui`:** run `propose` (or the dashboard's "Ask for proposals").
-  To get them automatically, set `config.advisor.enabled = true` **and** run `watch` alongside.
-- `ui` and `watch` together are safe but redundant — both would rebuild state and tick the digest.
+**Daily use is `ui` alone.** It runs the watchers, rebuilds state + plan + digest + the durable
+notification log on `state.intervalMs`, runs screen-sense Layer 2, **and (Phase 34) carries the
+Advisor / infer / autopilot triggers** that used to live only in `watch`. All are off by default and
+switchable from the dashboard's **Autonomy** card, which re-reads config every tick — **a toggle takes
+effect without a restart**. `watch` remains the headless equivalent; running both is safe but redundant.
+
+**`autopilot.apply` is intentionally not a dashboard toggle** — it is the only switch that lets the
+runtime commit without a per-action human click, so arming it stays a deliberate `config.json` edit.
+`updateAutonomyConfig` ignores it in both directions; the card only reports its state.
 Full command list is in `README.md` / `CLAUDE.md` and `printUsage()` in `src/index.ts`.
 
 **Dev workflow (division of labor):** the architect (Claude) writes a **scope** in `docs/scopes/`, hands it

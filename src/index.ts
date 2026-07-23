@@ -1034,6 +1034,74 @@ async function main(): Promise<void> {
           }
         }, uiStateIntervalMs);
 
+        // Periodic Advisor + inference, mirroring the `watch` daemon. `ui` is the way the
+        // owner actually runs the system, so leaving these to `watch` alone meant a gate
+        // switched on in the dashboard did nothing. Config is re-read every tick so a
+        // toggle takes effect without a restart. Both are fire-and-forget: a slow or
+        // failed network call never blocks the timer.
+        let uiAdvisorRunning = false;
+        let uiLastAdvisorAt: number | null = null;
+        let uiInferRunning = false;
+        let uiLastInferAt: number | null = null;
+        let uiAutoRunning = false;
+        let uiLastAutoAt: number | null = null;
+
+        const autonomyTimer = setInterval(() => {
+          const cfg = loadConfig();
+          const nowMs = Date.now();
+
+          if (cfg.advisor?.enabled === true && !uiAdvisorRunning) {
+            const cooldown = cfg.advisor.cooldownMs ?? 600000;
+            if (uiLastAdvisorAt === null || nowMs - uiLastAdvisorAt >= cooldown) {
+              uiAdvisorRunning = true;
+              uiLastAdvisorAt = nowMs;
+              const built = buildState();
+              runAdvisor(built.context, { config: cfg })
+                .then((result) => {
+                  if (result.added.length > 0) {
+                    process.stdout.write("Advisor: +" + result.added.length + " proposal(s) — review in the dashboard\n");
+                  }
+                })
+                .catch((e) => process.stderr.write("Advisor failed: " + (e as Error).message + "\n"))
+                .finally(() => { uiAdvisorRunning = false; });
+            }
+          }
+
+          if (cfg.infer?.enabled === true && !uiInferRunning) {
+            const cooldown = cfg.infer.cooldownMs ?? 300000;
+            if (uiLastInferAt === null || nowMs - uiLastInferAt >= cooldown) {
+              uiInferRunning = true;
+              uiLastInferAt = nowMs;
+              const built = buildState();
+              runInference(built.context, { config: cfg })
+                .then((result) => writeInference(result))
+                .catch((e) => process.stderr.write("Infer failed: " + (e as Error).message + "\n"))
+                .finally(() => { uiInferRunning = false; });
+            }
+          }
+
+          // Autopilot. `apply` is NOT dashboard-settable (see updateAutonomyConfig) — it is
+          // read from the config file, so turning the gate on here cannot silently arm
+          // repo-writing autonomy that the owner did not deliberately configure.
+          if (cfg.autopilot?.enabled === true && !uiAutoRunning) {
+            const cooldown = cfg.autopilot.cooldownMs ?? 300000;
+            if (uiLastAutoAt === null || nowMs - uiLastAutoAt >= cooldown) {
+              uiAutoRunning = true;
+              uiLastAutoAt = nowMs;
+              runAuto({ repoRoot: process.cwd(), config: cfg, apply: cfg.autopilot.apply === true })
+                .then((report) => {
+                  writeAutoReport(report);
+                  process.stdout.write(
+                    "Autopilot: stage=" + report.stage + " ok=" + report.ok +
+                    (report.applied ? " branch=" + report.branch : "") + "\n"
+                  );
+                })
+                .catch((e) => process.stderr.write("Autopilot failed: " + (e as Error).message + "\n"))
+                .finally(() => { uiAutoRunning = false; });
+            }
+          }
+        }, uiStateIntervalMs);
+
         // Periodic screen inference (mirrors the `watch` daemon's wiring — see runRebuild —
         // but `ui` is its own process, so it needs its own trigger for the live "reading
         // screen" indicator to work when the owner runs `ui` alone, without `watch`).
@@ -1061,6 +1129,7 @@ async function main(): Promise<void> {
         process.on("SIGINT", async () => {
           clearInterval(screenTimer);
           clearInterval(digestTimer);
+          clearInterval(autonomyTimer);
           server.stop();
           if (manager) await manager.stopAll();
           process.stdout.write("\nstopped\n");

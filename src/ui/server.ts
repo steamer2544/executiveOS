@@ -9,7 +9,7 @@ import { buildState, writeState } from "../state/builder.js";
 import { plan, writePlan } from "../planner/planner.js";
 import { buildDigest } from "../report/digest.js";
 import { append } from "../events/store.js";
-import { loadConfig, updateTranscribeConfig, updateScreenConfig, TRANSCRIBE_PRESETS } from "../config.js";
+import { loadConfig, updateTranscribeConfig, updateScreenConfig, updateAutonomyConfig, readAutonomyConfig, TRANSCRIBE_PRESETS } from "../config.js";
 import { modelsDir, vendorDir } from "../paths.js";
 import { readStore, pending } from "../advisor/store.js";
 import { runAdvisor, decideProposal } from "../advisor/advisor.js";
@@ -104,9 +104,26 @@ export function startUiServer(opts: UiServerOptions) {
           const cfg = loadConfig();
           // The transcribe block carries NO secret — the real key lives only in process.env[apiKeyEnv],
           // never in config — so it is safe to hand the whole block to the local settings editor.
-          return Response.json({ capture: cfg.capture, transcribe: cfg.transcribe, presets: TRANSCRIBE_PRESETS, screen: cfg.screen ?? null });
+          return Response.json({
+            capture: cfg.capture,
+            transcribe: cfg.transcribe,
+            presets: TRANSCRIBE_PRESETS,
+            screen: cfg.screen ?? null,
+            // Gates the dashboard can switch. autopilotApply is reported but not settable —
+            // see updateAutonomyConfig for why arming repo-writing autonomy stays a file edit.
+            autonomy: readAutonomyConfig(cfg),
+          });
         } catch (err) {
           return Response.json({ error: (err as Error).message }, { status: 500 });
+        }
+      }
+
+      if (req.method === "POST" && url.pathname === "/api/autonomy") {
+        try {
+          const body = (await req.json()) as Record<string, unknown>;
+          return Response.json({ ok: true, autonomy: updateAutonomyConfig(body) });
+        } catch (err) {
+          return Response.json({ error: (err as Error).message }, { status: 400 });
         }
       }
 

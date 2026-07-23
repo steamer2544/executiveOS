@@ -138,6 +138,43 @@ describe("ui server", () => {
     }
   });
 
+  it("/api/autonomy toggles the gates and /api/config reflects them", async () => {
+    await (await import("../bootstrap.js")).bootstrap();
+    server = startUiServer({ port: 0 });
+    const base = "http://127.0.0.1:" + server.port;
+
+    const before = await (await fetch(base + "/api/config")).json();
+    expect(before.autonomy.advisorEnabled).toBe(false);
+
+    const res = await fetch(base + "/api/autonomy", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ advisorEnabled: true, inferEnabled: true }),
+    });
+    expect((await res.json()).ok).toBe(true);
+
+    const after = await (await fetch(base + "/api/config")).json();
+    expect(after.autonomy.advisorEnabled).toBe(true);
+    expect(after.autonomy.inferEnabled).toBe(true);
+    expect(after.autonomy.autopilotEnabled).toBe(false); // untouched by the partial patch
+  });
+
+  it("/api/autonomy cannot arm autopilot.apply — repo-writing autonomy stays a file edit", async () => {
+    await (await import("../bootstrap.js")).bootstrap();
+    server = startUiServer({ port: 0 });
+    const base = "http://127.0.0.1:" + server.port;
+
+    const res = await fetch(base + "/api/autonomy", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ autopilotEnabled: true, autopilotApply: true }),
+    });
+    const j = await res.json();
+    expect(j.autonomy.autopilotEnabled).toBe(true);
+    expect(j.autonomy.autopilotApply).toBe(false);
+
+    const after = await (await fetch(base + "/api/config")).json();
+    expect(after.autonomy.autopilotApply).toBe(false);
+  });
+
   it("/api/transcribe returns a clear error when mode is not whisper-api", async () => {
     await (await import("../bootstrap.js")).bootstrap();
     server = startUiServer({ port: 0 });

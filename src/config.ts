@@ -447,6 +447,62 @@ export function updateTranscribeConfig(patch: Record<string, unknown>): Config["
   return t;
 }
 
+/** What the dashboard may switch on and off, and what it reads back. */
+export interface AutonomyState {
+  advisorEnabled: boolean;
+  inferEnabled: boolean;
+  autopilotEnabled: boolean;
+  /** Read-only here. See updateAutonomyConfig for why this is not a dashboard toggle. */
+  autopilotApply: boolean;
+}
+
+/** Read the current autonomy gates (absent block = off, matching loadConfig's defaults). */
+export function readAutonomyConfig(config?: Config): AutonomyState {
+  const c = config ?? loadConfig();
+  return {
+    advisorEnabled: c.advisor?.enabled === true,
+    inferEnabled: c.infer?.enabled === true,
+    autopilotEnabled: c.autopilot?.enabled === true,
+    autopilotApply: c.autopilot?.apply === true,
+  };
+}
+
+/**
+ * Persist an owner toggle of the autonomy gates from the dashboard.
+ *
+ * **`autopilot.apply` is deliberately NOT writable here.** Every other autonomy in this system
+ * still requires a human click *per action* — approve a proposal, confirm a suggestion. `apply`
+ * is the single switch that lets the runtime write commits with no per-action click, and the
+ * dashboard is an unauthenticated page on 127.0.0.1. Arming it stays a deliberate edit of
+ * `config.json`; the dashboard only *reports* its state so the owner can see the combined effect
+ * of flipping `autopilot.enabled`.
+ *
+ * Booleans only, whitelisted field by field, written atomically (temp + rename).
+ */
+export function updateAutonomyConfig(patch: Record<string, unknown>): AutonomyState {
+  const config = loadConfig();
+
+  if (typeof patch.advisorEnabled === "boolean") {
+    if (!config.advisor) config.advisor = {};
+    config.advisor.enabled = patch.advisorEnabled;
+  }
+  if (typeof patch.inferEnabled === "boolean") {
+    if (!config.infer) config.infer = {};
+    config.infer.enabled = patch.inferEnabled;
+  }
+  if (typeof patch.autopilotEnabled === "boolean") {
+    if (!config.autopilot) config.autopilot = {};
+    config.autopilot.enabled = patch.autopilotEnabled;
+  }
+  // patch.autopilotApply is ignored on purpose — see the doc comment above.
+
+  const raw = JSON.stringify(config, null, 2) + "\n";
+  const tmp = configPath() + ".tmp";
+  writeFileSync(tmp, raw);
+  renameSync(tmp, configPath());
+  return readAutonomyConfig(config);
+}
+
 /**
  * Persist an owner edit to the `screen` config block (Window / OCR / Vision toggles) from the
  * dashboard settings UI. ONLY the screen block is writable this way, whitelisted + type-checked

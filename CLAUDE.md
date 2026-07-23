@@ -816,6 +816,30 @@ docs/scopes/           # per-phase specs (the contract handed to the implementer
   contained (executable proposals only ever reach an isolated `executive/change-<id>` branch behind a
   human click), and the `because:` line is precisely what made both this and the units bug visible in
   seconds. Files: `src/advisor/{factory,anthropic}.ts` (+ tests).
+- **Phase 34 — DONE** (architect impl + self-review + live-validated, this commit): **Autonomy toggles in
+  the dashboard.** Phase 33.1 left one honest gap: `ui` is how the owner actually runs the system, but the
+  Advisor / infer / autopilot triggers existed only in the `watch` daemon, so those gates did nothing under
+  `ui` and proposals had to be requested by hand. Now `ui` carries all three triggers (mirroring
+  `runRebuild`'s cooldown + in-flight-lock + fire-and-forget shape, **re-reading config every tick** so a
+  toggle takes effect with no restart), plus a new **Autonomy card** with a checkbox per gate. New
+  `readAutonomyConfig()` / `updateAutonomyConfig()` in `src/config.ts` (booleans only, whitelisted field by
+  field, atomic temp+rename — same pattern as `updateTranscribeConfig`/`updateScreenConfig`), exposed via
+  `GET /api/config` (`autonomy` block) + new `POST /api/autonomy`.
+  **Guardrail decision — `autopilot.apply` is deliberately NOT a dashboard toggle.** Every other autonomy
+  here still needs a human click *per action* (approve a proposal, confirm a suggestion); `apply` is the
+  single switch that lets the runtime write commits with no per-action click, and the dashboard is an
+  unauthenticated page on 127.0.0.1. Arming it stays a deliberate `config.json` edit. `updateAutonomyConfig`
+  ignores `autopilotApply` in **both** directions (it cannot arm *or* disarm — the file is the single source
+  of truth), and the card *reports* its state so the owner sees the combined effect of switching Autopilot
+  on while `apply` is armed. 516 passing tests (10 new). **Sabotage-checked** (`GOTCHA.md` §4): making
+  `updateAutonomyConfig` honour `autopilotApply` fails exactly the 3 tests written to prevent it.
+  **Live-validated** on an isolated `EXECUTIVE_HOME` (mock backend, no gateway spend): with the gate off a
+  6s `ui` run wrote no `advisor.json` at all; `POST /api/autonomy {advisorEnabled:true}` → within one tick
+  the same process logged `Advisor: +1 proposal(s)` — **no restart**. *(Testing note: an earlier run of this
+  check was contaminated by a stale `ui` process from an aborted attempt that had already been toggled on —
+  `advisor.json` existed before the flip. Killing it and re-running from a fresh dir gave the clean result
+  above. Check for leftover daemons before trusting a live daemon test.)* Files: `src/config.ts`,
+  `src/ui/{server,page}.ts`, `src/index.ts` (+ tests).
 - **Loop complete (manual trigger):** `auto --apply` runs the whole chain in one command; the human
   reviews/merges the `executive/change-<id>` branch.
 

@@ -4,7 +4,7 @@
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import { mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { randomUUID } from "node:crypto";
-import { loadConfig, updateTranscribeConfig, updateScreenConfig, defaultConfig } from "./config.js";
+import { loadConfig, updateTranscribeConfig, updateScreenConfig, updateAutonomyConfig, readAutonomyConfig, defaultConfig } from "./config.js";
 import { configPath } from "./paths.js";
 
 const DIR = "/tmp/executive-test-config-" + randomUUID();
@@ -165,5 +165,74 @@ describe("updateScreenConfig — OCR engine fields", () => {
     updateScreenConfig({ ocr: { tesseractPath: "C:/t/x.exe" } });
     updateScreenConfig({ ocr: { tesseractPath: null } });
     expect(loadConfig().screen!.ocr!.tesseractPath).toBe(null);
+  });
+});
+
+// Phase 34 — dashboard autonomy toggles.
+describe("readAutonomyConfig / updateAutonomyConfig", () => {
+  beforeEach(() => { process.env.EXECUTIVE_HOME = DIR; });
+  afterEach(() => { try { rmSync(DIR, { recursive: true, force: true }); } catch {} delete process.env.EXECUTIVE_HOME; });
+
+  const base = { version: 1, createdAt: "x", timezone: "Asia/Bangkok" };
+
+  it("reads absent blocks as all-off (absence means off)", () => {
+    writeConfig({ ...base });
+    expect(readAutonomyConfig()).toEqual({
+      advisorEnabled: false, inferEnabled: false, autopilotEnabled: false, autopilotApply: false,
+    });
+  });
+
+  it("round-trips the three settable gates and persists them", () => {
+    writeConfig({ ...base });
+    const out = updateAutonomyConfig({ advisorEnabled: true, inferEnabled: true, autopilotEnabled: true });
+    expect(out.advisorEnabled).toBe(true);
+    expect(out.inferEnabled).toBe(true);
+    expect(out.autopilotEnabled).toBe(true);
+    // Survives a reload — it was written to disk, not just returned.
+    expect(readAutonomyConfig().advisorEnabled).toBe(true);
+  });
+
+  it("REFUSES to arm autopilot.apply — the dashboard must never enable repo writes", () => {
+    writeConfig({ ...base, autopilot: { enabled: false, apply: false } });
+    const out = updateAutonomyConfig({ autopilotEnabled: true, autopilotApply: true });
+    expect(out.autopilotEnabled).toBe(true);
+    expect(out.autopilotApply).toBe(false);
+    expect(loadConfig().autopilot!.apply).toBe(false);
+  });
+
+  it("also refuses to DISARM apply, so the file stays the single source of truth", () => {
+    writeConfig({ ...base, autopilot: { enabled: true, apply: true } });
+    const out = updateAutonomyConfig({ autopilotApply: false });
+    expect(out.autopilotApply).toBe(true);
+    expect(loadConfig().autopilot!.apply).toBe(true);
+  });
+
+  it("reports an apply armed in config.json so the owner sees the combined effect", () => {
+    writeConfig({ ...base, autopilot: { enabled: false, apply: true } });
+    expect(readAutonomyConfig().autopilotApply).toBe(true);
+  });
+
+  it("ignores non-boolean and unknown keys instead of coercing them", () => {
+    writeConfig({ ...base });
+    const out = updateAutonomyConfig({ advisorEnabled: "yes", inferEnabled: 1, worker: { backend: "evil" } });
+    expect(out.advisorEnabled).toBe(false);
+    expect(out.inferEnabled).toBe(false);
+    expect(loadConfig().worker!.backend).not.toBe("evil");
+  });
+
+  it("leaves the other gates alone when the patch names only one", () => {
+    writeConfig({ ...base, advisor: { enabled: true }, infer: { enabled: true } });
+    updateAutonomyConfig({ inferEnabled: false });
+    const a = readAutonomyConfig();
+    expect(a.advisorEnabled).toBe(true);
+    expect(a.inferEnabled).toBe(false);
+  });
+
+  it("preserves sibling fields in a block it touches (cooldownMs is not clobbered)", () => {
+    writeConfig({ ...base, advisor: { enabled: false, cooldownMs: 999, maxOpen: 3 } });
+    updateAutonomyConfig({ advisorEnabled: true });
+    const c = loadConfig();
+    expect(c.advisor!.cooldownMs).toBe(999);
+    expect(c.advisor!.maxOpen).toBe(3);
   });
 });

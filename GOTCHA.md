@@ -175,6 +175,12 @@
   started reading the event log, and it broke for the *wrong* reason (a legitimate 5th rule) in Phase 33.
   *Fix:* if the name makes an architectural claim, check the claim (read the source, assert on its
   imports) and put the count in its own test.
+- **Kill leftover daemons before trusting a live daemon test.** A `ui`/`watch` run left behind by an
+  aborted attempt keeps ticking against the same `EXECUTIVE_HOME` and writes the very artifacts the new
+  run is supposed to produce — Phase 34's toggle test "passed" against a file the stale process had made
+  minutes earlier. *Tell:* the artifact exists *before* the step that should create it. *Fix:*
+  `Get-Process bun` and stop the strays (mind the owner's own long-running dashboard), then re-run from a
+  fresh temp dir.
 - **When a test fails, ask whether the fixture or the code is wrong.** Phase 33 hit this twice: a
   needs-you item is keyed on the action `kind`, so two `resolve_block` plans with different reasons are
   correctly *one* item; and a "session" fixture used 1-hour gaps that all exceed the 15-minute break.
