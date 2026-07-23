@@ -13,6 +13,13 @@
 > **(b) Feed `State.patterns` to the digest/dashboard** — Phase 33 computes them and the Planner uses
 > them, but the owner cannot see the numbers a proposal cites without reading `state.json`.
 >
+> **Phase 34.2 added a second method: re-review the phase you just shipped, cold.** Reading 34.1 as an
+> outsider — not as its author — found that it had hardened **1 of 17** identical call sites, that its
+> three new tests **all passed against the un-fixed code**, that the timeout it set equalled the client
+> timeout it was meant to outlive, and that its own `GOTCHA.md` entry described a bug that never
+> happened (`git log -S` proved it). None of that is visible from the diff; all of it is visible from
+> the call graph and `git log`. Budget one pass for it.
+>
 > **Phase 33 set the method for anything new: read the real event log and calibrate before writing a
 > rule.** Doing that killed two rules that sounded obvious (app-switch thrash is p50=**26**/30min — the
 > *baseline*, not an anomaly; repo switches are p99=**0** because only one repo is ever tagged), and
@@ -137,6 +144,12 @@ runtime commit without a per-action human click, so arming it stays a deliberate
 almost ignored: an `EPERM` on `meta.json` was silently costing events their `seq`, and a `Bun.serve`
 timeout meant the dashboard was serving dead requests. A `⚠️ Needs you (…)` line, by contrast, *is* the
 Planner working as designed.
+
+**Every atomic write now goes through `renameOverwrite` in `src/fs-atomic.ts`** (Phase 34.2) — if you
+add a new `.executive/` artifact, write it as temp + `renameOverwrite`, never a bare `renameSync`. On
+Windows a plain rename onto an existing file is only *probabilistically* atomic (AV / the search indexer
+hold a handle for a few ms), and the failure mode is silent: the caller catches, logs one line, and the
+artifact is simply not updated.
 Full command list is in `README.md` / `CLAUDE.md` and `printUsage()` in `src/index.ts`.
 
 **Dev workflow (division of labor):** the architect (Claude) writes a **scope** in `docs/scopes/`, hands it
@@ -147,6 +160,13 @@ a `CLAUDE.md` phase entry.
 - Delegate with `claude-9arm -p "<self-contained prompt>" --allowedTools Bash Read Edit Write Glob Grep`
   (there is a `qwen-agent` skill for this). The prompt must be **standalone** — qwen has none of the
   conversation's context — with absolute paths and explicit acceptance criteria.
+- **⚠️ Run it from OUTSIDE the repo.** `CLAUDE.md` is now large enough that a headless `claude-9arm`
+  started *inside* the repo auto-loads it and dies on the first request with
+  `ContextWindowExceededError` (**99 k input tokens before doing any work**, against a 128 k window).
+  Phase 34.2 lost a run to this. The working shape: `cd <scratchpad> && claude-9arm -p "…"
+  --add-dir C:/Users/yiw20/Programming/myshi/executive`, with an explicit line in the prompt saying
+  **"do NOT read CLAUDE.md / HANDOFF.md / GOTCHA.md — everything you need is in the spec"**, plus
+  "work file by file, grep rather than reading whole files".
 - **Delegation depends on Arm's box being up.** Phase 31's runs died to a gateway outage mid-task; when
   that happens the architect finishes the work rather than blocking. Split jobs so they touch **disjoint
   files** — a parallel run whose `bun run typecheck` sees another job's half-edited file will try to
@@ -154,7 +174,13 @@ a `CLAUDE.md` phase entry.
 - **Review qwen's output rather than trusting it.** Real defects found so far: assertions hidden inside
   un-awaited `setTimeout` (a suite that passes against deliberately broken code), a `.replace()` with a
   string instead of a global regex (fixed only the first match), whole-file rewrites via a generated
-  `tmp-*.js` script that flatten non-ASCII and leave litter behind.
+  `tmp-*.js` script that flatten non-ASCII and leave litter behind, new `it()` blocks pasted *outside*
+  the `describe()` whose fixtures they use, a header comment stating the exact opposite of what the
+  tests do, and a dead `const thrown = calls` placeholder where the real assertion belonged.
+- **Re-run the sabotage check yourself.** Phase 34.2's qwen run reported "tests 2,3,4,5,6 failed against
+  the stripped implementation" and that turned out to be exactly right — but the whole point of the
+  check is that it is the one claim you cannot verify by reading the diff. Break the code, run the
+  suite, restore. It costs 30 seconds.
 
 ---
 
