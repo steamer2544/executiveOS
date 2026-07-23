@@ -3,10 +3,26 @@
 > **Purpose:** a single doc to resume this project cold if context/memory is lost. Pairs with
 > `CLAUDE.md` (the authoritative phase-by-phase log), `GOTCHA.md` (traps & non-obvious failure modes —
 > read before touching PowerShell/state/tests/LLM), and `README.md` (user-facing overview).
-> Last updated after **Phase 34.2** (atomic-write hardening + UI timeouts). **527 passing
-> tests**, all green.
+> Last updated after **Phase 35** (the Jarvis layer — a conversational agent with hands). **578
+> passing tests**, all green.
 
-> **⏭️ Immediate next task:** nothing is blocking. Two good candidates, both cheap:
+> **⏭️ Immediate next task — Phase 36: make it speak first.** Phase 35 answers and acts, but the owner
+> still has to open the dashboard to start the conversation — the exact failure that made the system go
+> unused in the first place. The substrate exists: `runDigestTick` already knows the moment an item
+> *enters* the "Needs you" queue (that is what `notifications.jsonl` records) and the agent can now
+> phrase it. What is missing is a channel that reaches the owner with the dashboard closed
+> (Telegram/LINE/Discord) plus a reply path back into `runTurn`. **Outward-facing — needs an explicit
+> channel choice from the owner before any code is written.** Keep the boundary Phase 35 set: **the
+> Planner decides what is worth interrupting for; the agent only phrases it.** Never let the LLM decide
+> when to interrupt.
+>
+> **⚠️ Phase 35 left exactly one thing unmeasured: does the gateway support native tool calling?** Every
+> probe returned **524 — including a 1-word prompt with no tools** — so Arm's box was down and this is
+> unmeasured, not negative. Run `bun scripts/probe-tools.ts` from the repo root when the box is back and
+> record the verdict in `GOTCHA.md` §1. Both protocols are implemented and tested and `auto` downgrades
+> on a 4xx naming `tools`, so nothing is blocked either way.
+>
+> **Two smaller candidates, both cheap:**
 > **(a) Derive the Tesseract OCR language list from the Layer 1 window title** — `-l tha+eng`
 > hallucinates Thai on English-only screens (measured — `GOTCHA.md` §2), and the window title already
 > carries real Thai (it is `GetWindowTextW`, not OCR), so Thai-in-title → `tha+eng`, else `eng`.
@@ -100,6 +116,7 @@ The full loop works and is validated (including **live against the real LLM gate
 | 33.1 | **Advisor live-validated** | the first real gateway call failed and exposed 3 defects the mock could never surface: `max_tokens` starvation (**3/3 runs**, output exactly 4096 → floor raised to 8192), a failure message that couldn't distinguish "out of budget" from "bad response", and the model reading raw ms as the wrong unit (`sessionMs: 2173707` → "~36 hours"; it is 36 **minutes**) → `patternsExplained` sends units in words |
 | 34 | **Autonomy toggles** | `ui` carries the Advisor / infer / autopilot triggers that used to live only in `watch`, + an **Autonomy card** that re-reads config every tick (toggle without restart). `autopilot.apply` is deliberately **not** a dashboard toggle |
 | 34.1 | **Runtime robustness** | three defects found by *reading the `ui` console*: `nextSeq`'s temp+rename lost an event to a transient Windows `EPERM` (AV/indexer holds `meta.json` for ms) → `renameOverwrite()` retries only `EPERM`/`EBUSY`/`EACCES`; `Bun.serve`'s 10s default `idleTimeout` was shorter than `/api/state` on a real log → 120s; and an executor test used `test: "true"`, which **is not a command in `cmd.exe`** → `exit 0` |
+| 35 | **Jarvis layer — chat with hands** | `src/agent/`: a conversational front door that answers from real state (9 read tools) and **acts** (5 write tools) — every write parks for a one-tap confirm, and "ไว้ใจ tool นี้ตลอด" persists to `config.agent.trustedTools` (removes the prompt, never a guardrail). Two tool-call protocols (`native` + a `json` fenced fallback, `auto` downgrades on a 4xx naming `tools`) because gateway support is **unmeasured — every probe hit a 524 outage**. `edit_files` reuses Synth→Executor so code lands on `executive/change-*`. Chat panel + voice in/out, `/api/chat*`, `chat` CLI. Live-validated against a stub speaking the real Anthropic shape |
 | 34.2 | **Atomic-write hardening** | review of 34.1 found the retry helper fixed **1 of 17** temp+rename sites (the per-tick `writeState`/`writePlan`/`writeDigest` are more exposed than `meta.json`) and that its 3 tests **all passed against plain `renameSync`**. `renameOverwrite` moved to `src/fs-atomic.ts` with an injectable `RenameIo` seam + real retry coverage; every atomic write routed through it; `idleTimeout` derived from `llmTimeoutMs` instead of a hardcoded 120 s that **equalled** the LLM client timeout; the 81 MB model download made non-blocking (polls the existing `/api/transcribe/status`) |
 
 **Test count:** 527 passing, 100% offline (mock backends). Several phases **validated live** against the

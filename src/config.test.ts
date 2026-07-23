@@ -178,7 +178,8 @@ describe("readAutonomyConfig / updateAutonomyConfig", () => {
   it("reads absent blocks as all-off (absence means off)", () => {
     writeConfig({ ...base });
     expect(readAutonomyConfig()).toEqual({
-      advisorEnabled: false, inferEnabled: false, autopilotEnabled: false, autopilotApply: false,
+      advisorEnabled: false, inferEnabled: false, autopilotEnabled: false, agentEnabled: false,
+      autopilotApply: false,
     });
   });
 

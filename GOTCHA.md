@@ -230,3 +230,25 @@
   the gateway; local OCR is preferred. (Phase 23/28/29)
 - **Confidence > 95% → act, else ask.** The single `applyGuardrail()` gate; the `forbidden` flag forces
   `ask`. Every action must be inspectable and reversible.
+
+## 7. The agent (Phase 35)
+
+- **A "rejects path escape" test can pass without the check ever running.** *Symptom:* removing BOTH
+  containment layers from `resolveSafePath` left the whole suite green. *Cause:* the test used
+  `../../etc/passwd`, which resolves to a path that **does not exist**, so `existsSync` returned false
+  and the function returned null for the wrong reason. *Fix:* plant a real file outside the root and
+  assert the escape to *that* is refused. Same family as §4's vacuous-assert trap: the sabotage check is
+  the only thing that finds it. (Phase 35)
+- **A write tool must PARK, not run-then-report.** The loop returns a `PendingWrite` and stops; the
+  owner's tap resumes it via `resumeTurn`. "Trust" (`config.agent.trustedTools`) removes the **prompt**
+  only — path safety, changeset validation and the isolated-branch rule still apply to a trusted tool.
+  Do not add a "trust everything" switch: that is the same line `autopilot.apply` sits behind.
+- **The agent must never assert a fact it did not read.** `AGENT_CONTRACT` (in `src/agent/session.ts`,
+  appended AFTER the identity like Phase 10's Worker) forbids answering about the owner's work from
+  memory. Without it the model produces confident, plausible, wrong state — the one failure mode the
+  owner cannot detect. Phase 33.1 already showed it will invent a *subject* while citing real numbers.
+- **Never hand a language model a raw millisecond value** — restated here because the agent's tools are
+  a new place to get it wrong. `humanDuration()` / `explainPatterns()` spell the unit out. See §1.
+- **Whether the 9arm gateway supports native `tools` is UNMEASURED.** Every probe returned 524 (Arm's
+  box down — §1), including a 1-word prompt with no tools, so the outage says nothing about tool
+  support. `bun scripts/probe-tools.ts` settles it; both protocols work meanwhile.

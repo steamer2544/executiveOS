@@ -903,6 +903,52 @@ docs/scopes/           # per-phase specs (the contract handed to the implementer
   `EPERM`, four unused imports, and a duplicated comment block in `server.ts`. Spec:
   `docs/scopes/phase-34.2-atomic-writes-and-timeouts.md`. Files: `src/fs-atomic{,.test}.ts`,
   `src/events/{seq,seq.test}.ts`, 12 call-site files, `src/ui/{server,page,ui.test}.ts`, `GOTCHA.md`.
+- **Phase 35 — DONE** (architect impl + self-review + live-validated against a stub gateway, this
+  commit): **Jarvis layer — a conversational agent with hands.** Driven by the owner's own verdict
+  that *"ผมแทบไม่ได้ใช้โปรแกรมนี้เลย"*. The diagnosis is structural, not qualitative: the system is
+  **pull** — everything it knows sits behind a page the owner must remember to open, and everything it
+  produces is a suggestion they still have to carry out. `src/agent/` adds a chat front door that
+  answers from the real runtime **and can act**. **A first draft of the scope split "talking" from
+  "doing" into two phases; that was wrong and was merged back** — a chat that can only answer is
+  something the owner tries twice and abandons, exactly like the dashboard it was meant to replace.
+  **Architecture:** `types.ts` (protocol-neutral `TranscriptItem`, so one loop and one test body cover
+  both wire formats), `tools.ts` (9 read + 5 write tools, each a thin wrapper over existing code —
+  `buildState`/`buildDigest`/`tail`/`runSynth`/`applyChangeSet`/`decideProposal`; **no derivation, git
+  or LLM logic lives in `src/agent/`**), `protocol.ts` (`native` Anthropic `tool_use` **and** a `json`
+  fenced-action fallback + `AnthropicChatBackend`), `loop.ts` (the agentic loop), `session.ts`
+  (`conversation.jsonl`, append-only + defensive reads, transcript reconstruction, `AGENT_CONTRACT`).
+  **Three guarantees, each sabotage-checked:** (1) the loop always terminates (`maxToolRounds`, then a
+  forced tool-less final call); (2) a **write tool never runs without confirmation** — it parks a
+  `PendingWrite` and returns, and the owner taps *ทำเลย* / *ไว้ใจ tool นี้ตลอด* / *ไม่* (trust persists
+  to `config.agent.trustedTools` and removes the **prompt**, never a guardrail — path safety, changeset
+  validation and the isolated-branch rule still apply); (3) the agent **may not assert a fact about the
+  owner's work without reading it** (`AGENT_CONTRACT`, appended after the identity like Phase 10's
+  Worker, so `claude.md` can change personality but never rules). `edit_files` reuses the Phase 7→6
+  pipeline verbatim, so a code change lands on `executive/change-<id>` and never touches the working
+  branch. UI: a chat card (text + the existing hold-to-Space mic, now routed through one `heardVoice()`
+  — dictation reaches the agent when it is on, falls back to `system.note` when off — plus browser
+  `speechSynthesis` for spoken replies), `POST /api/chat`, `/api/chat/confirm`, `/api/chat/clear`,
+  `GET /api/chat/history`, an **Autonomy** checkbox, and a `chat "<msg>"` CLI. `config.agent` block
+  (absent = off); reuses `config.worker` — **no new gateway, no new token** — flooring at
+  `llmMaxTokens(config, 8192)` for the Phase 33.1 reason. 578 passing tests (+51).
+  **UNMEASURED, by outage not by design:** whether the 9arm gateway passes `tools` through to Qwen.
+  Every probe returned **HTTP 524 — including a 1-word prompt with no tools**, i.e. Arm's box was down.
+  That is exactly why both protocols exist and why `auto` downgrades on a 4xx naming `tools`;
+  `scripts/probe-tools.ts` is committed to settle it. **Live-validated end-to-end against a stub
+  gateway speaking the real Anthropic shape** (proving the real backend class + real tools + real CLI +
+  real server, not just mocks): (a) native `tool_use` → `get_state` → the answer carried the true
+  `branch: feat/jarvis` and the branch-inferred `task: jarvis`; (b) a gateway that **400s on `tools`** →
+  the loop downgraded to `json` mid-turn (`nativeTools=0 promptTools=true`) and still answered; (c) a
+  write request parked with **0 events emitted**, then `POST /api/chat/confirm` ran it → the event
+  landed, `state.blocked` flipped true with the Thai reason intact, pending cleared, conversation
+  resumed. **Defect found in the architect's own tests by the sabotage check** (`GOTCHA.md` §4): the
+  path-escape test was **vacuous** — `../../etc/passwd` passed only because the target does not exist,
+  so removing *both* containment layers still left the suite green; fixed by planting a real file
+  outside the root, after which removing both layers fails and removing either one holds (defence in
+  depth confirmed rather than assumed). Also hit the stale-daemon trap live: a leftover stub from an
+  aborted attempt kept port 4571 and silently answered a later run. Spec:
+  `docs/scopes/phase-35-conversational-agent.md`. Files: `src/agent/*`, `src/config.ts`, `src/paths.ts`,
+  `src/ui/{server,page,ui.test}.ts`, `src/index.ts`, `scripts/probe-tools.ts`.
 - **Loop complete (manual trigger):** `auto --apply` runs the whole chain in one command; the human
   reviews/merges the `executive/change-<id>` branch.
 
@@ -925,6 +971,7 @@ bun run src/index.ts ui [--port N] [--no-watch]     # local web dashboard + git/
 bun run src/index.ts infer                          # LLM guesses block/deadline (suggestions only) → inferred.json
 bun run src/index.ts propose                        # Advisor proposes proactive actions → advisor.json queue
 bun run src/index.ts proposals                      # list pending proposals awaiting approval
+bun run src/index.ts chat "<message>"               # talk to the agent (reads real state, can act; writes ask first)
 bun run src/index.ts capture <note>                 # capture a quick note (feeds the Advisor); GUI also does this by voice
 bun run src/index.ts download-model [id]            # fetch a browser-wasm Whisper model for offline transcription
 bun run src/index.ts watch                          # start the watcher daemon (Ctrl-C to stop)

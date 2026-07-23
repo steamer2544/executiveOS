@@ -119,3 +119,13 @@ export function screenInferredPath(): string {
 export function tmpDir(): string {
   return execRoot() + "/tmp";
 }
+
+/** Absolute path to .executive/conversation.jsonl (append-only chat with the agent). */
+export function conversationPath(): string {
+  return execRoot() + "/conversation.jsonl";
+}
+
+/** Absolute path to .executive/agent-pending.json (a write tool awaiting the owner's tap). */
+export function agentPendingPath(): string {
+  return execRoot() + "/agent-pending.json";
+}

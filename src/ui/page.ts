@@ -75,6 +75,26 @@ export function renderPage(): string {
 </header>
 
 <main>
+  <section class="card" id="chatCard" style="display:none">
+    <h2 style="display:flex;justify-content:space-between;align-items:center">
+      <span>คุยกับผม</span>
+      <span style="display:flex;gap:8px;align-items:center">
+        <label class="muted" style="font-size:12.5px;display:flex;gap:5px;align-items:center">
+          <input type="checkbox" id="chatSpeak" onchange="saveSpeak()" /> 🔊 พูดตอบ
+        </label>
+        <button class="ghost" style="font-size:11px;padding:2px 8px" onclick="clearChat()">ล้าง</button>
+      </span>
+    </h2>
+    <div id="chatLog" style="max-height:340px;overflow-y:auto;display:flex;flex-direction:column;gap:8px;margin-bottom:10px"></div>
+    <div id="chatPending"></div>
+    <div style="display:flex;gap:8px">
+      <input id="chatInput" type="text" placeholder="ถามหรือสั่งอะไรก็ได้ — หรือกดค้าง Space แล้วพูด" style="flex:1"
+             onkeydown="if(event.key==='Enter')sendChat()" />
+      <button class="btn" id="chatSend" onclick="sendChat()">ส่ง</button>
+    </div>
+    <div id="chatBusy" class="muted" style="font-size:12.5px;margin-top:6px"></div>
+  </section>
+
   <section class="card" id="listenCard">
     <h2 style="display:flex;justify-content:space-between;align-items:center">
       <span>Listening</span>
@@ -183,6 +203,11 @@ export function renderPage(): string {
       What runs on its own while this dashboard is open. All off by default; each takes effect
       on the next tick, no restart.
     </div>
+    <label class="auto-row">
+      <input type="checkbox" id="autoAgent" onchange="saveAutonomy()" />
+      <span><b>Chat</b> — talk to it by text or voice; it reads your real state and can act
+      (every write asks you first).</span>
+    </label>
     <label class="auto-row">
       <input type="checkbox" id="autoAdvisor" onchange="saveAutonomy()" />
       <span><b>Advisor</b> — proposes work + life actions for you to approve. Costs an LLM call.</span>
@@ -409,7 +434,7 @@ async function startMediaRec() {
         const q = cfgT.language ? ("?language=" + encodeURIComponent(cfgT.language)) : "";
         const r = await fetch("/api/transcribe" + q, { method: "POST", headers: { "content-type": "audio/webm" }, body: blob });
         const j = await r.json();
-        if (j.ok && j.text) emit("system.note", { msg: j.text, via: "voice" });
+        if (j.ok && j.text) heardVoice(j.text);
         else toast("transcribe: " + (j.error || "failed"));
       } catch { toast("transcribe error"); }
     };
@@ -441,7 +466,7 @@ async function handleWasmBlob(blob) {
     const out = await pipe(decoded.getChannelData(0), { task: "transcribe", language: wasmLang() });
     $("listenInterim").textContent = "";
     const text = ((out && out.text) || "").trim();
-    if (text) emit("system.note", { msg: text, via: "voice" });
+    if (text) heardVoice(text);
   } catch (e) { $("listenInterim").textContent = ""; toast("wasm transcribe failed — download the model in settings first"); }
 }
 
@@ -590,7 +615,7 @@ function startListen() {
         const r = e.results[i];
         if (r.isFinal) {
           const text = r[0].transcript.trim();
-          if (text) emit("system.note", { msg: text, via: "voice" });
+          if (text) heardVoice(text);
         } else interim += r[0].transcript;
       }
       $("listenInterim").textContent = interim;
@@ -611,6 +636,12 @@ async function loadCaptureConfig() {
     if (j.transcribe) cfgT = j.transcribe;
     if (j.presets) presets = j.presets;
     if (j.screen) cfgScreen = j.screen;
+    if (j.agent) {
+      agentOn = !!j.agent.enabled;
+      $("chatCard").style.display = agentOn ? "" : "none";
+      $("chatSpeak").checked = !!j.agent.speak;
+      if (agentOn) loadChat();
+    }
     if (j.autonomy) populateAutonomy(j.autonomy);
   } catch {}
   const sel = $("lang"); if (sel) sel.value = cfgT.language || "";
@@ -623,6 +654,9 @@ async function loadCaptureConfig() {
 // autopilotApply is REPORTED but never sent back: arming repo-writing autonomy
 // stays a deliberate config.json edit (see updateAutonomyConfig in src/config.ts).
 function populateAutonomy(a) {
+  $("autoAgent").checked = !!a.agentEnabled;
+  agentOn = !!a.agentEnabled;
+  $("chatCard").style.display = agentOn ? "" : "none";
   $("autoAdvisor").checked = !!a.advisorEnabled;
   $("autoInfer").checked = !!a.inferEnabled;
   $("autoAutopilot").checked = !!a.autopilotEnabled;
@@ -638,6 +672,7 @@ function populateAutonomy(a) {
 
 async function saveAutonomy() {
   const patch = {
+    agentEnabled: $("autoAgent").checked,
     advisorEnabled: $("autoAdvisor").checked,
     inferEnabled: $("autoInfer").checked,
     autopilotEnabled: $("autoAutopilot").checked,
@@ -670,9 +705,137 @@ document.addEventListener("keyup", (e) => {
   if (e.code === "Space" && spaceHeld) { e.preventDefault(); spaceHeld = false; if (listening) stopListen(true); }
 });
 
+// ── Chat with the agent (Phase 35) ──────────────────────────────────────────
+// Dictation goes here when the agent is on: talking to it IS the point. With the
+// agent off it falls back to the old behaviour (a plain note for the Advisor).
+let agentOn = false;
+let chatBusy = false;
+
+function heardVoice(text) {
+  if (agentOn) sendChat(text, "voice");
+  else emit("system.note", { msg: text, via: "voice" });
+}
+
+function bubble(role, text, extra) {
+  const mine = role === "user";
+  const bg = mine ? "var(--accent)" : "var(--card)";
+  const fg = mine ? "#fff" : "inherit";
+  return '<div style="align-self:' + (mine ? "flex-end" : "flex-start") + ';max-width:86%;background:' + bg +
+    ';color:' + fg + ';border:1px solid var(--line);border-radius:10px;padding:7px 11px;white-space:pre-wrap">' +
+    esc(text) + (extra || "") + '</div>';
+}
+
+function toolTrace(calls) {
+  if (!calls || !calls.length) return "";
+  const line = calls.map(c => "🔧 " + c.name + (c.ok ? "" : " ✗")).join("  ");
+  return '<div class="muted mono" style="font-size:11px;margin-top:5px">' + esc(line) + '</div>';
+}
+
+function renderChat(messages, pending) {
+  const log = $("chatLog");
+  let html = "";
+  let calls = [];
+  for (const m of messages) {
+    if (m.role === "tool") { calls.push({ name: m.toolName, ok: m.toolOk !== false }); continue; }
+    if (m.role === "assistant") { html += bubble("assistant", m.text, toolTrace(calls)); calls = []; }
+    else html += bubble("user", m.text + (m.via === "voice" ? " 🎤" : ""));
+  }
+  log.innerHTML = html || '<span class="muted">ยังไม่ได้คุยกันเลย</span>';
+  log.scrollTop = log.scrollHeight;
+
+  // The confirm chip. One tap runs it; "ไว้ใจ" means never being asked about this
+  // tool again (it removes the prompt, not the guardrails behind it).
+  const box = $("chatPending");
+  if (pending) {
+    box.innerHTML = '<div class="prop" style="border:1px solid var(--line);border-radius:10px;padding:10px;margin-bottom:10px">' +
+      '<div><b>ขออนุญาตทำ:</b> ' + esc(pending.preview) + '</div>' +
+      '<div class="acts" style="margin-top:8px">' +
+      '<button class="btn" onclick="confirmChat(\\'' + pending.id + '\\',\\'run\\')">ทำเลย</button>' +
+      '<button class="ghost" onclick="confirmChat(\\'' + pending.id + '\\',\\'trust\\')">ไว้ใจ ' + esc(pending.toolName) + ' ตลอด</button>' +
+      '<button class="ghost" onclick="confirmChat(\\'' + pending.id + '\\',\\'no\\')">ไม่</button>' +
+      '</div></div>';
+  } else box.innerHTML = "";
+}
+
+function speak(text) {
+  if (!$("chatSpeak") || !$("chatSpeak").checked || !window.speechSynthesis) return;
+  try {
+    const u = new SpeechSynthesisUtterance(text);
+    u.lang = (cfgT.language === "en") ? "en-US" : "th-TH";
+    window.speechSynthesis.speak(u);
+  } catch {}
+}
+
+async function loadChat() {
+  if (!agentOn) return;
+  try {
+    const r = await fetch("/api/chat/history?n=60");
+    if (!r.ok) return;
+    const j = await r.json();
+    renderChat(j.messages || [], j.pending);
+  } catch {}
+}
+
+async function sendChat(preset, via) {
+  const input = $("chatInput");
+  const message = (preset !== undefined ? preset : input.value).trim();
+  if (!message || chatBusy) return;
+  if (preset === undefined) input.value = "";
+  chatBusy = true;
+  $("chatBusy").textContent = "กำลังคิด… (อาจนานถึง 2 นาที)";
+  $("chatSend").disabled = true;
+  try {
+    const r = await fetch("/api/chat", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message, via: via || "text" }),
+    });
+    const j = await r.json();
+    if (!j.ok) toast(j.error || "คุยไม่สำเร็จ");
+    else if (j.reply) speak(j.reply);
+  } catch (e) { toast("คุยไม่สำเร็จ"); }
+  chatBusy = false;
+  $("chatBusy").textContent = "";
+  $("chatSend").disabled = false;
+  await loadChat();
+}
+
+async function confirmChat(pendingId, decision) {
+  if (chatBusy) return;
+  chatBusy = true;
+  $("chatBusy").textContent = decision === "no" ? "กำลังยกเลิก…" : "กำลังทำ…";
+  try {
+    const r = await fetch("/api/chat/confirm", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ pendingId, decision }),
+    });
+    const j = await r.json();
+    if (!j.ok) toast(j.error || "ทำไม่สำเร็จ");
+    else if (j.reply) speak(j.reply);
+    if (decision === "trust") loadCaptureConfig();
+  } catch { toast("ทำไม่สำเร็จ"); }
+  chatBusy = false;
+  $("chatBusy").textContent = "";
+  await loadChat();
+}
+
+async function clearChat() {
+  try { await fetch("/api/chat/clear", { method: "POST" }); } catch {}
+  await loadChat();
+}
+
+async function saveSpeak() {
+  try {
+    await fetch("/api/autonomy", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ agentSpeak: $("chatSpeak").checked }),
+    });
+  } catch {}
+}
+
 loadCaptureConfig();
 refresh();
 loadProposals();
+setInterval(loadChat, 5000);
 setInterval(refresh, 5000);
 setInterval(loadProposals, 5000);
 </script>

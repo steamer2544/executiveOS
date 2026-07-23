@@ -32,6 +32,7 @@ import { startUiServer } from "./ui/server.js";
 import { runInference, writeInference } from "./infer/infer.js";
 import { inferredPath } from "./paths.js";
 import { runAdvisor, decideProposal } from "./advisor/advisor.js";
+import { runTurn } from "./agent/loop.js";
 import { readStore, pending } from "./advisor/store.js";
 import { runScreenInference } from "./screen/screen-infer.js";
 import { screenInferredPath } from "./paths.js";
@@ -71,6 +72,7 @@ Commands:
   install-hooks [--test "<cmd>"]                Install a git post-commit hook that auto-emits test results
   ui [--port N] [--no-watch]                    Open a local web dashboard (also watches git+files unless --no-watch)
   infer                                         Ask the LLM to guess block/deadline (suggestions only) → inferred.json
+  chat "<message>"                              Talk to the agent (it reads real state and can act)
   propose                                       Ask the Advisor for proactive proposals (adds to the queue)
   proposals                                     List the pending proposals awaiting your approval
   approve <proposalId> [--apply] [--note ".."]  Approve a proposal (runs Synth→Executor if executable)
@@ -868,6 +870,42 @@ async function main(): Promise<void> {
         process.exit(0);
       } else {
         process.stderr.write("Error: " + result.error + "\n");
+        process.exit(1);
+      }
+      break;
+    }
+
+    case "chat": {
+      // One conversational turn from the terminal. Same loop the dashboard uses —
+      // useful on its own, and the only way to exercise the agent without a browser.
+      await bootstrap();
+      const message = args.slice(1).join(" ").trim();
+      if (!message) {
+        process.stderr.write('Usage: chat "<message>"\n');
+        process.exit(1);
+      }
+      try {
+        const config = loadConfig();
+        if (config.agent?.enabled !== true) {
+          process.stderr.write(
+            "The agent is off. Turn it on in the dashboard's Autonomy card, " +
+              'or set `agent.enabled: true` in .executive/config.json.\n'
+          );
+          process.exit(1);
+        }
+        const turn = await runTurn(message, { config });
+        for (const c of turn.toolCalls) {
+          process.stdout.write("  🔧 " + c.name + (c.ok ? "" : " (failed)") + "\n");
+        }
+        if (turn.pending) {
+          process.stdout.write("\n⏸  ต้องยืนยันก่อน: " + turn.pending.preview + "\n");
+          process.stdout.write("   ยืนยันในแดชบอร์ด (`ui`) แล้วมันจะทำต่อให้\n");
+          process.exit(0);
+        }
+        if (turn.reply) process.stdout.write("\n" + turn.reply + "\n");
+        process.exit(0);
+      } catch (err) {
+        process.stderr.write("Error: " + (err as Error).message + "\n");
         process.exit(1);
       }
       break;

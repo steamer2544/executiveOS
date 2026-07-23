@@ -81,6 +81,20 @@ export interface Config {
                               // immediately (still never merges). Default false → approve leaves a
                               // reviewed dry-run changeset for the owner to `execute --apply`.
   };
+  /** Conversational agent (Phase 35) — the chat panel with tools. OFF by default.
+   *  Reuses `worker` for backend/model/key; adds no gateway and no token of its own. */
+  agent?: {
+    enabled?: boolean;          // if true, the dashboard chat panel and /api/chat work. Default false.
+    toolProtocol?: AgentToolProtocol; // how tool calls are expressed. Default "auto".
+    maxToolRounds?: number;     // hard cap on tool round-trips per message. Default 8.
+    historyTurns?: number;      // user turns kept in the model's context. Default 20.
+    speak?: boolean;            // read replies aloud in the browser. Default false.
+    /** Write tools the owner has said "trust this one from now on" to. Empty = ask every time.
+     *  Trust removes the PROMPT, never a guardrail: path safety, changeset validation and the
+     *  isolated-branch rule still apply to a trusted tool. */
+    trustedTools?: string[];
+    commandTimeoutMs?: number;  // wall-clock cap on run_command. Default 60000.
+  };
   /** Voice/text capture (defaults applied when absent). The dashboard listens to YOU (your own
    *  dictated notes) and, during work hours, can start listening automatically. OFF by default. */
   capture?: {
@@ -138,6 +152,9 @@ export type OcrEngine = "winrt" | "tesseract";
 
 /** The three transcription backends the dashboard mic can use. */
 export type TranscribeMode = "webspeech" | "whisper-api" | "browser-wasm";
+
+/** How the agent expresses tool calls. "auto" = try native, fall back to json. */
+export type AgentToolProtocol = "auto" | "native" | "json";
 
 /** One-click presets for the `whisper-api` mode's fields (baseUrl/model), surfaced in the settings UI.
  *  Both are OpenAI-compatible /v1/audio/transcriptions endpoints. */
@@ -203,6 +220,15 @@ export function defaultConfig(): Config {
       cooldownMs: 600000,
       maxOpen: 8,
       applyOnApprove: false,
+    },
+    agent: {
+      enabled: false,
+      toolProtocol: "auto",
+      maxToolRounds: 8,
+      historyTurns: 20,
+      speak: false,
+      trustedTools: [],
+      commandTimeoutMs: 60000,
     },
     capture: {
       enabled: false,
@@ -361,6 +387,19 @@ export function loadConfig(): Config {
   parsed.advisor.maxOpen = parsed.advisor.maxOpen ?? defaults.advisor!.maxOpen!;
   parsed.advisor.applyOnApprove = parsed.advisor.applyOnApprove ?? defaults.advisor!.applyOnApprove!;
 
+  // Merge missing agent fields with defaults (absent block = the agent is off).
+  if (!parsed.agent) {
+    parsed.agent = defaults.agent!;
+  }
+  parsed.agent.enabled = parsed.agent.enabled ?? defaults.agent!.enabled!;
+  parsed.agent.toolProtocol = parsed.agent.toolProtocol ?? defaults.agent!.toolProtocol!;
+  parsed.agent.maxToolRounds = parsed.agent.maxToolRounds ?? defaults.agent!.maxToolRounds!;
+  parsed.agent.historyTurns = parsed.agent.historyTurns ?? defaults.agent!.historyTurns!;
+  parsed.agent.speak = parsed.agent.speak ?? defaults.agent!.speak!;
+  parsed.agent.trustedTools = parsed.agent.trustedTools ?? [];
+  parsed.agent.commandTimeoutMs =
+    parsed.agent.commandTimeoutMs ?? defaults.agent!.commandTimeoutMs!;
+
   // Merge missing capture fields with defaults.
   if (!parsed.capture) {
     parsed.capture = defaults.capture!;
@@ -453,6 +492,7 @@ export interface AutonomyState {
   advisorEnabled: boolean;
   inferEnabled: boolean;
   autopilotEnabled: boolean;
+  agentEnabled: boolean;
   /** Read-only here. See updateAutonomyConfig for why this is not a dashboard toggle. */
   autopilotApply: boolean;
 }
@@ -464,6 +504,7 @@ export function readAutonomyConfig(config?: Config): AutonomyState {
     advisorEnabled: c.advisor?.enabled === true,
     inferEnabled: c.infer?.enabled === true,
     autopilotEnabled: c.autopilot?.enabled === true,
+    agentEnabled: c.agent?.enabled === true,
     autopilotApply: c.autopilot?.apply === true,
   };
 }
@@ -495,6 +536,14 @@ export function updateAutonomyConfig(patch: Record<string, unknown>): AutonomySt
     if (!config.autopilot) config.autopilot = {};
     config.autopilot.enabled = patch.autopilotEnabled;
   }
+  if (typeof patch.agentEnabled === "boolean") {
+    if (!config.agent) config.agent = {};
+    config.agent.enabled = patch.agentEnabled;
+  }
+  if (typeof patch.agentSpeak === "boolean") {
+    if (!config.agent) config.agent = {};
+    config.agent.speak = patch.agentSpeak;
+  }
   // patch.autopilotApply is ignored on purpose — see the doc comment above.
 
   const raw = JSON.stringify(config, null, 2) + "\n";
@@ -502,6 +551,28 @@ export function updateAutonomyConfig(patch: Record<string, unknown>): AutonomySt
   writeFileSync(tmp, raw);
   renameOverwrite(tmp, configPath());
   return readAutonomyConfig(config);
+}
+
+/**
+ * Record that the owner trusts a write tool from now on ("ไว้ใจแล้ว" on the confirm chip).
+ *
+ * This removes the *prompt*, not a guardrail — a trusted `edit_files` still validates the
+ * changeset and still lands on an isolated branch; a trusted `read_file` path is still
+ * confined to the configured repos. Idempotent; returns the updated config.
+ */
+export function trustTool(name: string): Config {
+  const config = loadConfig();
+  if (!config.agent) config.agent = {};
+  const current = config.agent.trustedTools ?? [];
+  if (!current.includes(name)) {
+    config.agent.trustedTools = [...current, name];
+    const tmp = configPath() + ".tmp";
+    writeFileSync(tmp, JSON.stringify(config, null, 2) + "\n");
+    renameOverwrite(tmp, configPath());
+  } else {
+    config.agent.trustedTools = current;
+  }
+  return config;
 }
 
 /**

@@ -15,6 +15,9 @@ import { readStore, pending } from "../advisor/store.js";
 import { runAdvisor, decideProposal } from "../advisor/advisor.js";
 import { downloadWasmAssets, wasmAssetsStatus } from "./models.js";
 import { judgeNote } from "../capture/note.js";
+import { runTurn, resumeTurn } from "../agent/loop.js";
+import { readConversation, readPending, clearConversation, clearPending } from "../agent/session.js";
+import type { ConfirmDecision } from "../agent/types.js";
 import { renderPage } from "./page.js";
 
 /** Live "is a screen capture in flight" flag, set by the periodic screen-infer trigger in
@@ -125,6 +128,13 @@ export function startUiServer(opts: UiServerOptions) {
             transcribe: cfg.transcribe,
             presets: TRANSCRIBE_PRESETS,
             screen: cfg.screen ?? null,
+            // Same reasoning as transcribe: the agent block holds no secret (it reuses
+            // config.worker, whose key lives only in process.env[apiKeyEnv]).
+            agent: {
+              enabled: cfg.agent?.enabled === true,
+              speak: cfg.agent?.speak === true,
+              trustedTools: cfg.agent?.trustedTools ?? [],
+            },
             // Gates the dashboard can switch. autopilotApply is reported but not settable —
             // see updateAutonomyConfig for why arming repo-writing autonomy stays a file edit.
             autonomy: readAutonomyConfig(cfg),
@@ -307,6 +317,57 @@ export function startUiServer(opts: UiServerOptions) {
           return Response.json({ ok: true, proposal: p });
         } catch (err) {
           return Response.json({ ok: false, error: (err as Error).message }, { status: 400 });
+        }
+      }
+
+      // ── Chat with the agent (Phase 35) ──────────────────────────────────
+      // Off unless config.agent.enabled. Every route reloads config so the
+      // Autonomy toggle takes effect without restarting the dashboard.
+      if (url.pathname.startsWith("/api/chat")) {
+        const config = loadConfig();
+        if (config.agent?.enabled !== true) {
+          return Response.json({ ok: false, error: "agent is off" }, { status: 403 });
+        }
+
+        if (req.method === "GET" && url.pathname === "/api/chat/history") {
+          const n = Math.min(Math.max(Number(url.searchParams.get("n")) || 50, 1), 500);
+          const all = readConversation();
+          return Response.json({ messages: all.slice(-n), pending: readPending() });
+        }
+
+        if (req.method === "POST" && url.pathname === "/api/chat") {
+          try {
+            const body = (await req.json()) as { message?: string; via?: "text" | "voice" };
+            const message = (body.message ?? "").trim();
+            if (!message) return Response.json({ ok: false, error: "empty message" }, { status: 400 });
+            const turn = await runTurn(message, { config, via: body.via ?? "text" });
+            return Response.json({ ok: true, ...turn });
+          } catch (err) {
+            return Response.json({ ok: false, error: (err as Error).message }, { status: 500 });
+          }
+        }
+
+        if (req.method === "POST" && url.pathname === "/api/chat/confirm") {
+          try {
+            const body = (await req.json()) as { pendingId?: string; decision?: ConfirmDecision };
+            const d = body.decision;
+            if (!body.pendingId || (d !== "run" && d !== "trust" && d !== "no")) {
+              return Response.json(
+                { ok: false, error: "need { pendingId, decision: run|trust|no }" },
+                { status: 400 },
+              );
+            }
+            const turn = await resumeTurn(body.pendingId, d, { config });
+            return Response.json({ ok: true, ...turn });
+          } catch (err) {
+            return Response.json({ ok: false, error: (err as Error).message }, { status: 500 });
+          }
+        }
+
+        if (req.method === "POST" && url.pathname === "/api/chat/clear") {
+          const archived = clearConversation();
+          clearPending();
+          return Response.json({ ok: true, archived });
         }
       }
 

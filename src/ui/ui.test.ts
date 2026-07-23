@@ -273,3 +273,88 @@ describe("renderPage — listening UI", () => {
     expect(html).toContain("toggleListen");
   });
 });
+
+// ── Phase 35: the chat routes ───────────────────────────────────────────────
+
+describe("chat routes", () => {
+  const DIR = "/tmp/executive-test-chat-" + randomUUID();
+  let server: ReturnType<typeof startUiServer> | null = null;
+
+  beforeEach(() => { process.env.EXECUTIVE_HOME = DIR; });
+  afterEach(() => {
+    if (server) { server.stop(); server = null; }
+    try { rmSync(DIR, { recursive: true, force: true }); } catch {}
+    delete process.env.EXECUTIVE_HOME;
+  });
+
+  async function enableAgent(): Promise<void> {
+    await (await import("../bootstrap.js")).bootstrap();
+    const { updateAutonomyConfig } = await import("../config.js");
+    updateAutonomyConfig({ agentEnabled: true });
+  }
+
+  it("refuses every chat route while the agent is off", async () => {
+    await (await import("../bootstrap.js")).bootstrap();
+    server = startUiServer({ port: 0 });
+    const base = "http://127.0.0.1:" + server.port;
+
+    expect((await fetch(base + "/api/chat/history")).status).toBe(403);
+    const post = await fetch(base + "/api/chat", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ message: "hi" }),
+    });
+    expect(post.status).toBe(403);
+  });
+
+  it("serves history and reports the agent state through /api/config", async () => {
+    await enableAgent();
+    server = startUiServer({ port: 0 });
+    const base = "http://127.0.0.1:" + server.port;
+
+    const cfg = await (await fetch(base + "/api/config")).json();
+    expect(cfg.agent.enabled).toBe(true);
+    expect(cfg.autonomy.agentEnabled).toBe(true);
+
+    const hist = await (await fetch(base + "/api/chat/history")).json();
+    expect(hist.messages).toEqual([]);
+    expect(hist.pending).toBeNull();
+  });
+
+  it("rejects an empty message and a malformed confirm", async () => {
+    await enableAgent();
+    server = startUiServer({ port: 0 });
+    const base = "http://127.0.0.1:" + server.port;
+
+    const empty = await fetch(base + "/api/chat", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ message: "   " }),
+    });
+    expect(empty.status).toBe(400);
+
+    const bad = await fetch(base + "/api/chat/confirm", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ pendingId: "x", decision: "maybe" }),
+    });
+    expect(bad.status).toBe(400);
+  });
+
+  it("clearing an empty conversation is a no-op, not an error", async () => {
+    await enableAgent();
+    server = startUiServer({ port: 0 });
+    const j = await (await fetch("http://127.0.0.1:" + server.port + "/api/chat/clear", { method: "POST" })).json();
+    expect(j.ok).toBe(true);
+    expect(j.archived).toBeNull();
+  });
+});
+
+describe("renderPage — chat UI", () => {
+  it("includes the chat panel, the confirm chip and the speak toggle", () => {
+    const html = renderPage();
+    expect(html).toContain("คุยกับผม");
+    expect(html).toContain("sendChat");
+    expect(html).toContain("confirmChat");
+    expect(html).toContain("speechSynthesis");
+    // dictation is routed through one function so voice reaches the agent when it is on
+    expect(html).toContain("heardVoice");
+  });
+});
