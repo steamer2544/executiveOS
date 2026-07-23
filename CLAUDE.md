@@ -789,6 +789,33 @@ docs/scopes/           # per-phase specs (the contract handed to the implementer
   Spec: `docs/scopes/phase-33-signal-to-judgment.md`. Files: `src/report/tick.ts`, `src/state/patterns.ts`,
   `src/planner/{rules,types}.ts`, `src/advisor/{anthropic,types,store,mock}.ts`, `src/worker/mock.ts`,
   `src/state/{types,builder}.ts`, `src/ui/page.ts`, `src/index.ts` (+ tests).
+- **Phase 33.1 — DONE** (architect, this commit): **Advisor validated LIVE against the 9arm Qwen gateway**
+  — and the first real call failed, exposing three defects the offline MockAdvisor could never surface.
+  (1) **Token starvation:** `propose` died with `advisor: no text in response`. Probing the gateway
+  directly showed **`stop_reason: max_tokens` on 3/3 runs** (`output_tokens` exactly 4096) — Qwen reasons
+  before answering and Phase 33's evidence requirement makes it think longer, so the whole budget went to
+  thinking. Sometimes zero text blocks, sometimes a JSON array **truncated mid-object**. At 8192 it
+  finishes cleanly (`end_turn`, ~4.5k out, 3 drafts parsed), so the advisor factory now floors at
+  `llmMaxTokens(config, 8192)` — the Phase 20 lesson, which the Advisor (Phase 22) had never been run
+  hard enough to hit. (2) **The failure lied about itself** (cf. Phase 29.2): a budget exhaustion and a
+  malformed response both said "no text in response". `extractText` now reads `stop_reason` and names the
+  budget explicitly. New `salvageTruncatedArray()` recovers the *completed* proposals from an array cut
+  off mid-element (string-aware: braces/brackets/escaped quotes inside strings do not fool it) instead of
+  discarding a whole good answer for one half-written tail. (3) **The model misread raw milliseconds** —
+  it reported `sessionMs: 2173707` as "~36 hours" when it is 36 *minutes*, and did the same ("~27 hours")
+  on an earlier run, so it is systematic. `explainPatterns()` now sends a `patternsExplained` block with
+  units spelled out ("36 minutes", "11.5 hours") alongside the raw numbers, and the prompt forbids
+  converting millisecond fields by hand. Re-run live: the duration is now correct. 506 passing tests (12
+  new). **Job 3 verdict, measured on one screen:** new proposals cite checkable evidence — a real Thai
+  window title (`ตรวจสอบความคืบหน้า handoff`), `editsSinceLastCommit: 9` with the actual filenames —
+  while the pre-33 items still in the queue are the generic kind it was built to stop ("Consider setting
+  a hydration reminder", "Consider archiving unused browser tabs"). **Known limitation (model quality,
+  not a code bug — reported, not papered over):** grounding fixes the *observation*, not the *subject* —
+  one run cited `sameFileSaves30m: 9` and `currentFile` correctly but invented an "invoice quotation
+  flow" that appears nowhere in the context, and proposed adding a deliberately-failing test. It is
+  contained (executable proposals only ever reach an isolated `executive/change-<id>` branch behind a
+  human click), and the `because:` line is precisely what made both this and the units bug visible in
+  seconds. Files: `src/advisor/{factory,anthropic}.ts` (+ tests).
 - **Loop complete (manual trigger):** `auto --apply` runs the whole chain in one command; the human
   reviews/merges the `executive/change-<id>` branch.
 

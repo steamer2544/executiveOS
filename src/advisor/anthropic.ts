@@ -24,6 +24,8 @@ const SYSTEM_PROMPT =
   "- GROUNDING (most important): every proposal MUST rest on something specific in the data you were\n" +
   '  given, quoted in the "evidence" field — a file name, a window title, a note the owner captured, a\n' +
   "  number from patterns, a branch, a commit subject. Evidence must be checkable against the input.\n" +
+  "- When you quote a duration, use patternsExplained (which states the units). Never convert raw\n" +
+  "  millisecond fields yourself, and never state a duration the input does not support.\n" +
   "- Do NOT propose generic self-care or productivity advice that would be true for anyone on any day\n" +
   '  ("drink water", "take a break", "tidy your desk", "review your goals"). If you cannot point to the\n' +
   "  observation that makes a proposal apply to THIS owner RIGHT NOW, do not propose it. A rest\n" +
@@ -58,6 +60,31 @@ export function windowHistory(context: Context, limit = 20): Array<{ app: string
   return out.slice(-limit);
 }
 
+/** Render a duration the way a person would say it. */
+function humanMs(ms: number | null): string | null {
+  if (ms === null) return null;
+  const mins = Math.round(ms / 60_000);
+  if (mins < 60) return mins + " minutes";
+  const hours = ms / 3_600_000;
+  return hours.toFixed(1) + " hours";
+}
+
+/**
+ * The same metrics with units spelled out.
+ * Live runs showed the model reading `sessionMs: 2173707` and reporting it as
+ * "~36 hours" (it is 36 *minutes*) — twice, so it is systematic, not a fluke.
+ * Raw milliseconds are an invitation to that mistake; give it the words too.
+ */
+export function explainPatterns(p: Context["state"]["patterns"]): Record<string, unknown> {
+  return {
+    sessionLength: humanMs(p?.sessionMs ?? null),
+    timeSinceLastCommit: humanMs(p?.msSinceLastCommit ?? null),
+    editsSinceLastCommit: p?.editsSinceLastCommit ?? 0,
+    savesOfCurrentFileInLast30Min: p?.sameFileSaves30m ?? 0,
+    repoSwitchesInLastHour: p?.repoSwitches1h ?? 0,
+  };
+}
+
 export function buildUserMessage(context: Context, openTitles: string[]): string {
   return JSON.stringify(
     {
@@ -66,6 +93,7 @@ export function buildUserMessage(context: Context, openTitles: string[]): string
       // Behavioural metrics (Phase 33) — the model needs *how* the owner has been
       // working to say anything that isn't horoscope-grade.
       patterns: context.state.patterns,
+      patternsExplained: explainPatterns(context.state.patterns),
       windowHistory: windowHistory(context),
       recentEvents: context.recentEvents,
       alreadyOpen: openTitles,
@@ -88,7 +116,13 @@ export function buildRequestBody(context: Context, openTitles: string[], model: 
 export function extractText(json: unknown): string {
   const obj = json as Record<string, unknown>;
   const content = obj.content;
-  if (!Array.isArray(content)) throw new Error("advisor: no text in response");
+  // A reasoning model can spend the whole budget thinking and return no answer at
+  // all. Saying only "no text in response" hides the actual cause and sends the
+  // next reader hunting for a network fault — name it (cf. GOTCHA.md, Phase 29.2).
+  const truncated = obj.stop_reason === "max_tokens";
+  const budgetMsg =
+    "advisor: response hit max_tokens before answering — raise config.worker.maxTokens";
+  if (!Array.isArray(content)) throw new Error(truncated ? budgetMsg : "advisor: no text in response");
   const parts: string[] = [];
   for (const block of content) {
     if (
@@ -99,8 +133,40 @@ export function extractText(json: unknown): string {
       parts.push(String((block as Record<string, string>).text));
     }
   }
-  if (parts.length === 0) throw new Error("advisor: no text in response");
+  if (parts.length === 0) throw new Error(truncated ? budgetMsg : "advisor: no text in response");
   return parts.join("\n");
+}
+
+/**
+ * Recover the complete objects from a JSON array that was cut off mid-element.
+ * A reasoning model that runs out of budget mid-answer still produced real proposals
+ * before the cut; throwing all of them away because the last one is half-written
+ * loses good work. Scans for the last top-level element boundary and closes the array
+ * there. Returns null when nothing complete can be salvaged.
+ */
+export function salvageTruncatedArray(s: string): string | null {
+  if (!s.startsWith("[")) return null;
+  let depth = 0;
+  let inStr = false;
+  let escaped = false;
+  let lastComplete = -1; // index just past the last complete top-level element
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i]!;
+    if (escaped) { escaped = false; continue; }
+    if (inStr) {
+      if (c === "\\") escaped = true;
+      else if (c === '"') inStr = false;
+      continue;
+    }
+    if (c === '"') { inStr = true; continue; }
+    if (c === "{" || c === "[") depth++;
+    else if (c === "}" || c === "]") {
+      depth--;
+      if (depth === 1) lastComplete = i + 1; // closed a top-level element
+    }
+  }
+  if (lastComplete < 0) return null;
+  return s.slice(0, lastComplete) + "]";
 }
 
 /** Minimum characters of evidence before it counts as grounding rather than a shrug. */
@@ -131,7 +197,15 @@ export function parseDrafts(text: string): ProposalDraft[] {
     const b = s.lastIndexOf("]");
     if (a >= 0 && b > a) s = s.slice(a, b + 1);
   }
-  const arr = JSON.parse(s) as unknown;
+  let arr: unknown;
+  try {
+    arr = JSON.parse(s);
+  } catch (err) {
+    // Likely truncated mid-element — keep whatever proposals completed.
+    const salvaged = salvageTruncatedArray(s);
+    if (salvaged === null) throw err;
+    arr = JSON.parse(salvaged);
+  }
   if (!Array.isArray(arr)) return [];
   const out: ProposalDraft[] = [];
   for (const item of arr) {

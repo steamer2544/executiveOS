@@ -4,7 +4,7 @@ import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import { rmSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { MockAdvisor } from "./mock.js";
-import { parseDrafts, extractText, hasGrounding, windowHistory, buildUserMessage, buildRequestBody } from "./anthropic.js";
+import { parseDrafts, extractText, salvageTruncatedArray, explainPatterns, hasGrounding, windowHistory, buildUserMessage, buildRequestBody } from "./anthropic.js";
 import { readStore, writeStore, addDrafts, decide, pending, pendingTitles } from "./store.js";
 import { runAdvisor, decideProposal } from "./advisor.js";
 import type { Context } from "../state/types.js";
@@ -221,5 +221,82 @@ describe("runAdvisor + decideProposal", () => {
     expect(p?.status).toBe("approved");
     expect(p?.note).toBe("yes please");
     expect(await decideProposal("nope", "approve")).toBeNull();
+  });
+});
+
+// ─── Reasoning-model truncation (found live against the 9arm Qwen gateway) ────
+
+describe("salvageTruncatedArray", () => {
+  it("keeps the complete elements of an array cut off mid-object", () => {
+    const s = '[{"title":"A","evidence":"branch is main"},{"title":"B","evidence":"file is a';
+    const out = salvageTruncatedArray(s);
+    expect(out).toBe('[{"title":"A","evidence":"branch is main"}]');
+  });
+
+  it("is not confused by braces or brackets inside strings", () => {
+    const s = '[{"title":"A}","evidence":"has ] and { inside"},{"title":"B';
+    expect(JSON.parse(salvageTruncatedArray(s)!)).toEqual([
+      { title: "A}", evidence: "has ] and { inside" },
+    ]);
+  });
+
+  it("handles an escaped quote before the cut", () => {
+    const s = '[{"title":"say \\"hi\\"","evidence":"window title quoted"},{"tit';
+    expect(JSON.parse(salvageTruncatedArray(s)!)).toEqual([
+      { title: 'say "hi"', evidence: "window title quoted" },
+    ]);
+  });
+
+  it("returns null when nothing complete can be salvaged", () => {
+    expect(salvageTruncatedArray('[{"title":"only par')).toBeNull();
+    expect(salvageTruncatedArray('not an array')).toBeNull();
+  });
+});
+
+describe("parseDrafts — truncated responses", () => {
+  it("recovers the finished proposals instead of losing them all", () => {
+    const text =
+      '[{"category":"work","title":"Keep me","detail":"d","action":"a","evidence":"currentFile is patterns.ts"},' +
+      '{"category":"rest","title":"Cut off here","evidence":"pat';
+    expect(parseDrafts(text).map((d) => d.title)).toEqual(["Keep me"]);
+  });
+
+  it("still throws when the text is not JSON at all", () => {
+    expect(() => parseDrafts("the model refused")).toThrow();
+  });
+});
+
+describe("extractText — names the budget failure", () => {
+  it("reports max_tokens rather than a generic 'no text'", () => {
+    expect(() => extractText({ content: [], stop_reason: "max_tokens" })).toThrow(/max_tokens/);
+    expect(() => extractText({ stop_reason: "max_tokens" })).toThrow(/max_tokens/);
+  });
+
+  it("keeps the generic message when the budget was not the problem", () => {
+    expect(() => extractText({ content: [], stop_reason: "end_turn" })).toThrow(/no text in response/);
+  });
+});
+
+describe("explainPatterns — units spelled out", () => {
+  it("renders the duration the model kept misreading (2173707 ms is 36 minutes, not hours)", () => {
+    const e = explainPatterns({ ...emptyPatterns(), sessionMs: 2173707 });
+    expect(e.sessionLength).toBe("36 minutes");
+  });
+
+  it("switches to hours past the hour mark", () => {
+    const e = explainPatterns({ ...emptyPatterns(), msSinceLastCommit: 41317381 });
+    expect(e.timeSinceLastCommit).toBe("11.5 hours");
+  });
+
+  it("passes nulls through rather than inventing a zero duration", () => {
+    const e = explainPatterns(emptyPatterns());
+    expect(e.sessionLength).toBeNull();
+    expect(e.timeSinceLastCommit).toBeNull();
+  });
+
+  it("is included in the user message next to the raw patterns", () => {
+    const msg = JSON.parse(buildUserMessage(ctx({ patterns: LONG_SESSION }), []));
+    expect(msg.patternsExplained.sessionLength).toBe("1.7 hours");
+    expect(msg.patterns.sessionMs).toBe(LONG_SESSION.sessionMs);
   });
 });
