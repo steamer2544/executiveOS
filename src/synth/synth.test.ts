@@ -33,6 +33,7 @@ import { createSynthesizer } from "./factory.js";
 import { runSynth, writeChangeSet, writeSynthReport } from "./synth.js";
 import type { Synthesizer, SynthInput, SynthResult } from "./types.js";
 import * as git from "../executor/git.js";
+import { emptyPatterns } from "../state/patterns.js";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -130,6 +131,7 @@ function makeState(overrides: Partial<State> = {}): State {
     activity: { active: true, idleMs: null },
     activeRepo: null,
     repos: [],
+    patterns: emptyPatterns(),
     ...overrides,
   };
 }

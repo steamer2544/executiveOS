@@ -86,6 +86,74 @@ function resumeTask(s: State): ProposedAction | null {
   };
 }
 
+// ─── Pattern rules (Phase 33) ───────────────────────────────────────────────
+//
+// R1–R4 above all fire only when something is *broken*, so a healthy day produced
+// "No action needed." from thousands of sensed events. These read State.patterns —
+// how the owner has been working — and every threshold was calibrated against the
+// real event log, not guessed (docs/scopes/phase-33-signal-to-judgment.md §3.2).
+// All are low-confidence by design → applyGuardrail() makes them "ask", never "act".
+
+/** ms since last commit before uncommitted work is worth a checkpoint. */
+const CHECKPOINT_AGE_MS = 3 * 60 * 60 * 1000;
+/** ...and how many edits must be riding on it. Observed once in the real log: 10.0h / 78 edits. */
+const CHECKPOINT_EDITS = 20;
+/** Saves of one file in 30 min. Measured p90=6, p99=17 — 15 is the top ~1%. */
+const GRIND_SAVES = 15;
+/** Continuous activity before suggesting a break. Longest real session measured: 1.87h. */
+const LONG_SESSION_MS = 90 * 60 * 1000;
+
+/** R5: A lot of edits riding on an old commit → checkpoint. Priority 60, confidence 0.55 → ask. */
+function checkpointWork(s: State): ProposedAction | null {
+  const { msSinceLastCommit, editsSinceLastCommit } = s.patterns;
+  if (msSinceLastCommit === null) return null;
+  if (msSinceLastCommit < CHECKPOINT_AGE_MS) return null;
+  if (editsSinceLastCommit < CHECKPOINT_EDITS) return null;
+  const hours = (msSinceLastCommit / 3_600_000).toFixed(1);
+  return {
+    kind: "checkpoint_work",
+    reason:
+      editsSinceLastCommit + " edit(s) over " + hours + "h with no commit — " +
+      "checkpoint before the change gets too big to review",
+    priority: 60,
+    confidence: 0.55,
+    forbidden: false,
+  };
+}
+
+/**
+ * R6: The same file saved over and over → possibly stuck. Priority 45, confidence 0.50 → ask.
+ * Skipped while tests are failing: re-saving one file is exactly the right behaviour then,
+ * and R1 (fix_tests) already owns that situation at a higher priority.
+ */
+function grindingOnFile(s: State): ProposedAction | null {
+  if (s.tests === "failing") return null;
+  if (s.patterns.sameFileSaves30m < GRIND_SAVES) return null;
+  return {
+    kind: "grinding_on_file",
+    reason:
+      (s.currentFile ?? "one file") + " saved " + s.patterns.sameFileSaves30m +
+      " times in 30 min — stuck? worth stepping back or talking it through",
+    priority: 45,
+    confidence: 0.50,
+    forbidden: false,
+  };
+}
+
+/** R7: A long unbroken run at the machine. Priority 35, confidence 0.50 → ask. */
+function longSession(s: State): ProposedAction | null {
+  const ms = s.patterns.sessionMs;
+  if (ms === null || ms < LONG_SESSION_MS) return null;
+  const mins = Math.round(ms / 60_000);
+  return {
+    kind: "long_session",
+    reason: mins + " min of continuous activity with no break — worth stepping away briefly",
+    priority: 35,
+    confidence: 0.50,
+    forbidden: false,
+  };
+}
+
 /**
  * Ordered rule set.
  * Rules are evaluated in array order; the array index breaks priority ties (stable sort).
@@ -94,5 +162,8 @@ export const RULES: Array<(s: State) => ProposedAction | null> = [
   fixTests,
   resolveBlock,
   reviewDeadline,
+  checkpointWork,
+  grindingOnFile,
   resumeTask,
+  longSession,
 ];

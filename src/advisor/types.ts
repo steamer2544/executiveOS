@@ -15,6 +15,9 @@ export interface Proposal {
   title: string;          // short headline
   detail: string;         // why / what it involves
   action: string;         // one concrete next step (editable before approving)
+  /** The specific observation this rests on (Phase 33). Shown to the owner so a
+   *  proposal can be checked against reality rather than taken on faith. */
+  evidence?: string;
   status: ProposalStatus;
   note?: string;          // the owner's optional addition at decision time
   decidedAt?: string;     // ISO, set when approved/rejected
@@ -40,6 +43,8 @@ export interface ProposalDraft {
   title: string;
   detail: string;
   action: string;
+  /** Phase 33: the observation that prompted this. Drafts without it are dropped. */
+  evidence?: string;
   // Phase 27: model's suggestion; the code filter has final say.
   executable?: boolean;
   repo?: string;

@@ -4,7 +4,8 @@
 
 import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { describe, expect, it } from "bun:test";
 import { execRoot } from "../paths.js";
@@ -13,6 +14,7 @@ import { plan, writePlan, applyGuardrail } from "./planner.js";
 import { RULES, daysOverdue } from "./rules.js";
 import { CONFIDENCE_THRESHOLD } from "./types.js";
 import type { ProposedAction } from "./types.js";
+import { emptyPatterns } from "../state/patterns.js";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -39,6 +41,7 @@ function makeState(overrides: Partial<State> = {}): State {
     activity: { active: true, idleMs: null },
     activeRepo: null,
     repos: [],
+    patterns: emptyPatterns(),
     ...overrides,
   };
 }
@@ -64,6 +67,7 @@ describe("planner — empty / clean state", () => {
       activity: { active: true, idleMs: null },
       activeRepo: null,
       repos: [],
+      patterns: emptyPatterns(),
     });
     const p = plan(s);
     expect(p.actions).toEqual([]);
@@ -230,11 +234,32 @@ describe("planner — plan reads only State", () => {
   });
 
   it("RULES and planner do not import event store", () => {
-    // Architectural check: rules.ts and planner.ts must not import read/tail from the event store.
-    // We verify by checking that plan() can produce a correct Plan from a hand-built State
-    // with no .executive/ on disk — already tested above.
-    // Additionally, verify RULES count is exactly 4 (no extra rules).
-    expect(RULES.length).toBe(4);
+    // Architectural check: the Planner reads State only, never the raw event logs,
+    // so new watchers plug in without touching it. The old version of this test only
+    // counted rules — it would have passed even if rules.ts started reading events.
+    // Check the source directly.
+    const here = dirname(fileURLToPath(import.meta.url));
+    for (const f of ["rules.ts", "planner.ts"]) {
+      const src = readFileSync(join(here, f), "utf-8");
+      const imports = src.match(/^import .*$/gm) ?? [];
+      for (const line of imports) {
+        expect(line).not.toContain("events/store");
+        expect(line).not.toContain("state/builder");
+      }
+    }
+    // rules.ts is stricter still: pure functions of State, so no I/O of any kind.
+    // (planner.ts legitimately imports planPath — writePlan persists plan.json.)
+    const rulesSrc = readFileSync(join(here, "rules.ts"), "utf-8");
+    for (const line of rulesSrc.match(/^import .*$/gm) ?? []) {
+      expect(line).not.toContain("node:fs");
+      expect(line).not.toContain("paths.js");
+    }
+  });
+
+  it("RULES contains every rule exactly once", () => {
+    // 4 breakage rules (Phase 4) + 3 pattern rules (Phase 33).
+    expect(RULES.length).toBe(7);
+    expect(new Set(RULES).size).toBe(RULES.length);
   });
 });
 
@@ -316,5 +341,115 @@ describe("planner — R3: overdue deadline", () => {
     const a = plan(s).topAction!;
     expect(a.reason).toBe("deadline set (2026-07-20) — review progress");
     expect(a.priority).toBe(70);
+  });
+});
+
+// ─── Phase 33: pattern rules ─────────────────────────────────────────────────
+// These fire when nothing is broken but the working pattern says something.
+// Thresholds were calibrated against the real event log — see the scope doc §3.2.
+
+describe("planner — R5: checkpoint_work", () => {
+  it("fires when many edits ride on an old commit, and always asks", () => {
+    const s = makeState({
+      patterns: { ...emptyPatterns(), msSinceLastCommit: 4 * 3600_000, editsSinceLastCommit: 25 },
+    });
+    const a = plan(s).actions.find((x) => x.kind === "checkpoint_work");
+    expect(a).toBeDefined();
+    expect(a!.disposition).toBe("ask");
+    expect(a!.priority).toBe(60);
+    // The reason must carry the concrete numbers, so the owner can check the claim.
+    expect(a!.reason).toContain("25 edit(s)");
+    expect(a!.reason).toContain("4.0h");
+  });
+
+  it("is silent just under either threshold", () => {
+    const fewEdits = makeState({
+      patterns: { ...emptyPatterns(), msSinceLastCommit: 4 * 3600_000, editsSinceLastCommit: 19 },
+    });
+    expect(plan(fewEdits).actions.some((x) => x.kind === "checkpoint_work")).toBe(false);
+
+    const recentCommit = makeState({
+      patterns: { ...emptyPatterns(), msSinceLastCommit: 2 * 3600_000, editsSinceLastCommit: 99 },
+    });
+    expect(plan(recentCommit).actions.some((x) => x.kind === "checkpoint_work")).toBe(false);
+  });
+
+  it("is silent when there has never been a commit", () => {
+    const s = makeState({
+      patterns: { ...emptyPatterns(), msSinceLastCommit: null, editsSinceLastCommit: 500 },
+    });
+    expect(plan(s).actions.some((x) => x.kind === "checkpoint_work")).toBe(false);
+  });
+});
+
+describe("planner — R6: grinding_on_file", () => {
+  it("fires on repeated saves of one file and names it", () => {
+    const s = makeState({
+      currentFile: "synth/synth.ts",
+      patterns: { ...emptyPatterns(), sameFileSaves30m: 15 },
+    });
+    const a = plan(s).actions.find((x) => x.kind === "grinding_on_file");
+    expect(a).toBeDefined();
+    expect(a!.disposition).toBe("ask");
+    expect(a!.reason).toContain("synth/synth.ts");
+    expect(a!.reason).toContain("15 times");
+  });
+
+  it("defers to fix_tests while the suite is red", () => {
+    const s = makeState({
+      tests: "failing",
+      currentFile: "synth/synth.ts",
+      patterns: { ...emptyPatterns(), sameFileSaves30m: 30 },
+    });
+    const p = plan(s);
+    expect(p.actions.some((x) => x.kind === "grinding_on_file")).toBe(false);
+    expect(p.topAction!.kind).toBe("fix_tests");
+  });
+
+  it("is silent just under the threshold", () => {
+    const s = makeState({ currentFile: "a.ts", patterns: { ...emptyPatterns(), sameFileSaves30m: 14 } });
+    expect(plan(s).actions.some((x) => x.kind === "grinding_on_file")).toBe(false);
+  });
+});
+
+describe("planner — R7: long_session", () => {
+  it("fires after a long unbroken run and sits below every other rule", () => {
+    const s = makeState({
+      blocked: true,
+      blockedReason: "waiting on review",
+      patterns: { ...emptyPatterns(), sessionMs: 95 * 60_000 },
+    });
+    const p = plan(s);
+    const a = p.actions.find((x) => x.kind === "long_session");
+    expect(a).toBeDefined();
+    expect(a!.priority).toBe(35);
+    expect(a!.reason).toContain("95 min");
+    // Lowest priority: it must never outrank a real blocker.
+    expect(p.actions[p.actions.length - 1]!.kind).toBe("long_session");
+    expect(p.topAction!.kind).toBe("resolve_block");
+  });
+
+  it("is silent under 90 minutes and when there is no session", () => {
+    expect(plan(makeState({ patterns: { ...emptyPatterns(), sessionMs: 89 * 60_000 } })).actions.length).toBe(0);
+    expect(plan(makeState({ patterns: { ...emptyPatterns(), sessionMs: null } })).actions.length).toBe(0);
+  });
+});
+
+describe("planner — pattern rules add no noise to a healthy state", () => {
+  it("a healthy state with no threshold crossed still plans nothing", () => {
+    const s = makeState({
+      tests: "passing",
+      patterns: {
+        msSinceLastCommit: 30 * 60_000,
+        editsSinceLastCommit: 3,
+        sameFileSaves30m: 4,
+        sessionMs: 20 * 60_000,
+        repoSwitches1h: 2,
+      },
+    });
+    const p = plan(s);
+    expect(p.actions.length).toBe(0);
+    expect(p.topAction).toBeNull();
+    expect(p.summary).toBe("No action needed.");
   });
 });

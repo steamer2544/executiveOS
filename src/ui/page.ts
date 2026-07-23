@@ -52,6 +52,8 @@ export function renderPage(): string {
   .prop .badge.record { background:transparent; border:1px solid var(--line); color:var(--muted); }
   .prop .title { font-weight:650; margin:2px 0 4px; }
   .prop .detail { color:var(--muted); margin-bottom:8px; }
+  /* The observation a proposal rests on — lets the owner check it, not just trust it. */
+  .prop .evidence { color:var(--muted); font-size:12px; font-style:italic; margin-bottom:8px; opacity:.85; }
   .prop input { margin-bottom:8px; }
   .prop .acts { display:flex; gap:8px; }
   .prop .empty { color:var(--muted); }
@@ -312,6 +314,7 @@ async function loadProposals() {
         <div class="cat">\${esc(p.category)}\${p.executable ? '<span class="badge exec">⚙ will create a branch</span>' : '<span class="badge record">records your decision</span>'}</div>
         <div class="title">\${esc(p.title)}</div>
         <div class="detail">\${esc(p.detail)}</div>
+        \${p.evidence ? \`<div class="evidence">because: \${esc(p.evidence)}</div>\` : ""}
         <input type="text" id="act-\${p.id}" value="\${esc(p.action)}" />
         <input type="text" id="note-\${p.id}" placeholder="Add a note (optional)…" />
         <div class="acts">

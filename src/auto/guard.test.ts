@@ -10,6 +10,7 @@ import {
 import type { Config } from "../config.js";
 import type { State } from "../state/types.js";
 import type { Plan } from "../planner/types.js";
+import { emptyPatterns } from "../state/patterns.js";
 
 // ─── Fixtures ───────────────────────────────────────────────────────────────
 
@@ -45,6 +46,7 @@ function makeState(): State {
     activity: { active: true, idleMs: 5000 },
     activeRepo: null,
     repos: [],
+    patterns: emptyPatterns(),
   };
 }
 

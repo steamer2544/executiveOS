@@ -21,11 +21,11 @@ import { runSynth, writeSynthReport } from "./synth/synth.js";
 import { changeSetPath, autoReportPath } from "./paths.js";
 import { runAuto, writeAutoReport } from "./auto/auto.js";
 import { shouldRunAutopilot, freshGuardState } from "./auto/guard.js";
-import { buildDigest, renderDigest, writeDigest, needsYouSignature } from "./report/digest.js";
+import { buildDigest, renderDigest, writeDigest } from "./report/digest.js";
 import { digestPath } from "./paths.js";
-import { diffNeedsYou, appendNotifications, readNotifications } from "./report/notify.js";
+import { readNotifications } from "./report/notify.js";
+import { runDigestTick, createDigestTickState, type DigestTickResult } from "./report/tick.js";
 import { runCompaction } from "./compact/compact.js";
-import type { NeedsYouItem } from "./report/types.js";
 import { installHooks } from "./hooks/install.js";
 import { startUiServer } from "./ui/server.js";
 import { runInference, writeInference } from "./infer/infer.js";
@@ -96,6 +96,20 @@ function formatEventLine(e: { seq: number; ts: string; type: string; data: Recor
     .map(([k, v]) => k + "=" + (typeof v === "string" ? v : JSON.stringify(v)))
     .join(" ");
   return "#" + e.seq + " " + e.ts + " " + e.type + (shortData ? " " + shortData : "");
+}
+
+/** Print a digest tick's needs-you transition. Shared by the `watch` and `ui` daemons
+ *  so both report the queue identically. Quiet unless the queue actually changed. */
+function printDigestTick(result: DigestTickResult): void {
+  if (!result.changed) return;
+  if (result.digest.needsYou.length > 0) {
+    process.stdout.write("⚠️  Needs you (" + result.digest.needsYou.length + "):\n");
+    for (const item of result.digest.needsYou) {
+      process.stdout.write("   - " + item.summary + "\n");
+    }
+  } else if (result.cleared) {
+    process.stdout.write("✓ Needs-you queue cleared.\n");
+  }
 }
 
 async function main(): Promise<void> {
@@ -329,9 +343,8 @@ async function main(): Promise<void> {
       let screenRunning = false;
       let lastScreenAt: number | null = null;
 
-      // ── Needs-you alert state ─────────────────────────────────────────────
-      let lastNeedsSignature: string | null = null;
-      let lastNeedsItems: NeedsYouItem[] = [];
+      // ── Needs-you alert state (shared shape with `ui` — see src/report/tick.ts) ──
+      const digestTickState = createDigestTickState();
 
       // ── Periodic state rebuild ───────────────────────────────────────────
       const stateIntervalMs = config.state?.intervalMs ?? 30000;
@@ -400,31 +413,9 @@ async function main(): Promise<void> {
             }
 
             // ── Digest refresh + Needs-you alert (read-only; never acts) ──
+            // Shared with the `ui` command via runDigestTick — see src/report/tick.ts.
             try {
-              const digest = buildDigest();
-              writeDigest(renderDigest(digest));
-              const sig = needsYouSignature(digest.needsYou);
-              if (sig !== lastNeedsSignature) {
-                if (digest.needsYou.length > 0) {
-                  process.stdout.write("⚠️  Needs you (" + digest.needsYou.length + "):\n");
-                  for (const item of digest.needsYou) {
-                    process.stdout.write("   - " + item.summary + "\n");
-                  }
-                } else if (lastNeedsSignature !== null) {
-                  process.stdout.write("✓ Needs-you queue cleared.\n");
-                }
-                lastNeedsSignature = sig;
-
-                // Durable notification log (append-only; local only).
-                const { added, removed } = diffNeedsYou(lastNeedsItems, digest.needsYou);
-                const nowTs = new Date().toISOString();
-                const records = [
-                  ...added.map((i) => ({ ts: nowTs, event: "added" as const, source: i.source, summary: i.summary, detail: i.detail })),
-                  ...removed.map((i) => ({ ts: nowTs, event: "resolved" as const, source: i.source, summary: i.summary, detail: i.detail })),
-                ];
-                appendNotifications(records);
-                lastNeedsItems = digest.needsYou;
-              }
+              printDigestTick(runDigestTick(digestTickState));
             } catch (digestErr) {
               process.stderr.write("Digest refresh failed: " + (digestErr as Error).message + "\n");
             }
@@ -922,6 +913,7 @@ async function main(): Promise<void> {
             "  (" + p.id.slice(0, 8) + ")\n",
         );
         process.stdout.write("  " + p.detail + "\n");
+        if (p.evidence) process.stdout.write("  because: " + p.evidence + "\n");
         process.stdout.write("  → " + p.action + "\n");
       }
       process.stdout.write("\nApprove/dismiss via `approve <id>` / `dismiss <id>`, or the dashboard (`ui`).\n");
@@ -1020,6 +1012,21 @@ async function main(): Promise<void> {
 
         const server = startUiServer({ port });
 
+        // Periodic digest refresh + durable "Needs you" log.
+        // The dashboard builds its own digest in memory per poll (see ui/server.ts), but
+        // that never persists digest.md and never appends notifications.jsonl — so before
+        // this, running `ui` (the normal way to use the system) left Phase 14's durable
+        // notification log dead. Same tick, same rules as the `watch` daemon.
+        const uiDigestState = createDigestTickState();
+        const uiStateIntervalMs = loadConfig().state?.intervalMs ?? 30000;
+        const digestTimer = setInterval(() => {
+          try {
+            printDigestTick(runDigestTick(uiDigestState));
+          } catch (digestErr) {
+            process.stderr.write("Digest refresh failed: " + (digestErr as Error).message + "\n");
+          }
+        }, uiStateIntervalMs);
+
         // Periodic screen inference (mirrors the `watch` daemon's wiring — see runRebuild —
         // but `ui` is its own process, so it needs its own trigger for the live "reading
         // screen" indicator to work when the owner runs `ui` alone, without `watch`).
@@ -1046,6 +1053,7 @@ async function main(): Promise<void> {
         process.stdout.write("(Ctrl-C to stop)\n");
         process.on("SIGINT", async () => {
           clearInterval(screenTimer);
+          clearInterval(digestTimer);
           server.stop();
           if (manager) await manager.stopAll();
           process.stdout.write("\nstopped\n");

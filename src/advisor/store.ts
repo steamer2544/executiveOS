@@ -130,6 +130,7 @@ export function addDrafts(
       title: d.title,
       detail: d.detail || "",
       action: d.action || "",
+      evidence: d.evidence || undefined,
       status: "pending",
       backend,
       executable: sanitized.executable,

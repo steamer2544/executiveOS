@@ -28,6 +28,7 @@ import {
 } from "./anthropic.js";
 import { createWorker } from "./factory.js";
 import { runWorker, writeProposal } from "./orchestrator.js";
+import { emptyPatterns } from "../state/patterns.js";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -65,6 +66,7 @@ function makeState(overrides: Partial<State> = {}): State {
     activity: { active: true, idleMs: null },
     activeRepo: null,
     repos: [],
+    patterns: emptyPatterns(),
     ...overrides,
   };
 }

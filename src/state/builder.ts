@@ -16,6 +16,7 @@ import {
   IDLE_THRESHOLD_MS,
   RECENT_EVENTS,
 } from "./types.js";
+import { computePatterns } from "./patterns.js";
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -485,6 +486,9 @@ export function buildState(now?: Date): { state: State; context: Context } {
     },
     activeRepo,
     repos,
+    // Behavioural metrics (Phase 33) — derived here so the Planner can fire on
+    // patterns while keeping its "reads State only" contract.
+    patterns: computePatterns(allEvents, clock.getTime(), currentFile),
   };
 
   // ── Build Context ──────────────────────────────────────────────────────

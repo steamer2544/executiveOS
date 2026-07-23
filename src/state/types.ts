@@ -2,6 +2,9 @@
 // State = compact current snapshot derived from events.
 // Context = State + recent events + one-line summary.
 
+import type { Patterns } from "./patterns.js";
+export type { Patterns } from "./patterns.js";
+
 /** Metadata about the latest git commit. */
 export interface CommitInfo {
   sha: string;
@@ -58,6 +61,11 @@ export interface State {
     active: boolean; // true if lastEventTs within idleThresholdMs of now
     idleMs: number | null; // now - lastEventTs in ms, or null if no events
   };
+
+  /** Behavioural metrics over event history — how the owner has been working, not
+   *  just what is currently broken. Lets the Planner fire on patterns while still
+   *  reading State only. See src/state/patterns.ts. */
+  patterns: Patterns;
 }
 
 /**

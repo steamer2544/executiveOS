@@ -26,6 +26,21 @@ const MOCK_STEPS: Record<ActionKind, string[]> = {
     "Suggest the next concrete step to unblock progress",
     "Propose a short checklist to get back on track",
   ],
+  checkpoint_work: [
+    "Summarise what changed since the last commit",
+    "Group the edits into one reviewable commit",
+    "Commit on a branch so the work is recoverable",
+  ],
+  grinding_on_file: [
+    "Summarise what the current file is trying to do",
+    "List the approaches already tried on it",
+    "Suggest one different angle, or a place to ask for help",
+  ],
+  long_session: [
+    "Note where work currently stands, so it is easy to resume",
+    "Suggest a short break away from the screen",
+    "Propose the first step to pick up afterwards",
+  ],
 };
 
 export class MockWorker implements Worker {

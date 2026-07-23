@@ -2,12 +2,17 @@
 // The Planner is a 100% rule-based engine that reads State and proposes actions.
 // It never executes anything — only writes plan.json.
 
-/** The finite, stable set of actions the rule engine can propose in Phase 4. */
+/** The finite, stable set of actions the rule engine can propose. */
 export type ActionKind =
+  // Phase 4 — something is broken.
   | "fix_tests"        // tests are failing → fix them
   | "resolve_block"    // work is blocked → surface / resolve the blocker
   | "review_deadline"  // a deadline exists → review progress against it
-  | "resume_task";     // idle mid-task → nudge back to the current task
+  | "resume_task"      // idle mid-task → nudge back to the current task
+  // Phase 33 — nothing is broken, but the working pattern says something.
+  | "checkpoint_work"  // many edits riding on an old commit → checkpoint
+  | "grinding_on_file" // the same file saved over and over → possibly stuck
+  | "long_session";    // a long unbroken run at the machine → step away
 
 /** Whether the Planner considers this safe to do autonomously, or must ask first. */
 export type Disposition = "act" | "ask";

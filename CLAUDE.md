@@ -749,6 +749,46 @@ docs/scopes/           # per-phase specs (the contract handed to the implementer
   (all 66 dropped were fragments like "ก็เลย" / "24 24" — reviewed individually, no real thought lost),
   a second run removes 0 (idempotent), backup holds the originals. The dashboard is now coherent:
   Tests `passing` (hook), Deadline `—`, "Looking at" a clean title, and **"No action needed"**.
+- **Phase 33 — DONE** (architect impl + self-review + live-validated, this commit): **Signal → Judgment.**
+  Driven by reading the real 3,174-event log, which showed sensing far ahead of reasoning: State was
+  accurate and near-fully auto-sensed (Layer 2 OCR even summarised the owner's live work from pixels),
+  yet `plan.json` was `topAction: null` — **3,174 sensed events produced 0 decisions** — and the Advisor's
+  61% hit rate hid generic content ("stay hydrated", "add a `console.log` then revert it"). Three jobs, no
+  new sensor. **(1) Real bug — `ui` never persisted the digest.** The Phase 12/14 refresh lived inline in
+  `case "watch"`; `ui` (which also runs the watchers, and is how the owner actually runs the system) never
+  called it, and `ui/server.ts` builds its digest in memory for `/api/state` without writing anything — so
+  **Phase 14's durable notification log was dead in the normal mode** (`digest.md` was found 12h stale
+  while `state.json` was current). Extracted `runDigestTick`/`createDigestTickState` into
+  `src/report/tick.ts` (one implementation, testable without a daemon) and wired both daemons to it +
+  a shared `printDigestTick`. **(2) Planner rules that fire on patterns, not just breakage.** New
+  `State.patterns` (`src/state/patterns.ts`, pure) computed by the builder, so the Planner keeps its
+  "reads State only" contract: `msSinceLastCommit`, `editsSinceLastCommit`, `sameFileSaves30m`,
+  `sessionMs`, `repoSwitches1h`. Three new rules — `checkpoint_work` (p60), `grinding_on_file` (p45,
+  defers to `fix_tests`), `long_session` (p35) — all confidence ≤ 0.95 → always `ask`. **Every threshold
+  was calibrated against the real log, and the measurement killed two rules the architect had proposed:**
+  app switches ran p50=**26**/30min (switching *is* the baseline — pure noise), and repo switches were
+  p99=**0** (only one repo ever tagged — the rule would be dead code); `repoSwitches1h` is kept as a
+  metric but drives nothing. Kept thresholds: same-file saves ≥15 (p99=17), commit gap ≥3h + ≥20 edits
+  (one real instance: 10.0h/78 edits), session ≥90min (longest real session 1.87h, so a 3h rule would
+  never fire); `SESSION_BREAK_MS`=15min sits well outside the p99 inter-event gap of 318s.
+  **(3) Advisor grounding.** `ProposalDraft`/`Proposal` gain `evidence`; the prompt requires a checkable
+  observation and explicitly bans advice "true for anyone on any day" (a rest nudge only counts when it
+  cites `patterns.sessionMs`) and review-costs-more-than-doing busywork; `buildUserMessage` now sends
+  `patterns` + a deduped `windowHistory`; **`parseDrafts` drops ungrounded drafts**; MockAdvisor obeys the
+  same contract (its unconditional "Take a 10-minute break" card is now gated on a long session); the GUI
+  card and `proposals` CLI render a "because:" line. 494 passing tests (38 new). **Sabotage-checked**
+  (`GOTCHA.md` §4): 4 deliberate regressions, 3 caught immediately — the 4th (session break `>=`→`>`)
+  **escaped**, exposing a missing exact-boundary case, which was then added. **Two defects found in the
+  architect's own tests, not the code** (same lesson as 32.1): a needs-you item is keyed on action *kind*,
+  not `reason`, so two `resolve_block` plans are correctly one item; and a session fixture used 1h gaps
+  that all exceed the 15-min break. Also rewrote `planner.test.ts`'s "do not import event store" test,
+  which **only counted rules** and would have passed had `rules.ts` started reading events. **Live:**
+  the real log now yields `patterns.editsSinceLastCommit: 113`, the Planner says *"113 edit(s) over 11.5h
+  with no commit — checkpoint before the change gets too big to review"* (`ask`), it reaches "Needs you",
+  and `ui` on an isolated home wrote `digest.md` + exactly **1** notification across ~4 ticks (no spam).
+  Spec: `docs/scopes/phase-33-signal-to-judgment.md`. Files: `src/report/tick.ts`, `src/state/patterns.ts`,
+  `src/planner/{rules,types}.ts`, `src/advisor/{anthropic,types,store,mock}.ts`, `src/worker/mock.ts`,
+  `src/state/{types,builder}.ts`, `src/ui/page.ts`, `src/index.ts` (+ tests).
 - **Loop complete (manual trigger):** `auto --apply` runs the whole chain in one command; the human
   reviews/merges the `executive/change-<id>` branch.
 

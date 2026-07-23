@@ -6,6 +6,7 @@ import { parseGuesses, extractText } from "./anthropic.js";
 import { runInference } from "./infer.js";
 import type { Context } from "../state/types.js";
 import type { Config } from "../config.js";
+import { emptyPatterns } from "../state/patterns.js";
 
 function ctx(summary: string, events: Array<{ type: string; data: Record<string, unknown> }>): Context {
   return {
@@ -15,7 +16,7 @@ function ctx(summary: string, events: Array<{ type: string; data: Record<string,
       generatedAt: "2026-01-01T00:00:00.000Z", eventCount: events.length, lastEventTs: null,
       currentProject: null, currentTask: null, deadline: null, currentFile: null, recentFiles: [],
       git: { branch: null, lastCommit: null }, tests: "unknown", blocked: false, blockedReason: null,
-      activity: { active: true, idleMs: 0 }, currentWindow: null, activeRepo: null, repos: [],
+      activity: { active: true, idleMs: 0 }, currentWindow: null, activeRepo: null, repos: [], patterns: emptyPatterns(),
     },
     recentEvents: events.map((e, i) => ({ seq: i + 1, ts: "2026-01-01T00:00:00.000Z", source: "system", type: e.type, data: e.data })),
   };

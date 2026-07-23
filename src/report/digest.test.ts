@@ -12,6 +12,7 @@ import type { Plan } from "../planner/types.js";
 import type { AutoReport } from "../auto/types.js";
 import type { ExecReport } from "../executor/types.js";
 import type { Proposal } from "../worker/types.js";
+import { emptyPatterns } from "../state/patterns.js";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -56,6 +57,7 @@ function seedState(partial: Partial<State>): void {
     activity: { active: true, idleMs: 0 },
     activeRepo: null,
     repos: [],
+    patterns: emptyPatterns(),
     ...partial,
   };
   writeFileSync(statePath(), JSON.stringify(base));

@@ -21,6 +21,17 @@ const SYSTEM_PROMPT =
   "Rules:\n" +
   "- Propose at most 3. Each must be small and reversible; the owner will approve or reject each one.\n" +
   "- You MAY propose across all domains including relationships, money, and life-goals.\n" +
+  "- GROUNDING (most important): every proposal MUST rest on something specific in the data you were\n" +
+  '  given, quoted in the "evidence" field — a file name, a window title, a note the owner captured, a\n' +
+  "  number from patterns, a branch, a commit subject. Evidence must be checkable against the input.\n" +
+  "- Do NOT propose generic self-care or productivity advice that would be true for anyone on any day\n" +
+  '  ("drink water", "take a break", "tidy your desk", "review your goals"). If you cannot point to the\n' +
+  "  observation that makes a proposal apply to THIS owner RIGHT NOW, do not propose it. A rest\n" +
+  "  suggestion is allowed only when you cite the measured session length in patterns.sessionMs.\n" +
+  "- Do NOT propose busywork that costs more to review than to do (adding a log line then reverting it,\n" +
+  "  renaming one variable, adding a comment). Propose something that changes the owner's day.\n" +
+  "- Prefer fewer, better proposals. Returning ONE well-grounded proposal beats three weak ones, and\n" +
+  "  returning an empty array [] is correct when nothing in the data warrants a proposal.\n" +
   '- Set "executable": true ONLY for a concrete coding task on the owner\'s codebase that you can describe\n' +
   "  as file changes. When executable is true, also provide \"repo\" (the project/repo name) and optionally\n" +
   '  \"files\". Otherwise set "executable": false.\n' +
@@ -29,11 +40,36 @@ const SYSTEM_PROMPT =
   "- Avoid repeating any title in the provided already-open list.\n" +
   "- Keep titles under 8 words; detail to 1-2 sentences; action a single concrete next step.\n" +
   'Respond with ONLY a JSON array, no prose:\n' +
-  '[{"category":string,"title":string,"detail":string,"action":string,"executable":bool,"repo"?:string,"files"?:string[]}]';
+  '[{"category":string,"title":string,"detail":string,"action":string,"evidence":string,' +
+  '"executable":bool,"repo"?:string,"files"?:string[]}]';
+
+/** The last N distinct window titles, oldest→newest — what the owner has actually been looking at. */
+export function windowHistory(context: Context, limit = 20): Array<{ app: string; title: string }> {
+  const out: Array<{ app: string; title: string }> = [];
+  for (const e of context.recentEvents) {
+    if (e.type !== "screen.window") continue;
+    const app = typeof e.data.app === "string" ? e.data.app : null;
+    const title = typeof e.data.title === "string" ? e.data.title : null;
+    if (!app || !title) continue;
+    const prev = out[out.length - 1];
+    if (prev && prev.app === app && prev.title === title) continue; // collapse repeats
+    out.push({ app, title });
+  }
+  return out.slice(-limit);
+}
 
 export function buildUserMessage(context: Context, openTitles: string[]): string {
   return JSON.stringify(
-    { summary: context.summary, state: context.state, recentEvents: context.recentEvents, alreadyOpen: openTitles },
+    {
+      summary: context.summary,
+      state: context.state,
+      // Behavioural metrics (Phase 33) — the model needs *how* the owner has been
+      // working to say anything that isn't horoscope-grade.
+      patterns: context.state.patterns,
+      windowHistory: windowHistory(context),
+      recentEvents: context.recentEvents,
+      alreadyOpen: openTitles,
+    },
     null,
     2
   );
@@ -67,7 +103,25 @@ export function extractText(json: unknown): string {
   return parts.join("\n");
 }
 
-/** Parse a JSON array of drafts (tolerant: strips fences, finds the first [...]). */
+/** Minimum characters of evidence before it counts as grounding rather than a shrug. */
+const MIN_EVIDENCE_CHARS = 8;
+
+/** Evidence strings that are technically present but say nothing. */
+const EMPTY_EVIDENCE = new Set(["n/a", "none", "na", "-", "unknown", "general", "no evidence"]);
+
+/** True when a draft cites a specific, checkable observation. */
+export function hasGrounding(evidence: string | undefined): boolean {
+  if (typeof evidence !== "string") return false;
+  const e = evidence.trim();
+  if (e.length < MIN_EVIDENCE_CHARS) return false;
+  return !EMPTY_EVIDENCE.has(e.toLowerCase());
+}
+
+/**
+ * Parse a JSON array of drafts (tolerant: strips fences, finds the first [...]).
+ * Ungrounded drafts are DROPPED — a proposal that cannot point at what prompted it is
+ * exactly the generic advice this Advisor is meant to stop producing.
+ */
 export function parseDrafts(text: string): ProposalDraft[] {
   let s = text.trim();
   const fence = s.match(/```(?:json)?\s*([\s\S]*?)```/i);
@@ -84,11 +138,14 @@ export function parseDrafts(text: string): ProposalDraft[] {
     const o = item as Record<string, unknown>;
     const title = typeof o.title === "string" ? o.title.trim() : "";
     if (!title) continue;
+    const evidence = typeof o.evidence === "string" ? o.evidence.trim() : undefined;
+    if (!hasGrounding(evidence)) continue;
     out.push({
       category: typeof o.category === "string" ? o.category : "general",
       title,
       detail: typeof o.detail === "string" ? o.detail : "",
       action: typeof o.action === "string" ? o.action : "",
+      evidence,
       executable: typeof o.executable === "boolean" ? o.executable : false,
       repo: typeof o.repo === "string" ? o.repo : undefined,
       files: Array.isArray(o.files) ? (o.files as string[]).filter((f) => typeof f === "string") : undefined,
