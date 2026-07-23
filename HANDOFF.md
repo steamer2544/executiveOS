@@ -3,7 +3,7 @@
 > **Purpose:** a single doc to resume this project cold if context/memory is lost. Pairs with
 > `CLAUDE.md` (the authoritative phase-by-phase log), `GOTCHA.md` (traps & non-obvious failure modes —
 > read before touching PowerShell/state/tests/LLM), and `README.md` (user-facing overview).
-> Last updated after **Phase 34.1** (runtime robustness fixes read off the `ui` console). **519 passing
+> Last updated after **Phase 34.2** (atomic-write hardening + UI timeouts). **527 passing
 > tests**, all green.
 
 > **⏭️ Immediate next task:** nothing is blocking. Two good candidates, both cheap:
@@ -92,9 +92,10 @@ The full loop works and is validated (including **live against the real LLM gate
 | 33 | **Signal → Judgment** | (a) **real bug:** `ui` never persisted `digest.md`/`notifications.jsonl` — the refresh lived inline in `case "watch"` — so Phase 14's durable log was dead in the mode the owner actually runs; extracted `runDigestTick` (`src/report/tick.ts`) and wired both daemons. (b) `State.patterns` (pure, builder-computed, keeps the Planner's "State only" contract) + 3 pattern rules: `checkpoint_work`/`grinding_on_file`/`long_session`, all `ask`. (c) Advisor proposals must cite checkable `evidence`; generic advice + busywork banned in the prompt; `parseDrafts` **drops ungrounded drafts** |
 | 33.1 | **Advisor live-validated** | the first real gateway call failed and exposed 3 defects the mock could never surface: `max_tokens` starvation (**3/3 runs**, output exactly 4096 → floor raised to 8192), a failure message that couldn't distinguish "out of budget" from "bad response", and the model reading raw ms as the wrong unit (`sessionMs: 2173707` → "~36 hours"; it is 36 **minutes**) → `patternsExplained` sends units in words |
 | 34 | **Autonomy toggles** | `ui` carries the Advisor / infer / autopilot triggers that used to live only in `watch`, + an **Autonomy card** that re-reads config every tick (toggle without restart). `autopilot.apply` is deliberately **not** a dashboard toggle |
-| 34.1 | **Runtime robustness** | three defects found by *reading the `ui` console*: `nextSeq`'s temp+rename lost an event to a transient Windows `EPERM` (AV/indexer holds `meta.json` for ms) → `renameOverwrite()` retries only `EPERM`/`EBUSY`/`EACCES`; `Bun.serve`'s 10s default `idleTimeout` was shorter than `/api/state` on a real log → 120s; and an executor test used `test: "true"`, which **is not a command in `cmd.exe`** → `exit 0`/`exit 1` (its `"false"` sibling had been green for the wrong reason) |
+| 34.1 | **Runtime robustness** | three defects found by *reading the `ui` console*: `nextSeq`'s temp+rename lost an event to a transient Windows `EPERM` (AV/indexer holds `meta.json` for ms) → `renameOverwrite()` retries only `EPERM`/`EBUSY`/`EACCES`; `Bun.serve`'s 10s default `idleTimeout` was shorter than `/api/state` on a real log → 120s; and an executor test used `test: "true"`, which **is not a command in `cmd.exe`** → `exit 0` |
+| 34.2 | **Atomic-write hardening** | review of 34.1 found the retry helper fixed **1 of 17** temp+rename sites (the per-tick `writeState`/`writePlan`/`writeDigest` are more exposed than `meta.json`) and that its 3 tests **all passed against plain `renameSync`**. `renameOverwrite` moved to `src/fs-atomic.ts` with an injectable `RenameIo` seam + real retry coverage; every atomic write routed through it; `idleTimeout` derived from `llmTimeoutMs` instead of a hardcoded 120 s that **equalled** the LLM client timeout; the 81 MB model download made non-blocking (polls the existing `/api/transcribe/status`) |
 
-**Test count:** 519 passing, 100% offline (mock backends). Several phases **validated live** against the
+**Test count:** 527 passing, 100% offline (mock backends). Several phases **validated live** against the
 9arm Qwen gateway (`work`, `synth`, `infer`, `propose`); Phase-25 vendor download + browser-wasm e2e run
 live too. **Screen-sensing is fully live** (real capture → real OCR → real suggestions, both engines
 compared on the same image), and the **Advisor is live-validated end to end** (Phase 33.1). **Not live:**
@@ -114,7 +115,7 @@ change gets too big to review"* and it reaches the "Needs you" queue.
 ```bash
 bun install
 bun run typecheck          # tsc --noEmit (strict) — must stay green
-bun test                   # 519 tests, offline
+bun test                   # 527 tests, offline
 bun run test:e2e           # OPT-IN browser-wasm e2e (real Chromium via Playwright; runs under node, auto-skips
                            #   if playwright/model aren't set up — see test/e2e/README.md)
 
@@ -259,13 +260,6 @@ Phase 33 computes `patterns` (`sessionMs`, `msSinceLastCommit`, `editsSinceLastC
 `sameFileSaves30m`, `repoSwitches1h`) and the Planner + Advisor both reason over them, but the owner
 cannot see the numbers a proposal cites without opening `state.json`. A "Working pattern" line in the
 digest and a Now-card row would close that loop. Cheap and read-only — the values already exist.
-
-### ⏭️ Candidate C — harden the other atomic writes (cheap, mechanical)
-Phase 34.1 fixed `nextSeq()`'s temp+rename against the transient Windows `EPERM`, but **every other
-temp+rename in the tree has the same exposure** — `writeState`, `writePlan`, `writeDigest`,
-`writeProposal`, `writeReport`, the `update*Config` helpers, `src/infer/infer.ts:47`, `src/index.ts:45`.
-They just haven't been observed losing the race. Export `renameOverwrite()` from a shared place and route
-them all through it. Low risk, no behaviour change on the happy path.
 
 ### ⏭️ Candidate B — pick the OCR language from the window title
 `-l tha+eng` **hallucinates Thai on screens that contain none**. Measured on one real screenshot:

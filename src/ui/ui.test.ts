@@ -233,6 +233,35 @@ describe("ui server", () => {
     const events = await read("system");
     expect(events.some((e) => e.type === "system.note" && e.data.msg === "blocked on the webhook")).toBe(true);
   });
+
+  it("download returns immediately and reports running", async () => {
+    await (await import("../bootstrap.js")).bootstrap();
+    server = startUiServer({ port: 0 });
+    const base = "http://127.0.0.1:" + server.port;
+    const t0 = Date.now();
+    const res = await fetch(base + "/api/transcribe/download", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "definitely-not-a-real-model/xxx" }),
+    });
+    const elapsed = Date.now() - t0;
+    expect(res.status).toBe(202);
+    const j = await res.json();
+    expect(j.started).toBe(true);
+    expect(j.running).toBe(true);
+    expect(elapsed).toBeLessThan(2000);
+  });
+
+  it("status exposes the download block", async () => {
+    await (await import("../bootstrap.js")).bootstrap();
+    server = startUiServer({ port: 0 });
+    const base = "http://127.0.0.1:" + server.port;
+    const res = await fetch(base + "/api/transcribe/status");
+    const s = await res.json();
+    expect(s.libReady).toBeDefined();
+    expect(s.modelReady).toBeDefined();
+    expect(s.download).toBeDefined();
+    expect(typeof s.download.running).toBe("boolean");
+  });
 });
 
 describe("renderPage — listening UI", () => {

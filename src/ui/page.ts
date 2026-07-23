@@ -546,8 +546,18 @@ async function downloadModel() {
     const model = $("setWasmModel").value.trim() || undefined;
     const r = await fetch("/api/transcribe/download", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ model }) });
     const j = await r.json();
-    if (!j.ok) throw new Error(j.error || "failed");
-    toast("downloaded " + j.files + " file(s), " + Math.round(j.bytes / 1e6) + " MB");
+    if (!j.started && !j.running) { toast("download failed: " + (j.error || "failed")); return; }
+    for (let i = 0; i < 300; i++) {
+      await new Promise((res) => setTimeout(res, 2000));
+      const s = await (await fetch("/api/transcribe/status")).json();
+      if (!s.download.running) {
+        if (s.download.error) { toast("download failed: " + s.download.error); }
+        else if (s.download.result?.ok) { toast("downloaded " + s.download.result.files + " file(s), " + Math.round(s.download.result.bytes / 1e6) + " MB"); }
+        else { toast("download failed: " + (s.download.result?.error || "unknown")); }
+        return;
+      }
+    }
+    toast("download still running — check back later");
   } catch (e) { toast("download failed: " + e.message); }
   finally { b.disabled = false; b.textContent = "Download model for offline use"; refreshDlStatus(); }
 }

@@ -2,7 +2,8 @@
 // Reads existing .executive/ artifacts and renders one concise, human-readable
 // Markdown summary. 100% deterministic, rule-based, NO LLM.
 
-import { existsSync, readFileSync, writeFileSync, mkdirSync, renameSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { renameOverwrite } from "../fs-atomic.js";
 import { randomUUID } from "node:crypto";
 import type { State } from "../state/types.js";
 import type { Plan } from "../planner/types.js";
@@ -358,7 +359,7 @@ export function writeDigest(md: string): void {
   const content = md;
   const tmpPath = digestPath() + "." + randomUUID();
   writeFileSync(tmpPath, content, "utf-8");
-  renameSync(tmpPath, digestPath());
+  renameOverwrite(tmpPath, digestPath());
 }
 
 // ── Signature helper ──────────────────────────────────────────────────────────

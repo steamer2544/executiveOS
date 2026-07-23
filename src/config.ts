@@ -1,6 +1,7 @@
 // Load and validate config.json from .executive/.
 
-import { readFileSync, writeFileSync, renameSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
+import { renameOverwrite } from "./fs-atomic.js";
 import { configPath } from "./paths.js";
 
 export interface Config {
@@ -443,7 +444,7 @@ export function updateTranscribeConfig(patch: Record<string, unknown>): Config["
   const raw = JSON.stringify(config, null, 2) + "\n";
   const tmp = configPath() + ".tmp";
   writeFileSync(tmp, raw);
-  renameSync(tmp, configPath());
+  renameOverwrite(tmp, configPath());
   return t;
 }
 
@@ -499,7 +500,7 @@ export function updateAutonomyConfig(patch: Record<string, unknown>): AutonomySt
   const raw = JSON.stringify(config, null, 2) + "\n";
   const tmp = configPath() + ".tmp";
   writeFileSync(tmp, raw);
-  renameSync(tmp, configPath());
+  renameOverwrite(tmp, configPath());
   return readAutonomyConfig(config);
 }
 
@@ -550,7 +551,7 @@ export function updateScreenConfig(patch: Record<string, unknown>): Config["scre
   const raw = JSON.stringify(config, null, 2) + "\n";
   const tmp = configPath() + ".tmp";
   writeFileSync(tmp, raw);
-  renameSync(tmp, configPath());
+  renameOverwrite(tmp, configPath());
   return s;
 }
 

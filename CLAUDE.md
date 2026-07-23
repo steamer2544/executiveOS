@@ -846,8 +846,8 @@ docs/scopes/           # per-phase specs (the contract handed to the implementer
   seq with an atomic temp+rename, but on Windows `rename` cannot replace a destination while any other
   handle is open on it, and AV/the search indexer opens `meta.json` for a few ms right after it is
   written. The throw cost that **event its seq, so it was never persisted at all**. New
-  `renameOverwrite()` retries `EPERM`/`EBUSY`/`EACCES` with a synchronous backoff (5/10/15… ms, ~180ms
-  total) and rethrows anything else **immediately** — a genuine second writer (a stale daemon, the case
+  `renameOverwrite()` retries `EPERM`/`EBUSY`/`EACCES` with a synchronous backoff (5/10/15…35 ms, 140 ms
+  total across 7 retries) and rethrows anything else **immediately** — a genuine second writer (a stale daemon, the case
   `seq.ts`'s own header warns about) still surfaces loudly rather than being papered over; the temp file
   is unlinked when it does give up. Verified there was no stale daemon this time (`Get-Process bun` → one
   process, the owner's), so this was the transient-lock case. (2) **`[Bun.serve]: request timed out after
@@ -857,14 +857,52 @@ docs/scopes/           # per-phase specs (the contract handed to the implementer
   Now `idleTimeout: 120`. (3) **A pre-existing red test, unrelated to the above but found by running the
   full suite:** `executor.test.ts`'s "passing test command" used `test: "true"`, and the runner is
   `spawnSync(cmd, {shell:true})` = **`cmd.exe` on Windows, where `true` is not a command** → the spawn
-  failed and `testPassed` was false for the wrong reason. Worse, the sibling failing-test case (`"false"`,
-  since fixed to `exit 1`) had been **passing for the wrong reason** for the same reason. Both now use
-  `exit 0`/`exit 1`, which are valid in `cmd` **and** POSIX `sh`, so the pair actually asserts the
-  executor's pass/fail paths on every platform — the fix is entirely in the test; `executor.ts` is
+  failed and `testPassed` was false for the wrong reason — the assertion of the PASS path had nothing to
+  do with the executor. Now `exit 0`, which is valid in `cmd` **and** POSIX `sh`. *(Correction, Phase
+  34.2: the original entry also claimed the failing-test sibling used `test: "false"` and had been green
+  for the wrong reason. That never happened — `git log -S'test: "false"'` is empty and line 428 has read
+  `test: "exit 1"` since Phase 6. Only the passing-path case was wrong.)* The fix is entirely in the
+  test; `executor.ts` is
   untouched. New `src/events/seq.test.ts` (3 tests, incl. a timing assert that a non-retryable `ENOENT`
   does **not** burn the retry budget — it fails if someone widens the retryable set). 519 passing tests
   (+13), typecheck green. `GOTCHA.md` §2 gained both Windows traps. Files: `src/events/{seq,seq.test}.ts`,
   `src/ui/server.ts`, `src/executor/executor.test.ts`, `GOTCHA.md`.
+- **Phase 34.2 — DONE** (architect scope + qwen impl + architect review/fixes, this commit): **Atomic-write
+  hardening + the two things 34.1 got wrong.** A review of 34.1 found four problems, none of them in the
+  logic it added. (1) **It fixed 1 of 17 temp+renames.** `renameOverwrite` sat in `src/events/seq.ts`, but
+  `writeState`/`writePlan`/`writeDigest` are rewritten **every 30 s tick** on files the dashboard reads
+  concurrently — strictly more exposed to the Windows `EPERM` than `meta.json`, and a failed `writeState`
+  in the `ui` tick is caught and logged, so the dashboard would just go quietly stale. Moved to
+  **`src/fs-atomic.ts`** and every one of the 16 remaining call sites routed through it (`advisor/store`,
+  `auto`, `compact`, `config`×3, `executor`, `index`, `infer`, `planner`, `digest`, `state/builder`,
+  `synth`×2, `worker/orchestrator`×2). Behaviour on the happy path is byte-identical; only the rename call
+  changed at each site. (2) **The 3 tests 34.1 added all passed against a bare `renameSync`** — the retry
+  loop, the backoff schedule and the temp cleanup had zero coverage, which is exactly what `GOTCHA.md` §4
+  exists to prevent. `renameOverwrite` now takes an injectable `RenameIo` seam (`rename`/`unlink`/`sleep`),
+  and `src/fs-atomic.test.ts` asserts the retry-then-succeed path, that `EBUSY`/`EACCES` retry too, the
+  exact backoff `[5,10,15,20,25,30,35]`, that the **original** error (not a cleanup error) is rethrown
+  after the budget, that a non-retryable `ENOENT` never sleeps, and a custom `attempts`. **Sabotage-checked
+  independently by the architect: 5 of the 8 fail against a stripped implementation.** (3) **`idleTimeout:
+  120` equalled the LLM client timeout exactly** — `llmTimeoutMs()` floors at 120 000 ms, so a gateway call
+  that runs to its own deadline raced the server's and the dashboard died in precisely the slow case 34.1
+  meant to fix; now derived (`min(255, llmTimeoutMs/1000 + 30)`). Worse, `POST /api/transcribe/download`
+  `await`ed an **81 MB** fetch — its own button says *"can take a few min"* — which no legal `idleTimeout`
+  can cover (Bun caps at 255 s), so it is now fire-and-forget and the page polls the **already-existing**
+  `GET /api/transcribe/status`, which gained a `download: {running,result,error}` block. (4) **Docs recorded
+  a bug that never happened:** the 34.1 entry + `GOTCHA.md` claimed the failing-test sibling used
+  `test: "false"` and had been green for the wrong reason — `git log -S'test: "false"'` is **empty** and
+  that line has read `exit 1` since Phase 6; only the passing-path case was ever wrong. Also corrected the
+  backoff total (~180 ms → **140 ms**, 7 sleeps). 527 passing tests (+8), typecheck green. **Delegation
+  note:** the first qwen run died instantly with `ContextWindowExceededError` — 99 k input tokens before
+  doing any work, because a headless `claude-9arm` started inside the repo **auto-loads `CLAUDE.md`**,
+  which is now far too large for a 128 k window. Re-running from outside the repo (`--add-dir`, plus an
+  explicit "do not read CLAUDE.md/HANDOFF.md/GOTCHA.md") fixed it — worth remembering for every future
+  delegation. **Architect fixes on top of qwen's work:** the test file's header comment claimed the tests
+  "would all pass against a bare `renameSync`" (backwards — they fail, which is the point), a dead
+  `const thrown = calls` placeholder replaced with the real assertion that the rethrown error's `.code` is
+  `EPERM`, four unused imports, and a duplicated comment block in `server.ts`. Spec:
+  `docs/scopes/phase-34.2-atomic-writes-and-timeouts.md`. Files: `src/fs-atomic{,.test}.ts`,
+  `src/events/{seq,seq.test}.ts`, 12 call-site files, `src/ui/{server,page,ui.test}.ts`, `GOTCHA.md`.
 - **Loop complete (manual trigger):** `auto --apply` runs the whole chain in one command; the human
   reviews/merges the `executive/change-<id>` branch.
 

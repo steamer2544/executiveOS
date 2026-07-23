@@ -2,7 +2,8 @@
 // GUESSES block/deadline from context and writes .executive/inferred.json.
 // SUGGESTIONS ONLY — never emits events, never mutates real state.
 
-import { existsSync, mkdirSync, writeFileSync, renameSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { renameOverwrite } from "../fs-atomic.js";
 import { randomUUID } from "node:crypto";
 import type { Context } from "../state/types.js";
 import type { InferenceResult, InferOptions } from "./types.js";
@@ -44,5 +45,5 @@ export function writeInference(r: InferenceResult): void {
   if (!existsSync(root)) mkdirSync(root, { recursive: true });
   const tmp = inferredPath() + "." + randomUUID();
   writeFileSync(tmp, JSON.stringify(r, null, 2) + "\n");
-  renameSync(tmp, inferredPath());
+  renameOverwrite(tmp, inferredPath());
 }

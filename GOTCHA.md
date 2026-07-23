@@ -122,16 +122,16 @@
   other handle is open on it, and antivirus / the search indexer opens a file for a few ms right after
   it is written — an atomic temp+rename is therefore *probabilistically* fragile, not reliably atomic.
   *Impact:* that event lost its `seq` and was never persisted. *Fix:* `renameOverwrite()` retries
-  `EPERM`/`EBUSY`/`EACCES` with a short synchronous backoff (~180ms total) and rethrows anything else
-  immediately; a genuine second writer still surfaces instead of being papered over. (Phase 34.1 ·
-  `src/events/seq.ts`) **The same fragility applies to every other temp+rename in the tree**
-  (`writeState`, `writePlan`, `writeDigest`, the config updaters) — they just haven't been observed
-  losing the race yet.
-- **`true` and `false` are not commands in `cmd.exe`.** *Symptom:* an executor test that runs
-  `test: "true"` reports `testPassed:false`, and its sibling `test: "false"` passes for the wrong reason
-  (the spawn failed either way). *Cause:* `spawnSync(cmd, { shell: true })` is `cmd.exe` on Windows, where
-  those POSIX binaries don't exist. *Fix:* use **`exit 0` / `exit 1`**, which work in both `cmd` and
-  POSIX `sh`. (Phase 34.1 · `src/executor/executor.test.ts`)
+  `EPERM`/`EBUSY`/`EACCES` with a short synchronous backoff (140 ms total — 5,10,15…35 across 7 retries)
+  and rethrows anything else immediately; a genuine second writer still surfaces instead of being papered
+  over. **Every atomic write in the tree now goes through `renameOverwrite` in `src/fs-atomic.ts`
+  (Phase 34.2)** — the same fragility applied to `writeState`/`writePlan`/`writeDigest`/the config
+  updaters, which are rewritten every tick. (Phase 34.1 + 34.2 · `src/fs-atomic.ts`)
+- **`true` is not a command in `cmd.exe`.** *Symptom:* an executor test that runs `test: "true"` reports
+  `testPassed:false` — the assertion of the PASS path was red for a reason that had nothing to do with
+  the executor. *Cause:* `spawnSync(cmd, { shell: true })` is `cmd.exe` on Windows, where the POSIX
+  `true`/`false` binaries don't exist, so the spawn itself fails. *Fix:* use **`exit 0` / `exit 1`**,
+  which work in both `cmd` and POSIX `sh`. (Phase 34.1 · `src/executor/executor.test.ts`)
 
 ## 3. State Builder (the derivation everyone reads from)
 

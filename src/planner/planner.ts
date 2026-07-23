@@ -6,7 +6,8 @@
 // It does NOT import the event store, read(), tail(), or any raw JSONL logs.
 // This is the contract that lets new watchers be added without touching Phase 4.
 
-import { existsSync, mkdirSync, writeFileSync, renameSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { renameOverwrite } from "../fs-atomic.js";
 import { randomUUID } from "node:crypto";
 import type { State, Context } from "../state/types.js";
 import { planPath } from "../paths.js";
@@ -84,5 +85,5 @@ export function writePlan(p: Plan): void {
   }
   const tmpPath = planPath() + "." + randomUUID();
   writeFileSync(tmpPath, JSON.stringify(p, null, 2) + "\n");
-  renameSync(tmpPath, planPath());
+  renameOverwrite(tmpPath, planPath());
 }

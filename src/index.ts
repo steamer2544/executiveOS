@@ -1,7 +1,8 @@
 // CLI entry point for ExecutiveOS.
 // Parse process.argv hand-rolled (no CLI framework).
 
-import { existsSync, readFileSync, writeFileSync, renameSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { renameOverwrite } from "./fs-atomic.js";
 import { randomUUID } from "node:crypto";
 import { bootstrap } from "./bootstrap.js";
 import { append, read, tail } from "./events/store.js";
@@ -42,7 +43,7 @@ function writeScreenInferred(result: { layer: string; suggestions: unknown[] }):
   const record = { generatedAt: new Date().toISOString(), layer: result.layer, suggestions: result.suggestions };
   const tmp = path + "." + randomUUID();
   writeFileSync(tmp, JSON.stringify(record, null, 2) + "\n");
-  renameSync(tmp, path);
+  renameOverwrite(tmp, path);
 }
 
 const VALID_SOURCES: EventSource[] = ["git", "terminal", "editor", "system", "screen"];

@@ -1,7 +1,8 @@
 // Advisor queue persistence (.executive/advisor.json).
 // Deterministic, local. Append-with-dedup for drafts; status update on decide.
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { renameOverwrite } from "../fs-atomic.js";
 import { randomUUID } from "node:crypto";
 import { execRoot, advisorPath } from "../paths.js";
 import type { AdvisorStore, Proposal, ProposalDraft, ProposalStatus } from "./types.js";
@@ -25,7 +26,7 @@ export function writeStore(store: AdvisorStore): void {
   if (!existsSync(root)) mkdirSync(root, { recursive: true });
   const tmp = advisorPath() + "." + randomUUID();
   writeFileSync(tmp, JSON.stringify(store, null, 2) + "\n");
-  renameSync(tmp, advisorPath());
+  renameOverwrite(tmp, advisorPath());
 }
 
 // ── Intent dedup (Phase 32) ──────────────────────────────────────────────────

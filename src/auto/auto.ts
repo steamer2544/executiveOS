@@ -2,7 +2,8 @@
 // Runs the full chain: plan → worker → synth → execute, gated by existing guardrails.
 // Reuses Phase 3 (state), Phase 4 (plan), Phase 5 (Worker), Phase 6 (Executor), Phase 7 (Synthesizer).
 
-import { readFileSync, existsSync, mkdirSync, writeFileSync, renameSync } from "node:fs";
+import { readFileSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { renameOverwrite } from "../fs-atomic.js";
 import { randomUUID } from "node:crypto";
 import type { Plan } from "../planner/types.js";
 import type { Config } from "../config.js";
@@ -207,7 +208,7 @@ export function writeAutoReport(r: AutoReport): void {
   const content = JSON.stringify(r, null, 2) + "\n";
   const tmpPath = autoReportPath() + "." + randomUUID();
   writeFileSync(tmpPath, content);
-  renameSync(tmpPath, autoReportPath());
+  renameOverwrite(tmpPath, autoReportPath());
 }
 
 

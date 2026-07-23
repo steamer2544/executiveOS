@@ -1,7 +1,8 @@
 // Orchestrator — runSynth: Proposal → LLM → ChangeSet → validate → dry-run executor.
 // This is the bridge between Phase 5 (Worker/Proposal) and Phase 6 (Executor/ChangeSet).
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { renameOverwrite } from "../fs-atomic.js";
 import { resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import type { ChangeSet, ExecReport, ValidationResult } from "../executor/types.js";
@@ -111,7 +112,7 @@ export function writeChangeSet(cs: ChangeSet): void {
   const content = JSON.stringify(cs, null, 2) + "\n";
   const tmpPath = changeSetPath() + "." + randomUUID();
   writeFileSync(tmpPath, content);
-  renameSync(tmpPath, changeSetPath());
+  renameOverwrite(tmpPath, changeSetPath());
 }
 
 /**
@@ -126,7 +127,7 @@ export function writeSynthReport(r: SynthReport): void {
   const content = JSON.stringify(r, null, 2) + "\n";
   const tmpPath = synthReportPath() + "." + randomUUID();
   writeFileSync(tmpPath, content);
-  renameSync(tmpPath, synthReportPath());
+  renameOverwrite(tmpPath, synthReportPath());
 }
 
 // ─── Orchestrator ─────────────────────────────────────────────────────────────

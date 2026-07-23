@@ -3,7 +3,8 @@
 // 100% rule-based. No decision-making, no LLM.
 // Reads JSONL event logs, walks events in seq order, derives a compact snapshot.
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync, statSync } from "node:fs";
+import { renameOverwrite } from "../fs-atomic.js";
 import { isAbsolute, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import type { ExecEvent, EventSource } from "../events/types.js";
@@ -553,5 +554,5 @@ function atomicWrite(targetPath: string, content: string): void {
   }
   const tmpPath = targetPath + "." + randomUUID();
   writeFileSync(tmpPath, content);
-  renameSync(tmpPath, targetPath);
+  renameOverwrite(tmpPath, targetPath);
 }

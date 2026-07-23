@@ -1,7 +1,8 @@
 // Orchestrator — the guardrailed entry point into the Worker.
 // This is the ONLY place the rest of the system calls into the Worker.
 
-import { existsSync, mkdirSync, writeFileSync, renameSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { renameOverwrite } from "../fs-atomic.js";
 import { randomUUID } from "node:crypto";
 import type { Context } from "../state/types.js";
 import type { Plan } from "../planner/types.js";
@@ -85,11 +86,11 @@ export function writeProposal(p: Proposal): void {
   const histPath = dir + "/" + p.id + ".json";
   const histTmp = histPath + "." + randomUUID();
   writeFileSync(histTmp, content);
-  renameSync(histTmp, histPath);
+  renameOverwrite(histTmp, histPath);
 
   // Latest pointer.
   const latestPath = proposalPath();
   const latestTmp = latestPath + "." + randomUUID();
   writeFileSync(latestTmp, content);
-  renameSync(latestTmp, latestPath);
+  renameOverwrite(latestTmp, latestPath);
 }

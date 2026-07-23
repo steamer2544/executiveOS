@@ -13,7 +13,8 @@
 // `seq` is never renumbered: dropping events leaves the survivors monotonic, and
 // meta.json's next-seq stays ahead of them.
 
-import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { renameOverwrite } from "../fs-atomic.js";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { execRoot, eventLogPath, advisorPath } from "../paths.js";
@@ -64,7 +65,7 @@ function writeJsonl(path: string, events: ExecEvent[]): void {
   if (!existsSync(path)) return;
   const tmp = path + "." + randomUUID();
   writeFileSync(tmp, events.map((e) => JSON.stringify(e)).join("\n") + (events.length > 0 ? "\n" : ""));
-  renameSync(tmp, path);
+  renameOverwrite(tmp, path);
 }
 
 /**

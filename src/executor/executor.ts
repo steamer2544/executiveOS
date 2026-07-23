@@ -1,7 +1,8 @@
 // Executor — applies a ChangeSet safely on an isolated git branch.
 // 100% deterministic, rule-based, NO LLM.
 
-import { existsSync, mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { renameOverwrite } from "../fs-atomic.js";
 import { resolve, dirname } from "node:path";
 import { randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
@@ -203,5 +204,5 @@ export function writeReport(r: ExecReport): void {
   const tmpPath = reportPath + "." + randomUUID();
 
   writeFileSync(tmpPath, content);
-  renameSync(tmpPath, reportPath);
+  renameOverwrite(tmpPath, reportPath);
 }

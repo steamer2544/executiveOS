@@ -9,7 +9,7 @@ import { buildState, writeState } from "../state/builder.js";
 import { plan, writePlan } from "../planner/planner.js";
 import { buildDigest } from "../report/digest.js";
 import { append } from "../events/store.js";
-import { loadConfig, updateTranscribeConfig, updateScreenConfig, updateAutonomyConfig, readAutonomyConfig, TRANSCRIBE_PRESETS } from "../config.js";
+import { loadConfig, llmTimeoutMs, updateTranscribeConfig, updateScreenConfig, updateAutonomyConfig, readAutonomyConfig, TRANSCRIBE_PRESETS } from "../config.js";
 import { modelsDir, vendorDir } from "../paths.js";
 import { readStore, pending } from "../advisor/store.js";
 import { runAdvisor, decideProposal } from "../advisor/advisor.js";
@@ -38,6 +38,12 @@ const STATIC_TYPES: Record<string, string> = {
   ".bin": "application/octet-stream",
   ".txt": "text/plain; charset=utf-8",
 };
+
+// Model download runs in the background: the payload is ~81MB, far longer than any
+// legal idleTimeout. POST kicks it off, GET /api/transcribe/status reports progress.
+let downloadRunning = false;
+let downloadResult: unknown = null;
+let downloadError: string | null = null;
 
 /** Serve a file from `root` for a URL like `/vendor/<rel>`, with path-safety (no `..` escape). */
 function serveStatic(root: string, rel: string): Response {
@@ -87,13 +93,19 @@ export interface UiServerOptions {
 
 /** Start the dashboard server. Returns the Bun Server (call .stop() to close). */
 export function startUiServer(opts: UiServerOptions) {
+  // The server must outlive the slowest handler. /api/propose awaits the LLM gateway,
+  // whose client timeout floors at llmTimeoutMs (120s), so an equal server timeout races
+  // it. Bun caps idleTimeout at 255s.
+  let idleTimeout = 150;
+  try {
+    idleTimeout = Math.min(255, Math.ceil(llmTimeoutMs(loadConfig()) / 1000) + 30);
+  } catch {
+    // unreadable config at startup must not stop the dashboard from serving
+  }
   return Bun.serve({
     port: opts.port,
     hostname: opts.hostname ?? "127.0.0.1",
-    // Bun's default is 10s, which a real event log outgrows: /api/state rebuilds
-    // state+plan+digest from every JSONL log, and /api/propose|/api/transcribe
-    // wait on a remote gateway. A timed-out request shows up as a dead dashboard.
-    idleTimeout: 120,
+    idleTimeout,
     async fetch(req): Promise<Response> {
       const url = new URL(req.url);
 
@@ -153,7 +165,10 @@ export function startUiServer(opts: UiServerOptions) {
       if (req.method === "GET" && url.pathname === "/api/transcribe/status") {
         try {
           const cfg = loadConfig();
-          return Response.json(wasmAssetsStatus(cfg.transcribe?.wasmModel ?? "Xenova/whisper-base"));
+          return Response.json({
+            ...wasmAssetsStatus(cfg.transcribe?.wasmModel ?? "Xenova/whisper-base"),
+            download: { running: downloadRunning, result: downloadResult, error: downloadError },
+          });
         } catch (err) {
           return Response.json({ error: (err as Error).message }, { status: 500 });
         }
@@ -164,10 +179,19 @@ export function startUiServer(opts: UiServerOptions) {
           const cfg = loadConfig();
           const body = (await req.json().catch(() => ({}))) as { model?: string };
           const modelId = body.model || cfg.transcribe?.wasmModel || "Xenova/whisper-base";
-          const result = await downloadWasmAssets(modelId);
-          return Response.json(result, { status: result.ok ? 200 : 502 });
+          if (downloadRunning) {
+            return Response.json({ started: false, running: true }, { status: 200 });
+          }
+          downloadRunning = true;
+          downloadResult = null;
+          downloadError = null;
+          downloadWasmAssets(modelId)
+            .then((r) => { downloadResult = r; })
+            .catch((e) => { downloadError = (e as Error).message; })
+            .finally(() => { downloadRunning = false; });
+          return Response.json({ started: true, running: true }, { status: 202 });
         } catch (err) {
-          return Response.json({ ok: false, error: (err as Error).message }, { status: 500 });
+          return Response.json({ error: (err as Error).message }, { status: 500 });
         }
       }
 
