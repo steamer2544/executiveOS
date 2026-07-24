@@ -29,6 +29,34 @@
 > + GOTCHA §8 (the `page.ts` template-literal backslash trap that e2e caught). **`config.agent.repoSearchRoots`
 > defaults to `[]` (discovery off)** — it is set in the owner's runtime config, not in source defaults.
 
+> **🚀 The repo is now PUBLIC on GitHub** — `https://github.com/steamer2544/executiveOS` (`origin/main`),
+> MIT licensed. History was secret-scanned clean before the first push (`.env`/`.executive` never tracked;
+> the only token-shaped hits are fake fixtures in `agent.test.ts`). **Anything committed from here is
+> world-visible** — keep secrets in `.env` (gitignored) as always, and secret-scan again before any push
+> that touched config/fixtures: `git grep -nE "MTUz|sk-|xox[baprs]-|-----BEGIN|Bearer [A-Za-z0-9._-]{20}"
+> $(git rev-list --all)` (expect only the two `agent.test.ts` fixtures).
+>
+> **▶️ NEXT UP — the owner said "ลุยต่อให้หมดเลย" (do the rest), then cleared context. Priority order:**
+> 1. **Phase 38 — sandbox `run_command` (highest value; it is the biggest remaining risk).** The agent's
+>    shell tool runs unsandboxed with the owner's privileges. **Already mitigated at runtime:** the owner's
+>    `config.agent.trustedTools` is now `[]`, so every `run_command` asks for confirmation (was
+>    `["run_command"]`). The code default was always `[]` (safe), so a stranger cloning is fine. **The
+>    real fix to build:** an allowlist (`bun test`, `git …`, `npm run …`), a deny-list for obviously
+>    destructive commands (`rm -rf`, `curl … | sh`, etc.), and a hard rule that `run_command`/`edit_files`
+>    can never be added to `trustedTools` (only read/emit tools may be trusted). `run_command` already has
+>    a timeout + output cap (`src/agent/tools.ts`). Scope this for claude9arm; keep it in `src/agent/`.
+> 2. **Phase 39 — state decay/TTL.** Root-cause fix for stale signals: this session had to `emit
+>    system.unblocked` + empty `system.task` by hand because a confirmed-then-never-cleared `system.blocked`
+>    (seq 4838) and a stale `system.task` (seq 4985) had overridden reality forever ("newest wins, no
+>    expiry"). Give `blocked`/`deadline`/manual `task` an age-out in the State Builder (deterministic, no
+>    LLM), so a day-old block stops dominating. Pure `src/state/builder.ts` change + tests.
+> 3. **SQLite/Drizzle storage** — the JSONL log is 5,500+ events. Planned since Phase 1; the log still
+>    works, so this is the lowest-urgency of the three. `compact` exists for noise but not for scale.
+>
+> **Deferred nits from Phase 37's /scrutinize (not bugs, don't forget):** `discoverRepos` re-scans the
+> filesystem on every unknown-repo tool call (no cache) — add a per-turn/short-TTL cache if it feels slow;
+> same-basename repos across two search roots resolve to the first silently.
+
 > **Design record (built in Phase 36, kept for the reasoning):** Discord is **text-first, voice
 > deferred** — the dashboard already does two-way voice locally (hold-Space in, `speechSynthesis` out),
 > so Discord's job is *reach*, not richness. A Discord reply enters the **same** `runTurn`/

@@ -338,3 +338,9 @@ See [`CLAUDE.md`](./CLAUDE.md) for the full phase-by-phase history and the two-`
   image local anyway.
 - **SQLite/Drizzle** storage — the JSONL log is fine until it isn't.
 - **Long-term goals** (`planner.md`) and file-editable decision rules (`rules.md`).
+
+---
+
+## License
+
+[MIT](./LICENSE) © 2026 Ratthakorn.
