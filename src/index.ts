@@ -34,6 +34,7 @@ import { runInference, writeInference } from "./infer/infer.js";
 import { inferredPath } from "./paths.js";
 import { runAdvisor, decideProposal } from "./advisor/advisor.js";
 import { runTurn, resumeTurn } from "./agent/loop.js";
+import { chatErrorMessage } from "./agent/protocol.js";
 import type { Config } from "./config.js";
 import type { Channel, InboundMessage } from "./channel/types.js";
 import { createDiscordChannel } from "./channel/discord.js";
@@ -189,7 +190,7 @@ function makeInboundHandler(
           : undefined,
       });
     } catch (err) {
-      await channel.send({ text: "ขอโทษครับ พัง: " + (err as Error).message });
+      await channel.send({ text: chatErrorMessage(err) });
     }
   };
 }

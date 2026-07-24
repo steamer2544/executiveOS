@@ -225,41 +225,108 @@ export class AnthropicChatBackend implements ChatBackend {
       }));
     }
 
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), this.opts.timeoutMs);
-    try {
-      const headers: Record<string, string> = {
-        "Content-Type": "application/json",
-        "anthropic-version": "2023-06-01",
-      };
-      if (this.opts.apiKey) headers["Authorization"] = "Bearer " + this.opts.apiKey;
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+      "anthropic-version": "2023-06-01",
+    };
+    if (this.opts.apiKey) headers["Authorization"] = "Bearer " + this.opts.apiKey;
+    const payload = JSON.stringify(body);
 
-      const res = await fetch(this.opts.baseUrl + "/v1/messages", {
-        method: "POST",
-        headers,
-        body: JSON.stringify(body),
-        signal: controller.signal,
-      });
-      if (!res.ok) {
-        const text = await res.text();
-        throw new Error(`agent HTTP ${res.status}: ${text.slice(0, 400)}`);
+    // Retry ONCE on a transient failure — an abort/timeout, a network error, or a gateway
+    // 5xx/524. This gateway's latency is bursty (usually 1-6 s, occasionally >120 s → an
+    // abort); a single retry turns a one-off spike into a normal answer instead of a dead
+    // turn. A 4xx is NOT retried: it is a real request problem, and the loop's native→json
+    // tools-downgrade (isToolsUnsupported) depends on seeing it.
+    const MAX_ATTEMPTS = 2;
+    let lastErr: unknown;
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), this.opts.timeoutMs);
+      try {
+        const res = await fetch(this.opts.baseUrl + "/v1/messages", {
+          method: "POST",
+          headers,
+          body: payload,
+          signal: controller.signal,
+        });
+        if (!res.ok) {
+          const text = await res.text();
+          if (res.status >= 500 && attempt < MAX_ATTEMPTS) {
+            lastErr = new Error(`agent HTTP ${res.status}: ${text.slice(0, 200)}`);
+            await sleep(RETRY_BACKOFF_MS);
+            continue;
+          }
+          throw new Error(`agent HTTP ${res.status}: ${text.slice(0, 400)}`);
+        }
+        const json = await res.json();
+        const step = parseNativeStep(json);
+        if (native) return step;
+
+        // json protocol: the tool call is inside the text.
+        const call = parseJsonToolCall(step.text);
+        if (!call) return { text: step.text, toolCalls: [], stopReason: step.stopReason };
+        return {
+          text: stripToolBlock(step.text),
+          toolCalls: [{ id: crypto.randomUUID(), ...call }],
+          stopReason: step.stopReason,
+        };
+      } catch (e) {
+        lastErr = e;
+        if (attempt < MAX_ATTEMPTS && isTransientNetworkError(e)) {
+          await sleep(RETRY_BACKOFF_MS);
+          continue;
+        }
+        throw e;
+      } finally {
+        clearTimeout(timer);
       }
-      const json = await res.json();
-      const step = parseNativeStep(json);
-      if (native) return step;
-
-      // json protocol: the tool call is inside the text.
-      const call = parseJsonToolCall(step.text);
-      if (!call) return { text: step.text, toolCalls: [], stopReason: step.stopReason };
-      return {
-        text: stripToolBlock(step.text),
-        toolCalls: [{ id: crypto.randomUUID(), ...call }],
-        stopReason: step.stopReason,
-      };
-    } finally {
-      clearTimeout(timer);
     }
+    // Only reached if the last attempt was a retryable 5xx (the catch path rethrows directly).
+    throw lastErr ?? new Error("agent: request failed");
   }
+}
+
+/** Backoff between the two attempts. Short — a transient blip clears fast, and after a
+ *  120 s abort an extra pause is negligible. */
+const RETRY_BACKOFF_MS = 500;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+/**
+ * A human, actionable Thai message for a failed chat turn (Phase 29.2 "failure honesty":
+ * never leak a raw exception like "The operation was aborted." to the owner). Distinguishes
+ * a timeout — the gateway is sometimes slow, so just resend — from a real request error.
+ * The retry above already ran, so a timeout here means BOTH attempts exceeded the deadline.
+ */
+export function chatErrorMessage(e: unknown): string {
+  const err = e as { name?: string; message?: string };
+  const msg = String(err?.message ?? "");
+  if (err?.name === "AbortError" || /abort|timed?\s?out/i.test(msg)) {
+    return "gateway ตอบช้าเกินไป (ลองอัตโนมัติ 2 ครั้งแล้ว) — บางทีมันช้าชั่วคราวครับ ลองพิมพ์มาใหม่อีกทีได้เลย";
+  }
+  if (/HTTP 4\d\d/.test(msg)) {
+    return "คำขอมีปัญหา (gateway ปฏิเสธ): " + msg.slice(0, 200);
+  }
+  if (/HTTP 5\d\d/.test(msg)) {
+    return "gateway มีปัญหาชั่วคราว (5xx) — ลองใหม่อีกครั้งครับ";
+  }
+  return "ขอโทษครับ พัง: " + (msg || "unknown error");
+}
+
+/** A transient failure worth exactly one retry: an abort/timeout or a network-level error.
+ *  Deliberately NOT any HTTP status — a 4xx is a real request problem (and the loop's
+ *  tools-downgrade path needs to see it); 5xx retry is handled inline at the call site. */
+export function isTransientNetworkError(e: unknown): boolean {
+  const err = e as { name?: string; message?: string; code?: string };
+  if (err?.name === "AbortError") return true;
+  const msg = String(err?.message ?? "");
+  const code = String(err?.code ?? "");
+  return (
+    /abort|timed?\s?out|ECONNRESET|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN|fetch failed|network|socket hang/i.test(msg) ||
+    /ECONNRESET|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN/.test(code)
+  );
 }
 
 /** Does this error look like the gateway refusing the `tools` field? */

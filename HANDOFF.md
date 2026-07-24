@@ -6,7 +6,7 @@
 > Last updated after **Phase 39 + 39.1** (state decay/TTL; deadline decay as an opt-in dashboard toggle),
 > **Phase 38** (sandbox `run_command` + hard trust rule), **Phase 37** (repo discovery + chat markdown/
 > scroll + secrets gate), and **Phase 36 going LIVE** (Discord). Everything through 39.1 is pushed to
-> `origin/main`. **708 passing tests** + one opt-in browser e2e, all green.
+> `origin/main`. **720 passing tests** + one opt-in browser e2e, all green.
 >
 > **✅ Phase 36 is LIVE.** The owner supplied a bot token + `ownerId`, ran `ui`, and the bot **DM-answered
 > from real state** (asked "ตอนนี้ผมทำอะไรอยู่" → correct project/task/branch/file). What remains is the
@@ -47,6 +47,14 @@
 >    directly. Keep the event-append contract (`append`/`read`/`tail`, monotonic `seq`) identical so the
 >    State Builder / watchers don't change; swap the JSONL EventStore for a SQLite-backed one behind the
 >    same interface.
+>
+> **Agent chat resilience (this session, `/debug-mantra`):** the Discord bot answered "สวัสดี" with
+> **"ขอโทษครับ พัง: The operation was aborted."** — diagnosed live as a **transient gateway latency spike
+> >120s** (the exact same message replayed against the real transcript answered in 6.7s; probing also
+> **proved the gateway supports native `tools`** — 200/~1s with all 15 schemas). Fixed on our side:
+> `AnthropicChatBackend.step()` now **retries once** on a transient abort/timeout/network/5xx (NOT a 4xx —
+> the tools-downgrade needs it), and `chatErrorMessage()` gives an honest Thai message in both front doors
+> instead of the raw exception. 720 tests. See CLAUDE.md "Agent chat resilience" + GOTCHA §7.
 >
 > **Recently shipped this session (all pushed):**
 > - **Phase 38 — sandbox `run_command`** — `classifyCommand` → deny/allow/ask; a **denylist in code**

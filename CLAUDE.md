@@ -1108,6 +1108,24 @@ docs/scopes/           # per-phase specs (the contract handed to the implementer
   restored. `daysPastDue` (the local copy of the Planner's `daysOverdue`, justified by the state-below-
   planner layering) returns with the feature. Files: `src/state/builder.ts`, `src/config.ts`,
   `src/ui/page.ts`, `src/state/builder.test.ts`, `src/config.test.ts`.
+- **Agent chat resilience — DONE** (architect, this session, `/debug-mantra`): the Discord bot replied
+  **"ขอโทษครับ พัง: The operation was aborted."** to a plain "สวัสดี". Debugged live: the gateway was
+  probed healthy (200 in ~1s **even with all 15 tool schemas** — which also settles the long-open question:
+  **the 9arm gateway DOES support native `tool_use`**), TLS issuer = Google (not Zscaler), and the exact
+  same "สวัสดี" replayed against the real transcript answered in **6.7s** — so the incident was a **transient
+  gateway latency spike >120s** (matches the documented "6s–>1min" variance + the 13:25→13:27 = 120 s
+  `AbortController` deadline). Root cause on our side: the agent chat path had **no retry** (unlike the
+  daemon) and leaked the **raw abort string** to the owner. Fix: (1) `AnthropicChatBackend.step()` now
+  **retries once** on a transient failure — an abort/timeout, a network error, or a gateway **5xx/524** —
+  with a 500 ms backoff; a **4xx is NOT retried** (real request problem, and the loop's native→json
+  `isToolsUnsupported` downgrade depends on seeing it). (2) New `chatErrorMessage()` gives an **honest,
+  actionable Thai message** (Phase 29.2 "failure honesty") — a timeout → "gateway ตอบช้า … ลองใหม่อีกที",
+  never the raw exception — wired into **both** front doors (Discord `index.ts`, dashboard `/api/chat` +
+  `/api/chat/confirm`); the CLI keeps the raw message (dev diagnostic). Owner chose **retry-once-on-timeout**
+  (worst case ~4 min if the gateway is truly down, but Discord isn't a live wait; a transient spike recovers
+  in 1–6 s). 720 passing tests (+12: `isTransientNetworkError` / `chatErrorMessage` / `step()` retry via a
+  stubbed `globalThis.fetch`). **Sabotage-checked:** `MAX_ATTEMPTS=1` fails exactly the 3 retry tests.
+  Files: `src/agent/protocol.ts` (+ `protocol.test.ts`), `src/index.ts`, `src/ui/server.ts`.
 - **Loop complete (manual trigger):** `auto --apply` runs the whole chain in one command; the human
   reviews/merges the `executive/change-<id>` branch.
 

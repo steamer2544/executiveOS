@@ -249,9 +249,17 @@
   owner cannot detect. Phase 33.1 already showed it will invent a *subject* while citing real numbers.
 - **Never hand a language model a raw millisecond value** — restated here because the agent's tools are
   a new place to get it wrong. `humanDuration()` / `explainPatterns()` spell the unit out. See §1.
-- **Whether the 9arm gateway supports native `tools` is UNMEASURED.** Every probe returned 524 (Arm's
-  box down — §1), including a 1-word prompt with no tools, so the outage says nothing about tool
-  support. `bun scripts/probe-tools.ts` settles it; both protocols work meanwhile.
+- **The 9arm gateway DOES support native `tools`** — MEASURED this session: a `/v1/messages` POST with
+  all 15 tool schemas + "สวัสดี" returned 200 in ~1s with a normal `end_turn` text reply (earlier
+  "UNMEASURED" was only because every probe had hit a 524 outage). `toolProtocol:"auto"` (native, downgrades
+  to json on a 4xx naming `tools`) is the right default.
+- **A cryptic "The operation was aborted." from the chat = a transient gateway latency spike, NOT a code
+  bug.** The gateway's latency is bursty (usually 1–6s, occasionally >120s → the `AbortController` fires →
+  that message). The agent chat path now **retries once** on an abort/timeout/network/5xx (`step()` in
+  `protocol.ts`, `MAX_ATTEMPTS=2`; a 4xx is NOT retried — the tools-downgrade needs it) and surfaces an
+  honest Thai message via `chatErrorMessage()` instead of the raw exception. If chat still fails twice,
+  check §1 (Arm's box / Zscaler) — but a one-off is expected and self-heals. Debugged live by replaying the
+  exact failing "สวัสดี" against the real transcript: it answered in 6.7s, proving transient.
 - **The agent can reach ANY repo, not just the current one — but a named-but-unknown repo must FAIL,
   never silently fall back.** `resolveRepo` returns `null` for a name it cannot resolve (registered in
   `watch.repos` OR discovered under `agent.repoSearchRoots`); every caller turns that into an error. The

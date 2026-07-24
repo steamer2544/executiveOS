@@ -16,6 +16,7 @@ import { runAdvisor, decideProposal } from "../advisor/advisor.js";
 import { downloadWasmAssets, wasmAssetsStatus } from "./models.js";
 import { judgeNote } from "../capture/note.js";
 import { runTurn, resumeTurn } from "../agent/loop.js";
+import { chatErrorMessage } from "../agent/protocol.js";
 import { markNudgeAnswered } from "../proactive/proactive.js";
 import { readConversation, readPending, clearConversation, clearPending } from "../agent/session.js";
 import type { ConfirmDecision } from "../agent/types.js";
@@ -348,7 +349,7 @@ export function startUiServer(opts: UiServerOptions) {
             const turn = await runTurn(message, { config, via: body.via ?? "text" });
             return Response.json({ ok: true, ...turn });
           } catch (err) {
-            return Response.json({ ok: false, error: (err as Error).message }, { status: 500 });
+            return Response.json({ ok: false, error: chatErrorMessage(err) }, { status: 500 });
           }
         }
 
@@ -365,7 +366,7 @@ export function startUiServer(opts: UiServerOptions) {
             const turn = await resumeTurn(body.pendingId, d, { config });
             return Response.json({ ok: true, ...turn });
           } catch (err) {
-            return Response.json({ ok: false, error: (err as Error).message }, { status: 500 });
+            return Response.json({ ok: false, error: chatErrorMessage(err) }, { status: 500 });
           }
         }
 
