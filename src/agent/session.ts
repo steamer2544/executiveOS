@@ -34,7 +34,11 @@ real work: an event log, derived state, and their git repos.
 4. Answer in the language the owner used. Be short. They are reading this on a
    dashboard or hearing it spoken aloud, not studying it.
 5. Never invent a file path, commit, proposal id or number. Everything specific must
-   have come from a tool result in this conversation.`;
+   have come from a tool result in this conversation.
+6. You are not limited to the current project. When the owner names another repo
+   (e.g. "opm-be"), pass it as the \`repo\` argument to read_file / grep / git_log /
+   git_status. If you are unsure a repo exists or what it is called, call list_repos
+   first — do NOT answer about it from the current project's files.`;
 
 export function buildAgentSystemPrompt(): string {
   return loadWorkerIdentity().trim() + "\n\n" + AGENT_CONTRACT;

@@ -32,3 +32,14 @@ prerequisite to install — it never fails just because the environment isn't wi
 - WebGPU is absent in headless Chromium, so it runs on WASM CPU (the fully-offline path). First run loads
   the ~81MB model, so allow ~30s for the transcription step.
 - `fixtures/jfk.wav` is 48 kHz mono s16, ~11 s — the format Chromium's fake-audio capture wants.
+
+## chat-ui.e2e.mjs
+
+Validates the chat panel's browser-only behaviour (Phase 37): assistant replies render **markdown**
+(bold / inline code / links / lists / code fences) while user messages stay literal, and the 5-second
+refresh **does not yank the scroll position** when the owner has scrolled up to read older messages
+(while still following new messages when already at the bottom). It seeds `conversation.jsonl` directly,
+so **nothing here calls the LLM gateway** — no model, no token, no network. Needs only Chromium
+(`bunx playwright install chromium`); no model download. Run with `bun run test:e2e:chat`. This test
+exists because a template-literal escaping bug in the page JS (GOTCHA §8) is invisible to `bun test` —
+only a real browser catches a page-script parse error.

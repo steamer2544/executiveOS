@@ -716,13 +716,69 @@ function heardVoice(text) {
   else emit("system.note", { msg: text, via: "voice" });
 }
 
+// Inline markdown on ALREADY-ESCAPED text: **bold**, *italic*, \`code\`, [label](url).
+// Escaping happens first, so this can never inject markup the model didn't intend.
+// NOTE: this whole file is one template literal, so every regex backslash is DOUBLED
+// in source (\\s, \\n, \\*, …) to survive emission — see GOTCHA.md. Backticks are \`.
+function mdInline(s) {
+  return s
+    .replace(/\`([^\`]+)\`/g, '<code style="background:var(--line);padding:1px 5px;border-radius:4px;font-size:12px">$1</code>')
+    .replace(/\\*\\*([^*]+)\\*\\*/g, '<strong>$1</strong>')
+    .replace(/(^|[^*])\\*([^*\\n]+)\\*/g, '$1<em>$2</em>')
+    .replace(/\\[([^\\]]+)\\]\\((https?:\\/\\/[^)\\s]+)\\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+}
+
+// Minimal block markdown → HTML for assistant replies: headings, \`\`\`fences\`\`\`,
+// - / 1. lists, and paragraphs. Deliberately small; not a full CommonMark parser.
+function renderMd(src) {
+  const lines = String(src ?? "").split("\\n");
+  let html = "", i = 0, list = null;
+  const closeList = () => { if (list) { html += "</" + list + ">"; list = null; } };
+  while (i < lines.length) {
+    const line = lines[i];
+    if (/^\`\`\`/.test(line)) {                       // code fence
+      closeList();
+      const buf = [];
+      i++;
+      while (i < lines.length && !/^\`\`\`\\s*$/.test(lines[i])) { buf.push(lines[i]); i++; }
+      i++;
+      html += '<pre style="background:var(--line);border-radius:8px;padding:8px 10px;overflow-x:auto;margin:6px 0;font-size:12px;white-space:pre">' + esc(buf.join("\\n")) + '</pre>';
+      continue;
+    }
+    const h = line.match(/^(#{1,3})\\s+(.*)$/);        // heading
+    if (h) {
+      closeList();
+      const sz = h[1].length === 1 ? "15px" : h[1].length === 2 ? "14px" : "13px";
+      html += '<div style="font-weight:700;margin:7px 0 2px;font-size:' + sz + '">' + mdInline(esc(h[2])) + '</div>';
+      i++; continue;
+    }
+    const li = line.match(/^\\s*([-*]|\\d+\\.)\\s+(.*)$/); // list item
+    if (li) {
+      const tag = /\\d/.test(li[1]) ? "ol" : "ul";
+      if (list !== tag) { closeList(); html += '<' + tag + ' style="margin:4px 0;padding-left:20px">'; list = tag; }
+      html += '<li>' + mdInline(esc(li[2])) + '</li>';
+      i++; continue;
+    }
+    if (line.trim() === "") { closeList(); i++; continue; } // blank
+    closeList();                                            // paragraph line
+    html += '<div>' + mdInline(esc(line)) + '</div>';
+    i++;
+  }
+  closeList();
+  return html;
+}
+
 function bubble(role, text, extra) {
   const mine = role === "user";
   const bg = mine ? "var(--accent)" : "var(--card)";
   const fg = mine ? "#fff" : "inherit";
+  // The owner asked for rendered markdown; user messages stay literal (pre-wrap).
+  const body = mine
+    ? '<span style="white-space:pre-wrap">' + esc(text) + '</span>'
+    : renderMd(text);
   return '<div style="align-self:' + (mine ? "flex-end" : "flex-start") + ';max-width:86%;background:' + bg +
-    ';color:' + fg + ';border:1px solid var(--line);border-radius:10px;padding:7px 11px;white-space:pre-wrap">' +
-    esc(text) + (extra || "") + '</div>';
+    ';color:' + fg + ';border:1px solid var(--line);border-radius:10px;padding:7px 11px;line-height:1.5">' +
+    body + (extra || "") + '</div>';
 }
 
 function toolTrace(calls) {
@@ -733,6 +789,9 @@ function toolTrace(calls) {
 
 function renderChat(messages, pending) {
   const log = $("chatLog");
+  // Only auto-scroll if the owner is already at the bottom — otherwise the 5s
+  // refresh yanks them down while they're reading older messages.
+  const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 40;
   let html = "";
   let calls = [];
   for (const m of messages) {
@@ -741,7 +800,7 @@ function renderChat(messages, pending) {
     else html += bubble("user", m.text + (m.via === "voice" ? " 🎤" : ""));
   }
   log.innerHTML = html || '<span class="muted">ยังไม่ได้คุยกันเลย</span>';
-  log.scrollTop = log.scrollHeight;
+  if (atBottom) log.scrollTop = log.scrollHeight;
 
   // The confirm chip. One tap runs it; "ไว้ใจ" means never being asked about this
   // tool again (it removes the prompt, not the guardrails behind it).

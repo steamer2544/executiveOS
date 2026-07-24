@@ -252,3 +252,23 @@
 - **Whether the 9arm gateway supports native `tools` is UNMEASURED.** Every probe returned 524 (Arm's
   box down — §1), including a 1-word prompt with no tools, so the outage says nothing about tool
   support. `bun scripts/probe-tools.ts` settles it; both protocols work meanwhile.
+- **The agent can reach ANY repo, not just the current one — but a named-but-unknown repo must FAIL,
+  never silently fall back.** `resolveRepo` returns `null` for a name it cannot resolve (registered in
+  `watch.repos` OR discovered under `agent.repoSearchRoots`); every caller turns that into an error. The
+  old code fell back to the default repo, so asking about "opm-be" returned *executive's* files with
+  `ok:true` and the agent confidently answered about the wrong project — the §7 confident-wrong failure
+  mode, via a different door. Discovery is by BASENAME only (never builds a path from the supplied name),
+  so an escaping name can't leak out. (Phase 37)
+
+## 8. The UI page (`src/ui/page.ts` is ONE giant template literal)
+
+- **Every regex backslash in the inline `<script>` must be DOUBLED in source.** *Symptom:* the chat page
+  threw `Invalid regular expression: missing /` at load, the whole inline script failed to parse, and the
+  chat card never appeared — yet `bun test` was fully green (unit tests can't run the browser JS). *Cause:*
+  `renderPage()` returns a `` `…` `` template literal, so TypeScript eats the escapes **before emission**:
+  `\s`→`s`, `\d`→`d`, `\*`→`*`, `\n`→a real newline, `\[`→`[`. A regex like `/^\s*(\d+\.)/` ships as
+  `/^s*(d+.)/`. *Fix:* write `\\s`, `\\d`, `\\*`, `\\n`, `\\[` in source (backticks stay `` \` ``). Verify
+  with `bun -e 'import{renderPage}from"./src/ui/page.ts";console.log(renderPage())'` and eyeball the emitted
+  regex, or just run the browser e2e. This is the §4/§7 lesson again: **the Playwright e2e
+  (`bun run test:e2e:chat`) is the only thing that catches a page-JS parse error** — mirror any new inline-JS
+  logic with a check there. (Phase 37)

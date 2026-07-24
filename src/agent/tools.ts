@@ -30,7 +30,27 @@ const MAX_TOOL_OUTPUT = 20000; // chars handed to the model, per call
 const DEFAULT_FILE_BYTES = 64 * 1024;
 
 /** Directory names never walked or read, regardless of roots. */
-const DENY_SEGMENTS = new Set([".git", ".executive", "node_modules"]);
+const DENY_SEGMENTS = new Set([
+  ".git", ".executive", "node_modules",
+  ".ssh", ".aws", ".gnupg", ".gpg", // secret-bearing directories
+]);
+
+/**
+ * Final-segment file names that hold secrets — never handed to the model, even
+ * inside an allowed root. read_file/edit_files reach every discovered repo now
+ * (Phase 37), so a `.env` in any of them is one prompt-injection away from being
+ * echoed into a reply, the conversation log, or a Discord DM. grep already skips
+ * dotfiles; this closes the same door for the path-based tools.
+ */
+function isSecretFile(name: string): boolean {
+  const n = name.toLowerCase();
+  // .env / .env.local / .env.production — but NOT the committed templates.
+  if (n === ".env") return true;
+  if (n.startsWith(".env.") && !/\.(example|sample|template|dist)$/.test(n)) return true;
+  if (/\.(pem|key|p12|pfx|keystore)$/.test(n)) return true;
+  return [".npmrc", ".pgpass", ".netrc", ".htpasswd", "credentials", "id_rsa",
+    "id_dsa", "id_ecdsa", "id_ed25519"].includes(n);
+}
 
 // ─── Path safety ──────────────────────────────────────────────────────────────
 
@@ -54,6 +74,9 @@ export function resolveSafePath(p: string, roots: string[]): string | null {
   const segments = raw.split("/").filter((s) => s !== "" && s !== ".");
   if (segments.some((s) => s === "..")) return null;
   if (segments.some((s) => DENY_SEGMENTS.has(s))) return null;
+  // The target file itself must not be a secret (the last segment).
+  const leaf = segments[segments.length - 1];
+  if (leaf !== undefined && isSecretFile(leaf)) return null;
 
   for (const root of roots) {
     const candidate = resolve(root, segments.join(sep));
@@ -65,13 +88,103 @@ export function resolveSafePath(p: string, roots: string[]): string | null {
   return null;
 }
 
-/** Resolve a repo name to its root; falls back to the first configured root. */
-export function resolveRepo(name: unknown, ctx: ToolContext): string {
+/** A single, safe path segment: no separators, no `..`, no drive letter, not a deny name. */
+function isSafeName(name: string): boolean {
+  if (name === "" || name === "." || name === "..") return false;
+  if (/[\\/]/.test(name) || /^[a-zA-Z]:/.test(name)) return false;
+  return !DENY_SEGMENTS.has(name);
+}
+
+/** Is `dir` a git repository (has a .git entry)? */
+function isGitRepo(dir: string): boolean {
+  try {
+    return existsSync(join(dir, ".git"));
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Discover git repos under the configured search roots, up to 2 levels deep.
+ *
+ * This is what lets the owner say "look at opm-be" without registering it: a
+ * search root like `C:/Users/.../source/repos` is scanned for child folders that
+ * are git repos. Bounded (depth ≤ 2, ignored dirs skipped) so it stays cheap.
+ * Returns name → absolute path; a name that collides keeps the first seen.
+ */
+export function discoverRepos(config: Config): Map<string, string> {
+  const found = new Map<string, string>();
+  const roots = (config.agent?.repoSearchRoots ?? []).filter(
+    (r) => typeof r === "string" && r.trim() !== ""
+  );
+
+  const walk = (dir: string, depth: number): void => {
+    if (depth > 2) return;
+    let entries;
+    try {
+      entries = readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      if (entry.name.startsWith(".") || DENY_SEGMENTS.has(entry.name)) continue;
+      const full = join(dir, entry.name);
+      if (isGitRepo(full)) {
+        if (!found.has(entry.name)) found.set(entry.name, resolve(full));
+        continue; // do not descend into a repo
+      }
+      walk(full, depth + 1); // an intermediate folder — look one level deeper
+    }
+  };
+
+  for (const root of roots) {
+    const abs = resolve(root);
+    // The root itself may be a repo (e.g. a search root pointed straight at one).
+    if (isGitRepo(abs)) {
+      const base = abs.replace(/[\\/]+$/, "").split(/[\\/]/).pop() ?? "";
+      if (base && !found.has(base)) found.set(base, abs);
+    }
+    walk(abs, 1);
+  }
+  return found;
+}
+
+/**
+ * Resolve a repo name to its root.
+ *
+ * When NO name is given, defaults to the first configured root. When a name IS
+ * given, it is looked up in (1) the registered watch.repos, then (2) discovered
+ * repos under the configured search roots. A name that matches nothing returns
+ * `null` — the caller must fail rather than silently answer about a DIFFERENT
+ * repo. (Before this fell back to the default repo, so asking about "opm-be"
+ * while it was unknown returned executive's files with `ok:true`, and the agent
+ * confidently reported the wrong project.)
+ */
+export function resolveRepo(name: unknown, ctx: ToolContext): string | null {
   if (typeof name === "string" && name.trim() !== "") {
-    const found = ctx.config.watch?.repos?.find((r) => r.name === name.trim());
-    if (found?.path) return found.path;
+    const wanted = name.trim();
+    const registered = ctx.config.watch?.repos?.find((r) => r.name === wanted);
+    if (registered?.path) return registered.path;
+    if (!isSafeName(wanted)) return null;
+    return discoverRepos(ctx.config).get(wanted) ?? null;
   }
   return ctx.roots[0] ?? process.cwd();
+}
+
+/** The repo names the agent can reach (registered + discovered), for a miss message. */
+export function repoNames(ctx: ToolContext): string {
+  const names = new Set<string>();
+  for (const r of ctx.config.watch?.repos ?? []) {
+    if (typeof r.name === "string" && r.name.trim() !== "") names.add(r.name);
+  }
+  for (const n of discoverRepos(ctx.config).keys()) names.add(n);
+  return names.size > 0 ? [...names].join(", ") : "(none found — configure agent.repoSearchRoots)";
+}
+
+/** Turn a null resolveRepo result into a uniform error string. */
+function unknownRepo(name: unknown, ctx: ToolContext): string {
+  return `unknown repo "${String(name)}" — configured repos: ${repoNames(ctx)}`;
 }
 
 /** Every root the agent may touch: configured repos, else cwd. */
@@ -225,11 +338,20 @@ const readFileTool: AgentTool = {
   kind: "read",
   inputSchema: {
     type: "object",
-    properties: { path: { type: "string", description: "Repo-relative path" } },
+    properties: {
+      path: { type: "string", description: "Repo-relative path" },
+      repo: { type: "string", description: "Repo name to read from; defaults to searching all repos" },
+    },
     required: ["path"],
   },
   async run(args, ctx) {
-    const target = resolveSafePath(String(args.path ?? ""), ctx.roots);
+    let roots = ctx.roots;
+    if (typeof args.repo === "string" && args.repo.trim() !== "") {
+      const repoRoot = resolveRepo(args.repo, ctx);
+      if (!repoRoot) return fail(unknownRepo(args.repo, ctx));
+      roots = [repoRoot];
+    }
+    const target = resolveSafePath(String(args.path ?? ""), roots);
     if (!target) return fail(`path not allowed or not found: ${String(args.path)}`);
     let st;
     try {
@@ -252,7 +374,10 @@ const readFileTool: AgentTool = {
 
 const TEXT_EXT = new Set([
   ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".json", ".md", ".txt", ".yml",
-  ".yaml", ".toml", ".css", ".html", ".sh", ".ps1", ".py", ".go", ".rs", ".sql",
+  ".yaml", ".toml", ".css", ".scss", ".html", ".sh", ".ps1", ".py", ".go", ".rs", ".sql",
+  // .NET / other backends the owner works in (opm-be is C#/ASP.NET).
+  ".cs", ".csproj", ".cshtml", ".razor", ".vb", ".fs", ".fsproj", ".sln", ".props",
+  ".xml", ".config", ".java", ".kt", ".rb", ".php", ".c", ".h", ".cpp", ".hpp",
 ]);
 
 const grepTool: AgentTool = {
@@ -265,6 +390,7 @@ const grepTool: AgentTool = {
     type: "object",
     properties: {
       pattern: { type: "string", description: "Regular expression" },
+      repo: { type: "string", description: "Repo name to search in; defaults to all repos" },
       dir: { type: "string", description: "Optional repo-relative directory to search under" },
     },
     required: ["pattern"],
@@ -280,8 +406,13 @@ const grepTool: AgentTool = {
     }
 
     let searchRoots = ctx.roots;
+    if (typeof args.repo === "string" && args.repo.trim() !== "") {
+      const repoRoot = resolveRepo(args.repo, ctx);
+      if (!repoRoot) return fail(unknownRepo(args.repo, ctx));
+      searchRoots = [repoRoot];
+    }
     if (typeof args.dir === "string" && args.dir.trim() !== "") {
-      const d = resolveSafePath(args.dir, ctx.roots);
+      const d = resolveSafePath(args.dir, searchRoots);
       if (!d) return fail(`directory not allowed or not found: ${args.dir}`);
       searchRoots = [d];
     }
@@ -345,6 +476,7 @@ const gitLog: AgentTool = {
   async run(args, ctx) {
     const n = Math.min(Math.max(Number(args.n) || 10, 1), 50);
     const cwd = resolveRepo(args.repo, ctx);
+    if (!cwd) return fail(unknownRepo(args.repo, ctx));
     const r = git(["log", `-${n}`, "--pretty=format:%h %ad %s", "--date=short"], cwd);
     return r.ok ? ok(r.out || "(no commits)") : fail(r.out);
   },
@@ -362,6 +494,7 @@ const gitStatus: AgentTool = {
   },
   async run(args, ctx) {
     const cwd = resolveRepo(args.repo, ctx);
+    if (!cwd) return fail(unknownRepo(args.repo, ctx));
     const branch = git(["rev-parse", "--abbrev-ref", "HEAD"], cwd);
     const status = git(["status", "--porcelain"], cwd);
     if (!status.ok) return fail(status.out);
@@ -407,6 +540,37 @@ const listProposals: AgentTool = {
         }))
       )
     );
+  },
+};
+
+const listRepos: AgentTool = {
+  name: "list_repos",
+  description:
+    "List the repositories the agent can look at — both the ones registered for watching and " +
+    "any discovered under the owner's configured search roots. Use this to find the right repo " +
+    "name before reading files, grepping, or checking git in a project other than the current one.",
+  kind: "read",
+  inputSchema: { type: "object", properties: {}, required: [] },
+  async run(_args, ctx) {
+    const registered = new Map<string, string>();
+    for (const r of ctx.config.watch?.repos ?? []) {
+      if (typeof r.name === "string" && r.name.trim() !== "" && r.path) {
+        registered.set(r.name, r.path);
+      }
+    }
+    const discovered = discoverRepos(ctx.config);
+    const rows: Array<{ name: string; path: string; source: string }> = [];
+    for (const [name, path] of registered) rows.push({ name, path, source: "watched" });
+    for (const [name, path] of discovered) {
+      if (!registered.has(name)) rows.push({ name, path, source: "discovered" });
+    }
+    if (rows.length === 0) {
+      return ok(
+        "no repos registered or discoverable. The current directory is the only root; " +
+          "set agent.repoSearchRoots to let me find other projects by name."
+      );
+    }
+    return ok(asJson(rows));
   },
 };
 
@@ -499,6 +663,7 @@ const runCommand: AgentTool = {
     const cmd = String(args.cmd ?? "").trim();
     if (!cmd) return fail("cmd is required");
     const cwd = resolveRepo(args.repo, ctx);
+    if (!cwd) return fail(unknownRepo(args.repo, ctx));
     const timeout = ctx.config.agent?.commandTimeoutMs ?? 60000;
     try {
       const proc = Bun.spawnSync(["sh", "-c", cmd], {
@@ -546,6 +711,7 @@ const editFiles: AgentTool = {
     const instruction = String(args.instruction ?? "").trim();
     if (!instruction) return fail("instruction is required");
     const repoRoot = resolveRepo(args.repo, ctx);
+    if (!repoRoot) return fail(unknownRepo(args.repo, ctx));
 
     // Reject unsafe file hints before anything runs. The synthesized ChangeSet is
     // validated again by the Executor — this is the earlier of two gates, not the only one.
@@ -650,6 +816,7 @@ export const READ_TOOLS: AgentTool[] = [
   grepTool,
   gitLog,
   gitStatus,
+  listRepos,
   listProposals,
   listNotifications,
 ];

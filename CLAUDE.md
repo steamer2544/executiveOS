@@ -994,6 +994,47 @@ docs/scopes/           # per-phase specs (the contract handed to the implementer
   token + the already-made decision (DM, hand-rolled client). Spec:
   `docs/scopes/phase-36-proactive-discord.md`. Files: `src/proactive/*`, `src/channel/*`, `src/config.ts`,
   `src/paths.ts`, `src/ui/server.ts`, `src/index.ts`, `.env.example`.
+- **Phase 36 LIVE — DONE** (architect, this session): **Discord validated live.** The owner supplied a
+  bot token (`.env`) + `ownerId` and ran `ui`; the bot **DM-answered from real state** — *"ตอนนี้ผมทำ
+  อะไรอยู่"* → correct project/task/branch/file, and it knew it was `executive` not `opm-be`. So Phase 36
+  is no longer "NOT run live". **Setup gotchas the owner hit (worth remembering):** `config.discord.tokenEnv`
+  is the ENV VAR NAME (`EXECUTIVE_DISCORD_TOKEN`), NOT the token itself — the code does
+  `process.env[tokenEnv]`; the token lives only in `.env`. A bot can only DM a user who **shares a guild**
+  with it (OAuth2 `bot` scope invite). Discord "Application Test Mode" / URL-origin (localhost vs discord
+  proxy) are **Activities/embedded-app** settings — irrelevant to this DM bot; leave the Interactions
+  Endpoint URL blank too. `probe-tools.ts` is unrelated to Discord (it probes the 9arm gateway's native
+  `tools` support, uses `EXECUTIVE_WORKER_KEY`) and is optional — the agent already tool-calls fine via
+  `toolProtocol:"auto"`.
+- **Phase 37 — DONE** (architect impl + self-review + live + browser e2e + /scrutinize, this session):
+  **Agent reaches any repo, chat renders markdown, and a secrets gate.** Driven by the owner telling the
+  dashboard chat to "look at opm-be" and it silently answering about `executive` instead. **(1) Repo
+  discovery (no registration):** `resolveRepo` now looks a name up in `watch.repos` THEN discovers it by
+  BASENAME under `config.agent.repoSearchRoots` (new; scanned ≤2 levels deep for a `.git`); a name that
+  matches nothing returns **`null`** — every caller fails with "unknown repo … configured repos: …"
+  instead of the old **silent fallback to the default repo** (which returned executive's files with
+  `ok:true`, the §7 confident-wrong failure via a different door). New `discoverRepos()` + `list_repos`
+  tool (so the agent can see what's reachable); `read_file`/`grep` now honour a `repo` arg (`read_file`
+  ignored it before — the actual bug the owner saw); `TEXT_EXT` gained `.cs`/`.csproj`/`.cshtml`/… so grep
+  is useful in the owner's .NET repos (opm-be). `AGENT_CONTRACT` gained rule 6 (use `repo`/`list_repos`
+  for other projects). **(2) Chat markdown + scroll:** `renderMd`/`mdInline` in `page.ts` render assistant
+  replies (bold/italic/code/fences/lists/links, escape-first so no injection); user messages stay literal;
+  the 5s refresh **only auto-scrolls when already at the bottom** (no more yanking the owner off a message
+  they're reading). **(3) Secrets gate (found by /scrutinize, live-confirmed):** discovery widened
+  `read_file`/`edit_files` from cwd to all 16 discovered repos, and `resolveSafePath` denied `.git` etc.
+  but **not `.env`** — `read_file .env` returned the file holding `EXECUTIVE_WORKER_KEY` + the Discord
+  token. Now `isSecretFile()` (leaf `.env`/`.env.<env>` except templates, `*.pem|key|p12|pfx`, `id_rsa`,
+  `.npmrc`/`.pgpass`/`.netrc`/…) + secret dirs (`.ssh`/`.aws`/`.gnupg`) are rejected by the shared gate.
+  **Browser e2e added** (`test/e2e/chat-ui.e2e.mjs`, `bun run test:e2e:chat`) — seeds `conversation.jsonl`
+  directly (no gateway/token), asserts markdown + no-yank scroll in real Chromium; it caught a real
+  **template-literal backslash trap** (every regex `\` in `page.ts`'s one big template literal was eaten
+  at emit → the whole inline script `Invalid regular expression`-crashed while `bun test` stayed green →
+  **GOTCHA §8**). 638 passing tests (+18); every new safety test sabotage-checked (fails against pre-fix
+  source). Deferred (noted in scrutinize, not bugs): `discoverRepos` re-scans the FS per call (add a cache
+  later); same-basename repos across two search roots resolve to the first silently. Files:
+  `src/agent/{tools,session,agent.test}.ts`, `src/config.ts`, `src/ui/page.ts`, `test/e2e/chat-ui.e2e.mjs`,
+  `package.json`, `GOTCHA.md`, `test/e2e/README.md`. **Also cleared stale state** (real events, not a bug):
+  a confirmed-then-never-unblocked `system.blocked` + a stale `system.task` were overriding reality —
+  emitted `system.unblocked` + empty `system.task` to clear them.
 - **Loop complete (manual trigger):** `auto --apply` runs the whole chain in one command; the human
   reviews/merges the `executive/change-<id>` branch.
 

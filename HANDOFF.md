@@ -3,22 +3,31 @@
 > **Purpose:** a single doc to resume this project cold if context/memory is lost. Pairs with
 > `CLAUDE.md` (the authoritative phase-by-phase log), `GOTCHA.md` (traps & non-obvious failure modes —
 > read before touching PowerShell/state/tests/LLM), and `README.md` (user-facing overview).
-> Last updated after **Phase 36** (make it speak first — proactive nudges over Discord). **628
-> passing tests**, all green.
+> Last updated after **Phase 37** (repo discovery + chat markdown/scroll + secrets gate) and **Phase 36
+> going LIVE** (Discord). **638 passing tests** + one opt-in browser e2e, all green.
 >
-> **✅ Phase 36 is DONE and committed** (`dc9fa09`) — the long "next task" write-up just below describes
-> what was *built*, kept for its reasoning. **What is actually left is to take it LIVE and then measure:**
-> the code has never run against real Discord. The owner must supply a **bot token** in `.env` under
-> `EXECUTIVE_DISCORD_TOKEN` and their **Discord user id** in `config.discord.ownerId` (the channel
-> refuses to start without the id — it is the auth boundary; anyone can DM a bot and the agent behind it
-> has write tools). Then set `discord.enabled` + `agent.proactive.enabled` + `agent.enabled` true and run
-> `ui` **alone** (running `watch` too opens a second channel + nudge runner on the same token). **Then
-> leave it ~2 weeks and read `.executive/nudges.jsonl`** — `sent` vs `answered` per source is the whole
-> point. **Do NOT add `agent.proactive.trigger: "rules+llm"` until that baseline exists** (it was
-> deliberately cut from Phase 36): a second, unmeasured nudge source makes the ratio uninterpretable.
-> Known designed behavior: the engine nudges on items that *enter* the queue while the daemon runs; a
-> backlog item present at startup is suppressed by the first-tick guard (avoids a restart nudge-storm)
-> and only surfaces in the dashboard/digest.
+> **✅ Phase 36 is LIVE.** The owner supplied a bot token + `ownerId`, ran `ui`, and the bot **DM-answered
+> from real state** (asked "ตอนนี้ผมทำอะไรอยู่" → correct project/task/branch/file). What remains is the
+> **measurement**: leave it running ~2 weeks and read `.executive/nudges.jsonl` — `sent` vs `answered` per
+> source is the whole point. **Do NOT add `agent.proactive.trigger: "rules+llm"` until that baseline
+> exists** (deliberately cut from Phase 36): a second, unmeasured nudge source makes the ratio
+> uninterpretable. **Setup notes from the live bring-up:** `config.discord.tokenEnv` is the ENV VAR NAME
+> (`EXECUTIVE_DISCORD_TOKEN`) not the token (`process.env[tokenEnv]`); the token lives only in `.env`. The
+> bot must **share a guild** with the owner to DM them (OAuth2 `bot`-scope invite). Discord "Application
+> Test Mode" / URL-origin (localhost vs discord proxy) / Interactions Endpoint URL are Activities settings
+> — irrelevant here, leave blank. Run `ui` **alone** (running `watch` too opens a SECOND channel + nudge
+> runner + watchers + Advisor/infer triggers on the same token → doubled everything). Known designed
+> behavior: the engine nudges on items that *enter* the queue while the daemon runs; a backlog item
+> present at startup is suppressed by the first-tick guard (avoids a restart nudge-storm).
+>
+> **✅ Phase 37 highlights** (this session): the dashboard chat renders **markdown** and no longer yanks
+> the scroll on its 5s refresh; the agent can look at **any repo by name** (discovered under
+> `config.agent.repoSearchRoots`, no registration — the owner set `source/repos` + `Programming`) via a
+> new `list_repos` tool + a `repo` arg on `read_file`/`grep`; a **secrets gate** now blocks the agent from
+> reading `.env`/keys/`.ssh` in any repo (found by /scrutinize — discovery had widened `read_file` to 16
+> repos and `.env` was readable). New opt-in browser test `bun run test:e2e:chat`. See CLAUDE.md Phase 37
+> + GOTCHA §8 (the `page.ts` template-literal backslash trap that e2e caught). **`config.agent.repoSearchRoots`
+> defaults to `[]` (discovery off)** — it is set in the owner's runtime config, not in source defaults.
 
 > **Design record (built in Phase 36, kept for the reasoning):** Discord is **text-first, voice
 > deferred** — the dashboard already does two-way voice locally (hold-Space in, `speechSynthesis` out),

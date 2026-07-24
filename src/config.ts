@@ -94,6 +94,11 @@ export interface Config {
      *  isolated-branch rule still apply to a trusted tool. */
     trustedTools?: string[];
     commandTimeoutMs?: number;  // wall-clock cap on run_command. Default 60000.
+    /** Directories under which the agent may DISCOVER a repo by name, without it being
+     *  registered in watch.repos. Each root is scanned (up to 2 levels deep) for a folder
+     *  that matches the requested name and contains a .git. Empty = discovery off; the agent
+     *  only sees configured repos + cwd. The name is still path-safety-validated. */
+    repoSearchRoots?: string[];
     /** Proactive nudges (Phase 36) — the runtime speaks FIRST instead of waiting to be asked.
      *  RULES pick the moment (budget + quiet hours below); the LLM only writes the sentence.
      *  OFF by default. */
@@ -249,6 +254,7 @@ export function defaultConfig(): Config {
       speak: false,
       trustedTools: [],
       commandTimeoutMs: 60000,
+      repoSearchRoots: [],
       proactive: {
         enabled: false,
         maxPerDay: 6,
@@ -431,6 +437,7 @@ export function loadConfig(): Config {
   parsed.agent.trustedTools = parsed.agent.trustedTools ?? [];
   parsed.agent.commandTimeoutMs =
     parsed.agent.commandTimeoutMs ?? defaults.agent!.commandTimeoutMs!;
+  parsed.agent.repoSearchRoots = parsed.agent.repoSearchRoots ?? [];
   if (!parsed.agent.proactive) {
     parsed.agent.proactive = defaults.agent!.proactive!;
   }

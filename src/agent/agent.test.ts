@@ -3,9 +3,11 @@
 
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import { mkdirSync, writeFileSync, rmSync, existsSync } from "node:fs";
+import { resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 
-import type { AgentTool, ChatBackend, ModelStep, TranscriptItem } from "./types.js";
+import type { AgentTool, ChatBackend, ModelStep, TranscriptItem, ToolContext } from "./types.js";
+import type { Config } from "../config.js";
 import {
   parseJsonToolCall,
   stripToolBlock,
@@ -15,7 +17,7 @@ import {
   parseNativeStep,
   isToolsUnsupported,
 } from "./protocol.js";
-import { resolveSafePath, humanDuration, READ_TOOLS, WRITE_TOOLS, ALL_TOOLS } from "./tools.js";
+import { resolveSafePath, resolveRepo, humanDuration, READ_TOOLS, WRITE_TOOLS, ALL_TOOLS } from "./tools.js";
 import { runTurn, resumeTurn } from "./loop.js";
 import { readConversation, buildTranscript, readPending, AGENT_CONTRACT } from "./session.js";
 import { loadConfig, defaultConfig, trustTool } from "../config.js";
@@ -228,6 +230,23 @@ describe("resolveSafePath", () => {
     expect(resolveSafePath(".executive/config.json", [root])).toBeNull();
   });
 
+  it("rejects secret files even when they exist (agent must never read .env)", () => {
+    // Plant real secret files so the rejection is not merely 'file not found'.
+    writeFileSync(root + "/.env", "EXECUTIVE_DISCORD_TOKEN=super-secret\n");
+    writeFileSync(root + "/.env.production", "KEY=1\n");
+    mkdirSync(root + "/certs", { recursive: true });
+    writeFileSync(root + "/certs/server.pem", "-----BEGIN KEY-----\n");
+    expect(existsSync(root + "/.env")).toBe(true);
+    expect(resolveSafePath(".env", [root])).toBeNull();
+    expect(resolveSafePath(".env.production", [root])).toBeNull();
+    expect(resolveSafePath("certs/server.pem", [root])).toBeNull();
+  });
+
+  it("still allows a committed .env template (not a secret)", () => {
+    writeFileSync(root + "/.env.example", "KEY=changeme\n");
+    expect(resolveSafePath(".env.example", [root])).toContain(".env.example");
+  });
+
   it("rejects a UNC path", () => {
     expect(resolveSafePath("//server/share/x", [root])).toBeNull();
   });
@@ -235,6 +254,89 @@ describe("resolveSafePath", () => {
   it("returns null (never throws) for junk input", () => {
     expect(resolveSafePath("", [root])).toBeNull();
     expect(resolveSafePath("   ", [root])).toBeNull();
+  });
+});
+
+// ─── Repo resolution + discovery ──────────────────────────────────────────────
+// The silent-fallback bug: asking about a repo the runtime does not know used to
+// return the DEFAULT repo with ok:true, so the agent confidently answered about
+// the wrong project. A named-but-unknown repo must resolve to null — UNLESS it can
+// be discovered by name under a configured search root (no registration required).
+
+describe("resolveRepo + discovery", () => {
+  function ctxWith(opts: {
+    repos?: Array<{ path: string; name: string }>;
+    searchRoots?: string[];
+  } = {}): ToolContext {
+    const cfg = defaultConfig();
+    cfg.agent!.repoSearchRoots = opts.searchRoots ?? [];
+    if (opts.repos) cfg.watch = { ...cfg.watch, repos: opts.repos } as Config["watch"];
+    return { config: cfg, roots: ["/default/root"] };
+  }
+
+  it("resolves a registered repo name to its path", () => {
+    const ctx = ctxWith({ repos: [{ path: "/work/opm-be", name: "opm-be" }] });
+    expect(resolveRepo("opm-be", ctx)).toBe("/work/opm-be");
+  });
+
+  it("returns null for an unknown name with no search roots (no silent fallback)", () => {
+    const ctx = ctxWith({ repos: [{ path: "/work/executive", name: "executive" }] });
+    expect(resolveRepo("opm-be", ctx)).toBeNull();
+  });
+
+  it("falls back to the default root ONLY when no name is given", () => {
+    expect(resolveRepo(undefined, ctxWith())).toBe("/default/root");
+    expect(resolveRepo("", ctxWith())).toBe("/default/root");
+  });
+
+  describe("filesystem discovery", () => {
+    const base = DIR + "/disc";
+    const searchRoot = base + "/repos";
+    beforeEach(() => {
+      // A real repo (has .git), an intermediate folder holding a nested repo, and a
+      // plain non-repo folder that must NOT be discovered.
+      mkdirSync(searchRoot + "/opm-be/.git", { recursive: true });
+      mkdirSync(searchRoot + "/group/nested/.git", { recursive: true });
+      mkdirSync(searchRoot + "/plain", { recursive: true });
+    });
+    afterEach(() => {
+      try { rmSync(base, { recursive: true, force: true }); } catch {}
+    });
+
+    it("discovers a repo by name under a search root, no registration needed", () => {
+      const ctx = ctxWith({ searchRoots: [searchRoot] });
+      expect(resolveRepo("opm-be", ctx)).toBe(resolve(searchRoot + "/opm-be"));
+    });
+
+    it("discovers a repo nested one level deeper", () => {
+      const ctx = ctxWith({ searchRoots: [searchRoot] });
+      expect(resolveRepo("nested", ctx)).toBe(resolve(searchRoot + "/group/nested"));
+    });
+
+    it("does NOT resolve a folder that is not a git repo", () => {
+      const ctx = ctxWith({ searchRoots: [searchRoot] });
+      expect(resolveRepo("plain", ctx)).toBeNull();
+    });
+
+    it("never resolves an unsafe name to a path (guarded two ways: isSafeName + basename-only lookup)", () => {
+      const ctx = ctxWith({ searchRoots: [searchRoot] });
+      // A path-shaped or escaping name can never come back as a real directory: the
+      // early isSafeName gate rejects it, and even without that gate resolveRepo only
+      // returns discovered BASENAMES or registered paths — it never builds a path from
+      // the supplied name. Both layers are asserted below.
+      expect(resolveRepo("../opm-be", ctx)).toBeNull();
+      expect(resolveRepo("a/b", ctx)).toBeNull();
+      expect(resolveRepo(".git", ctx)).toBeNull();
+      expect(resolveRepo("C:\\Windows", ctx)).toBeNull();
+    });
+
+    it("prefers a registered repo over a discovered one of the same name", () => {
+      const ctx = ctxWith({
+        repos: [{ path: "/registered/opm-be", name: "opm-be" }],
+        searchRoots: [searchRoot],
+      });
+      expect(resolveRepo("opm-be", ctx)).toBe("/registered/opm-be");
+    });
   });
 });
 
