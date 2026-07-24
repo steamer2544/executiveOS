@@ -94,6 +94,10 @@ export interface Config {
      *  isolated-branch rule still apply to a trusted tool. */
     trustedTools?: string[];
     commandTimeoutMs?: number;  // wall-clock cap on run_command. Default 60000.
+    /** Extra known-safe command prefixes for run_command (Phase 38). ADDITIVE — merged with the
+     *  in-code defaults; it only widens the advisory "✓ known-safe" badge, never the denylist,
+     *  and never auto-runs anything (the owner still confirms every command). Default []. */
+    commandAllowlist?: string[];
     /** Directories under which the agent may DISCOVER a repo by name, without it being
      *  registered in watch.repos. Each root is scanned (up to 2 levels deep) for a folder
      *  that matches the requested name and contains a .git. Empty = discovery off; the agent
@@ -254,6 +258,7 @@ export function defaultConfig(): Config {
       speak: false,
       trustedTools: [],
       commandTimeoutMs: 60000,
+      commandAllowlist: [],
       repoSearchRoots: [],
       proactive: {
         enabled: false,
@@ -437,6 +442,7 @@ export function loadConfig(): Config {
   parsed.agent.trustedTools = parsed.agent.trustedTools ?? [];
   parsed.agent.commandTimeoutMs =
     parsed.agent.commandTimeoutMs ?? defaults.agent!.commandTimeoutMs!;
+  parsed.agent.commandAllowlist = parsed.agent.commandAllowlist ?? [];
   parsed.agent.repoSearchRoots = parsed.agent.repoSearchRoots ?? [];
   if (!parsed.agent.proactive) {
     parsed.agent.proactive = defaults.agent!.proactive!;
@@ -610,16 +616,30 @@ export function updateAutonomyConfig(patch: Record<string, unknown>): AutonomySt
 }
 
 /**
+ * Write tools that may NEVER be granted standing trust (Phase 38). They run `sh -c <anything>`
+ * or drive Synth→Executor onto the repo, so each execution must always face a per-action human
+ * click. Enforced in two places for defence in depth: `trustTool` refuses to persist these, and
+ * the loop's `isTrusted` ignores them even if a hand-edited `config.json` lists them — so a
+ * `trustedTools:["run_command"]` in config is inert, not a re-armed footgun.
+ */
+export const NEVER_TRUSTABLE: ReadonlySet<string> = new Set(["run_command", "edit_files"]);
+
+/**
  * Record that the owner trusts a write tool from now on ("ไว้ใจแล้ว" on the confirm chip).
  *
- * This removes the *prompt*, not a guardrail — a trusted `edit_files` still validates the
- * changeset and still lands on an isolated branch; a trusted `read_file` path is still
- * confined to the configured repos. Idempotent; returns the updated config.
+ * This removes the *prompt*, not a guardrail — a trusted `read_file` path is still confined to
+ * the configured repos. A tool in NEVER_TRUSTABLE (run_command / edit_files) is refused: the call
+ * is a no-op and config is not written. Idempotent; returns the (possibly unchanged) config.
  */
 export function trustTool(name: string): Config {
   const config = loadConfig();
   if (!config.agent) config.agent = {};
   const current = config.agent.trustedTools ?? [];
+  if (NEVER_TRUSTABLE.has(name)) {
+    // Too dangerous to ever trust — leave trustedTools as-is and do not persist.
+    config.agent.trustedTools = current;
+    return config;
+  }
   if (!current.includes(name)) {
     config.agent.trustedTools = [...current, name];
     const tmp = configPath() + ".tmp";

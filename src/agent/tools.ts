@@ -20,6 +20,7 @@ import { tail, append } from "../events/store.js";
 import { readNotifications } from "../report/notify.js";
 import { readStore, pending } from "../advisor/store.js";
 import { explainPatterns } from "../advisor/anthropic.js";
+import { classifyCommand } from "./command-guard.js";
 
 // ─── Limits ───────────────────────────────────────────────────────────────────
 
@@ -662,6 +663,12 @@ const runCommand: AgentTool = {
   async run(args, ctx) {
     const cmd = String(args.cmd ?? "").trim();
     if (!cmd) return fail("cmd is required");
+    // Security boundary (Phase 38): a destructive command is refused HERE and never spawns,
+    // even though the owner already confirmed it. The denylist lives in code, not config.
+    const verdict = classifyCommand(cmd, ctx.config);
+    if (verdict.decision === "deny") {
+      return fail(`คำสั่งนี้ถูกปฏิเสธ (${verdict.reason}) — ดูอันตราย ถ้าจำเป็นให้ owner รันเอง`);
+    }
     const cwd = resolveRepo(args.repo, ctx);
     if (!cwd) return fail(unknownRepo(args.repo, ctx));
     const timeout = ctx.config.agent?.commandTimeoutMs ?? 60000;
@@ -839,12 +846,22 @@ export function findTool(name: string): AgentTool | undefined {
  * One line, in plain language, describing what a write tool will do if approved.
  * Shown on the confirmation chip — the owner reads this, not the JSON.
  */
-export function previewWrite(name: string, args: Record<string, unknown>): string {
+export function previewWrite(
+  name: string,
+  args: Record<string, unknown>,
+  config?: Config
+): string {
   switch (name) {
     case "emit_event":
       return `บันทึก ${String(args.type)} — ${JSON.stringify(args.data ?? {})}`;
-    case "run_command":
-      return `รันคำสั่ง: ${String(args.cmd)}${args.repo ? ` (ใน ${String(args.repo)})` : ""}`;
+    case "run_command": {
+      const base = `รันคำสั่ง: ${String(args.cmd)}${args.repo ? ` (ใน ${String(args.repo)})` : ""}`;
+      // Show the classifier's verdict up front so the owner is not surprised by a refusal.
+      const v = classifyCommand(String(args.cmd ?? ""), config);
+      if (v.decision === "deny") return `⛔ ${base} — จะถูกปฏิเสธ (${v.reason})`;
+      if (v.decision === "allow") return `✓ known-safe · ${base}`;
+      return base;
+    }
     case "edit_files":
       return `แก้โค้ด: ${String(args.instruction)} — จะ commit ลง branch แยก ไม่แตะ branch ที่ทำงานอยู่`;
     case "approve_proposal":

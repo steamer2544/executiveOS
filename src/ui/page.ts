@@ -806,11 +806,14 @@ function renderChat(messages, pending) {
   // tool again (it removes the prompt, not the guardrails behind it).
   const box = $("chatPending");
   if (pending) {
+    // run_command / edit_files are never blanket-trustable (Phase 38) — hide "ไว้ใจตลอด" for them.
+    const trustBtn = (pending.trustable === false) ? '' :
+      '<button class="ghost" onclick="confirmChat(\\'' + pending.id + '\\',\\'trust\\')">ไว้ใจ ' + esc(pending.toolName) + ' ตลอด</button>';
     box.innerHTML = '<div class="prop" style="border:1px solid var(--line);border-radius:10px;padding:10px;margin-bottom:10px">' +
       '<div><b>ขออนุญาตทำ:</b> ' + esc(pending.preview) + '</div>' +
       '<div class="acts" style="margin-top:8px">' +
       '<button class="btn" onclick="confirmChat(\\'' + pending.id + '\\',\\'run\\')">ทำเลย</button>' +
-      '<button class="ghost" onclick="confirmChat(\\'' + pending.id + '\\',\\'trust\\')">ไว้ใจ ' + esc(pending.toolName) + ' ตลอด</button>' +
+      trustBtn +
       '<button class="ghost" onclick="confirmChat(\\'' + pending.id + '\\',\\'no\\')">ไม่</button>' +
       '</div></div>';
   } else box.innerHTML = "";

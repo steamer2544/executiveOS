@@ -80,6 +80,9 @@ export interface PendingWrite {
   args: Record<string, unknown>;
   /** One line, in the owner's language, describing what will happen if approved. */
   preview: string;
+  /** Phase 38: false for tools that may never be blanket-trusted (run_command / edit_files),
+   *  so both front doors hide the "trust forever" button. Absent/true = the button is shown. */
+  trustable?: boolean;
 }
 
 export type ConfirmDecision = "run" | "trust" | "no";

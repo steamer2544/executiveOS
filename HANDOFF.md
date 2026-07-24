@@ -3,8 +3,9 @@
 > **Purpose:** a single doc to resume this project cold if context/memory is lost. Pairs with
 > `CLAUDE.md` (the authoritative phase-by-phase log), `GOTCHA.md` (traps & non-obvious failure modes —
 > read before touching PowerShell/state/tests/LLM), and `README.md` (user-facing overview).
-> Last updated after **Phase 37** (repo discovery + chat markdown/scroll + secrets gate) and **Phase 36
-> going LIVE** (Discord). **638 passing tests** + one opt-in browser e2e, all green.
+> Last updated after **Phase 38** (sandbox `run_command` + hard trust rule), **Phase 37** (repo
+> discovery + chat markdown/scroll + secrets gate), and **Phase 36 going LIVE** (Discord).
+> **693 passing tests** + one opt-in browser e2e, all green.
 >
 > **✅ Phase 36 is LIVE.** The owner supplied a bot token + `ownerId`, ran `ui`, and the bot **DM-answered
 > from real state** (asked "ตอนนี้ผมทำอะไรอยู่" → correct project/task/branch/file). What remains is the
@@ -37,15 +38,16 @@
 > $(git rev-list --all)` (expect only the two `agent.test.ts` fixtures).
 >
 > **▶️ NEXT UP — the owner said "ลุยต่อให้หมดเลย" (do the rest), then cleared context. Priority order:**
-> 1. **Phase 38 — sandbox `run_command` (highest value; it is the biggest remaining risk).** The agent's
->    shell tool runs unsandboxed with the owner's privileges. **Already mitigated at runtime:** the owner's
->    `config.agent.trustedTools` is now `[]`, so every `run_command` asks for confirmation (was
->    `["run_command"]`). The code default was always `[]` (safe), so a stranger cloning is fine. **The
->    real fix to build:** an allowlist (`bun test`, `git …`, `npm run …`), a deny-list for obviously
->    destructive commands (`rm -rf`, `curl … | sh`, etc.), and a hard rule that `run_command`/`edit_files`
->    can never be added to `trustedTools` (only read/emit tools may be trusted). `run_command` already has
->    a timeout + output cap (`src/agent/tools.ts`). Scope this for claude9arm; keep it in `src/agent/`.
-> 2. **Phase 39 — state decay/TTL.** Root-cause fix for stale signals: this session had to `emit
+> 1. **Phase 38 — sandbox `run_command`. ✅ DONE** (this session). `src/agent/command-guard.ts`
+>    `classifyCommand` → deny/allow/ask; a **denylist in code** (rm -rf, curl|sh, sudo, git push --force,
+>    …) hard-refuses in `run_command.run()` even after confirm; `config.agent.commandAllowlist` only
+>    *widens* the advisory "✓ known-safe" badge (owner chose **always-confirm**, no auto-run). Hard rule:
+>    `NEVER_TRUSTABLE = {run_command, edit_files}` — `trustTool` refuses them AND the loop's `isTrusted`
+>    ignores them even in a hand-edited config, so `trustedTools:["run_command"]` is inert; the
+>    "ไว้ใจตลอด" button is hidden in the dashboard + Discord. 693 tests (+55), 4/4 sabotage checks caught.
+>    See CLAUDE.md Phase 38 + `docs/scopes/phase-38-sandbox-run-command.md`. **NOT in scope (deferred):**
+>    exfiltration detection (deny is destruction-only), a real OS sandbox (this is classification).
+> 2. **Phase 39 — state decay/TTL. ⏭️ NEXT.** Root-cause fix for stale signals: this session had to `emit
 >    system.unblocked` + empty `system.task` by hand because a confirmed-then-never-cleared `system.blocked`
 >    (seq 4838) and a stale `system.task` (seq 4985) had overridden reality forever ("newest wins, no
 >    expiry"). Give `blocked`/`deadline`/manual `task` an age-out in the State Builder (deterministic, no

@@ -31,7 +31,7 @@ import {
   readPending,
   writePending,
 } from "./session.js";
-import { llmMaxTokens, llmTimeoutMs, trustTool } from "../config.js";
+import { llmMaxTokens, llmTimeoutMs, trustTool, NEVER_TRUSTABLE } from "../config.js";
 
 const DEFAULT_MAX_ROUNDS = 8;
 const DEFAULT_HISTORY_TURNS = 20;
@@ -57,6 +57,8 @@ function ctxFor(config: Config): ToolContext {
 }
 
 function isTrusted(name: string, config: Config): boolean {
+  // run_command / edit_files can never be trusted, even if a hand-edited config lists them (Phase 38).
+  if (NEVER_TRUSTABLE.has(name)) return false;
   return (config.agent?.trustedTools ?? []).includes(name);
 }
 
@@ -223,7 +225,8 @@ async function driveLoop(opts: TurnOptions, already: AgentTurn["toolCalls"]): Pr
           ts: new Date().toISOString(),
           toolName: tool.name,
           args: call.args,
-          preview: previewWrite(tool.name, call.args),
+          preview: previewWrite(tool.name, call.args, config),
+          trustable: !NEVER_TRUSTABLE.has(tool.name),
         };
         writePending(pending);
         if (s.text.trim()) appendMessage({ role: "assistant", text: s.text.trim() });

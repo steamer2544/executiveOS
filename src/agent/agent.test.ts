@@ -3,7 +3,7 @@
 
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import { mkdirSync, writeFileSync, rmSync, existsSync } from "node:fs";
-import { resolve } from "node:path";
+import { resolve, join } from "node:path";
 import { randomUUID } from "node:crypto";
 
 import type { AgentTool, ChatBackend, ModelStep, TranscriptItem, ToolContext } from "./types.js";
@@ -17,10 +17,10 @@ import {
   parseNativeStep,
   isToolsUnsupported,
 } from "./protocol.js";
-import { resolveSafePath, resolveRepo, humanDuration, READ_TOOLS, WRITE_TOOLS, ALL_TOOLS } from "./tools.js";
+import { resolveSafePath, resolveRepo, humanDuration, findTool, READ_TOOLS, WRITE_TOOLS, ALL_TOOLS } from "./tools.js";
 import { runTurn, resumeTurn } from "./loop.js";
 import { readConversation, buildTranscript, readPending, AGENT_CONTRACT } from "./session.js";
-import { loadConfig, defaultConfig, trustTool } from "../config.js";
+import { loadConfig, defaultConfig, trustTool, NEVER_TRUSTABLE } from "../config.js";
 import { configPath } from "../paths.js";
 
 const DIR = "/tmp/executive-test-agent-" + randomUUID();
@@ -561,10 +561,106 @@ describe("write confirmation", () => {
     expect(turn.reply).toContain("หมดอายุ");
   });
 
-  it("trustTool is idempotent", () => {
+  it("trustTool is idempotent (for a trustable tool)", () => {
+    trustTool("emit_event");
+    trustTool("emit_event");
+    expect(loadConfig().agent!.trustedTools!.filter((t) => t === "emit_event")).toHaveLength(1);
+  });
+});
+
+// ─── Phase 38 — sandbox run_command + hard trust rule ───────────────────────────
+
+/** A fake run_command that just counts, so the loop tests never spawn a shell. */
+let runCmdRuns = 0;
+const fakeRunCommand: AgentTool = {
+  name: "run_command",
+  description: "fake run",
+  kind: "write",
+  inputSchema: { type: "object", properties: {} },
+  async run() {
+    runCmdRuns++;
+    return { ok: true, content: "ran" };
+  },
+};
+
+describe("run_command sandbox", () => {
+  beforeEach(() => {
+    process.env.EXECUTIVE_HOME = DIR;
+    runCmdRuns = 0;
+    writeRuns = 0;
+    setupHome();
+  });
+  afterEach(() => {
+    try { rmSync(DIR, { recursive: true, force: true }); } catch {}
+    delete process.env.EXECUTIVE_HOME;
+  });
+
+  it("run_command / edit_files are in NEVER_TRUSTABLE; emit_event is not", () => {
+    expect(NEVER_TRUSTABLE.has("run_command")).toBe(true);
+    expect(NEVER_TRUSTABLE.has("edit_files")).toBe(true);
+    expect(NEVER_TRUSTABLE.has("emit_event")).toBe(false);
+  });
+
+  it("trustTool refuses run_command / edit_files — no-op, config not changed", () => {
     trustTool("run_command");
-    trustTool("run_command");
-    expect(loadConfig().agent!.trustedTools!.filter((t) => t === "run_command")).toHaveLength(1);
+    trustTool("edit_files");
+    expect(loadConfig().agent!.trustedTools).toEqual([]);
+  });
+
+  it("the loop still parks a run_command even when config lists it as trusted (isTrusted ignores it)", async () => {
+    setupHome({ trustedTools: ["run_command"] });
+    const backend = mockBackend([callStep("run_command", { cmd: "bun test" })]);
+    const turn = await runTurn("รันเทสต์", {
+      config: loadConfig(),
+      backend,
+      tools: [fakeRead, fakeRunCommand],
+    });
+    expect(turn.pending).not.toBeNull();       // parked, not auto-run
+    expect(turn.pending!.trustable).toBe(false); // no "trust forever" button
+    expect(runCmdRuns).toBe(0);
+  });
+
+  it("a parked emit_event is trustable (contrast)", async () => {
+    const backend = mockBackend([callStep("emit_event", { type: "system.blocked" })]);
+    const turn = await runTurn("x", { config: loadConfig(), backend, tools: FAKE_TOOLS });
+    expect(turn.pending!.trustable).not.toBe(false);
+  });
+
+  it("the confirm preview flags a destructive command and badges a safe one", async () => {
+    const bad = await runTurn("ลบทิ้ง", {
+      config: loadConfig(),
+      backend: mockBackend([callStep("run_command", { cmd: "rm -rf /" })]),
+      tools: [fakeRead, fakeRunCommand],
+    });
+    expect(bad.pending!.preview).toContain("⛔");
+
+    const good = await runTurn("รันเทสต์", {
+      config: loadConfig(),
+      backend: mockBackend([callStep("run_command", { cmd: "bun test" })]),
+      tools: [fakeRead, fakeRunCommand],
+    });
+    expect(good.pending!.preview).toContain("known-safe");
+  });
+
+  it("the REAL run_command refuses a destructive command and never spawns it", async () => {
+    const runCmd = findTool("run_command")!;
+    const ctx = { config: loadConfig(), roots: [DIR] };
+    // If the deny gate were removed, `sh` would run and echo the marker into the output.
+    const r = await runCmd.run(
+      { cmd: "echo SPAWNED_MARKER && rm -rf junk" },
+      ctx
+    );
+    expect(r.ok).toBe(false);
+    expect(r.content).toContain("ถูกปฏิเสธ");        // the refusal reason
+    expect(r.content).not.toContain("SPAWNED_MARKER"); // proves nothing was executed
+  });
+
+  it("the REAL run_command lets a non-destructive command through the deny gate", async () => {
+    const runCmd = findTool("run_command")!;
+    const ctx = { config: loadConfig(), roots: [DIR] };
+    // Whether `sh` is present or not, a safe command must not hit the refusal branch.
+    const r = await runCmd.run({ cmd: "echo hello" }, ctx);
+    expect(r.content).not.toContain("ถูกปฏิเสธ");
   });
 });
 

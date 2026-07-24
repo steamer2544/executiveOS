@@ -16,7 +16,11 @@ export interface OutboundMessage {
    * carrying the same `pendingId` — the same id the dashboard's confirm chip uses, so
    * both front doors resume the identical turn.
    */
-  confirm?: { pendingId: string };
+  confirm?: {
+    pendingId: string;
+    /** Phase 38: false → the adapter omits the "trust forever" button (run_command / edit_files). */
+    trustable?: boolean;
+  };
 }
 
 /** What comes back from the owner. Anything from anyone else must never reach here. */

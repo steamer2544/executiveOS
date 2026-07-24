@@ -1035,6 +1035,34 @@ docs/scopes/           # per-phase specs (the contract handed to the implementer
   `package.json`, `GOTCHA.md`, `test/e2e/README.md`. **Also cleared stale state** (real events, not a bug):
   a confirmed-then-never-unblocked `system.blocked` + a stale `system.task` were overriding reality —
   emitted `system.unblocked` + empty `system.task` to clear them.
+- **Phase 38 — DONE** (architect impl + self-review + sabotage-check, this session): **Sandbox
+  `run_command` + hard trust rule.** The agent's riskiest tool ran `sh -c <anything>` with no
+  classification and could be blanket-trusted (a "ไว้ใจ tool นี้ตลอด" tap → `trustTool("run_command")`
+  → the loop's `isTrusted` skips confirmation forever). Owner's design call this session: **"confirm
+  always + denylist blocks"** (the safest of two options). New pure `src/agent/command-guard.ts`
+  `classifyCommand(cmd, config) → deny | allow | ask`, order **deny (anywhere, checked FIRST) →
+  chaining short-circuit → allow prefix → ask**: a **denylist** of destructive patterns (recursive/
+  forced `rm`, `sudo`, downloader-piped-to-shell, fork bomb, `mkfs`/`dd of=/dev`, redirect to a block
+  device, shutdown/reboot, recursive `chmod 777`/`chown / `, `git push --force`/`reset --hard`/
+  `clean -f`, `find -delete`/`-exec`, Windows `del /s`/`format`) is a **guardrail in code, not config**
+  — `config.agent.commandAllowlist` only *widens* the advisory "✓ known-safe" badge, can **never**
+  shrink deny; a command with any shell chain/redirect metacharacter can never earn the badge (the
+  head could hide anything). **`run_command.run()` hard-refuses a `deny` verdict and NEVER spawns,
+  even after the owner confirmed**; `previewWrite` shows `⛔ … จะถูกปฏิเสธ` / `✓ known-safe` up front.
+  **Hard trust rule:** `NEVER_TRUSTABLE = {run_command, edit_files}` (config.ts) enforced twice —
+  `trustTool` refuses to persist them (no-op) AND the loop's `isTrusted` returns false even for a
+  hand-edited `config.json`, so `trustedTools:["run_command"]` is inert. `PendingWrite.trustable`
+  (false for those) hides the "ไว้ใจตลอด" button in BOTH front doors (dashboard `page.ts` + Discord
+  `buildConfirmComponents`, threaded via `OutboundMessage.confirm.trustable`). 693 passing tests (+55:
+  48 pure classifier + 7 enforcement). **Sabotage-checked (4/4 caught then restored):** removing the
+  deny gate, the `isTrusted` guard, the `trustTool` guard, and the deny-before-chaining ordering each
+  fail exactly the tests written to prevent them. Cold re-review: footprint matches scope (9 edits + 3
+  new), inline dashboard JS re-parsed (no GOTCHA §8 backslash trap), `var`→`const` to match neighbours.
+  **NOT in scope:** exfiltration detection (deny is destruction-only), auto-run of allowlisted commands
+  (owner chose always-confirm), a real OS sandbox (this is classification, not isolation). Spec:
+  `docs/scopes/phase-38-sandbox-run-command.md`. Files: `src/agent/{command-guard,command-guard.test,
+  tools,loop,types,agent.test}.ts`, `src/config.ts`, `src/ui/page.ts`, `src/channel/{types,discord}.ts`,
+  `src/index.ts`.
 - **Loop complete (manual trigger):** `auto --apply` runs the whole chain in one command; the human
   reviews/merges the `executive/change-<id>` branch.
 

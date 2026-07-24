@@ -184,7 +184,9 @@ function makeInboundHandler(
       const text = turn.reply || (turn.pending ? turn.pending.preview : "(ไม่มีคำตอบ)");
       await channel.send({
         text,
-        confirm: turn.pending ? { pendingId: turn.pending.id } : undefined,
+        confirm: turn.pending
+          ? { pendingId: turn.pending.id, trustable: turn.pending.trustable !== false }
+          : undefined,
       });
     } catch (err) {
       await channel.send({ text: "ขอโทษครับ พัง: " + (err as Error).message });

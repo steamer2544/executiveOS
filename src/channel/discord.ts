@@ -142,32 +142,31 @@ export function createDiscordChannel(opts: DiscordChannelOptions): Channel {
   // ── button components ────────────────────────────────────────────────────
 
   /** Build the Discord components array for a confirm message. */
-  function buildConfirmComponents(pendingId: string): unknown {
-    return [
+  function buildConfirmComponents(pendingId: string, trustable = true): unknown {
+    const components: unknown[] = [
       {
-        type: 1, // ActionRow
-        components: [
-          {
-            type: 2, // Button
-            style: 1, // Primary
-            label: "ทำเลย",
-            custom_id: `confirm:${pendingId}:run`,
-          },
-          {
-            type: 2,
-            style: 2, // Secondary
-            label: "ไว้ใจ tool นี้ตลอด",
-            custom_id: `confirm:${pendingId}:trust`,
-          },
-          {
-            type: 2,
-            style: 4, // Danger
-            label: "ไม่",
-            custom_id: `confirm:${pendingId}:no`,
-          },
-        ],
+        type: 2, // Button
+        style: 1, // Primary
+        label: "ทำเลย",
+        custom_id: `confirm:${pendingId}:run`,
       },
     ];
+    // run_command / edit_files are never blanket-trustable (Phase 38) — omit the trust button.
+    if (trustable) {
+      components.push({
+        type: 2,
+        style: 2, // Secondary
+        label: "ไว้ใจ tool นี้ตลอด",
+        custom_id: `confirm:${pendingId}:trust`,
+      });
+    }
+    components.push({
+      type: 2,
+      style: 4, // Danger
+      label: "ไม่",
+      custom_id: `confirm:${pendingId}:no`,
+    });
+    return [{ type: 1, components }]; // ActionRow
   }
 
   // ── gateway helpers ──────────────────────────────────────────────────────
@@ -339,7 +338,10 @@ export function createDiscordChannel(opts: DiscordChannelOptions): Channel {
 
     send(msg: OutboundMessage): Promise<{ ok: boolean; error?: string }> {
       if (msg.confirm) {
-        return sendDiscordMessage(msg.text, buildConfirmComponents(msg.confirm.pendingId));
+        return sendDiscordMessage(
+          msg.text,
+          buildConfirmComponents(msg.confirm.pendingId, msg.confirm.trustable !== false)
+        );
       }
       return sendDiscordMessage(msg.text);
     },
