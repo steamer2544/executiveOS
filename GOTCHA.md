@@ -16,6 +16,21 @@
   too small. *Fix:* the shared `llmMaxTokens(config, floor=4096)` + `llmTimeoutMs(config, floor=120000)`
   in `src/config.ts` — every LLM factory (worker/synth/infer/advisor/vision) must use them. `/no_think`
   made it *worse*; headroom is the lever. (Phase 19/20)
+- **`temperature: 0` (greedy decoding) makes Qwen LOOP in its think phase and burn the WHOLE budget
+  with no answer.** *Symptom:* the agent replied "ขอโทษครับ พัง: … stop_reason: max_tokens" to a
+  perfectly normal question ("planner คืออะไร") — `usage.output_tokens` = the entire cap, `content:[]`,
+  ~90s. Raising `max_tokens` did NOT help (40k → still ran away, then a 524); it is a *loop*, not a
+  budget shortfall. *Cause:* Qwen's own docs warn that greedy decoding "can lead to endless repetitions"
+  in thinking mode. *Measured live on the exact failing prompt:* `temp 0` → always loops · `temp 0.3` →
+  loops · `temp 0.6` alone → ~1/3 still loops · **`temp 0.6 + top_p 0.95 + top_k 20` → 5/5 clean** (Qwen's
+  recommended thinking-mode sampling). `/no_think` and `chat_template_kwargs:{enable_thinking:false}` are
+  **ignored by this gateway** (both still looped). *Fix:* the agent backend (`src/agent/protocol.ts`
+  `step()`) now sends `temperature:0.6, top_p:0.95, top_k:20`, plus a backstop that re-samples once on an
+  empty `max_tokens` response (`isEmptyMaxTokens`). **Isolation that found it:** plain system + the 15
+  tools → normal `tool_use` in 3s; the *agent system prompt* (identity + AGENT_CONTRACT) is what tips it
+  into the loop — so the trigger is the prompt, the cure is the sampling. Other backends
+  (worker/synth/infer) still use `temperature:0` and could hit this on a reasoning-heavy prompt — switch
+  them to the same sampling if they ever return an empty `max_tokens`.
 - **Two different API shapes — do not mix them.** All text (worker/synth/infer/advisor) speaks the
   **Anthropic** `POST /v1/messages` shape (text at `content[].text`). **Vision (`qwen-vl-max`, Phase 29)**
   speaks the **OpenAI-compatible** `POST /v1/chat/completions` with `image_url` base64 data-URL content

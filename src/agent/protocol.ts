@@ -210,10 +210,19 @@ export class AnthropicChatBackend implements ChatBackend {
       ? input.system
       : input.system + "\n\n" + renderToolsForPrompt(input.tools);
 
+    // Qwen's RECOMMENDED thinking-mode sampling — NOT greedy (temperature 0). The model's
+    // own docs warn that greedy decoding "can lead to endless repetitions" in thinking mode,
+    // and that is exactly what we hit: with `temperature: 0` a meta question ("planner
+    // คืออะไร") sent the model into an infinite <think> loop that burned the whole
+    // max_tokens budget and returned NO answer (stop_reason: max_tokens). Measured live:
+    // temp 0 → always loops; temp 0.6 alone → ~1/3 still loops; temp 0.6 + top_p 0.95 +
+    // top_k 20 → 5/5 clean. See GOTCHA §1.
     const body: Record<string, unknown> = {
       model: this.opts.model,
       max_tokens: this.opts.maxTokens,
-      temperature: 0,
+      temperature: 0.6,
+      top_p: 0.95,
+      top_k: 20,
       system,
       messages: native ? encodeNative(input.transcript) : encodeJson(input.transcript),
     };
@@ -259,6 +268,14 @@ export class AnthropicChatBackend implements ChatBackend {
           throw new Error(`agent HTTP ${res.status}: ${text.slice(0, 400)}`);
         }
         const json = await res.json();
+        // Backstop: the sampling fix makes the think-loop rare, not impossible. If the model
+        // still burned the whole budget with no usable output, re-sample once (temperature
+        // > 0 makes the retry a genuinely different roll) instead of failing the turn.
+        if (isEmptyMaxTokens(json) && attempt < MAX_ATTEMPTS) {
+          lastErr = new Error("agent: empty max_tokens response — re-sampling");
+          await sleep(RETRY_BACKOFF_MS);
+          continue;
+        }
         const step = parseNativeStep(json);
         if (native) return step;
 
@@ -313,6 +330,20 @@ export function chatErrorMessage(e: unknown): string {
     return "gateway มีปัญหาชั่วคราว (5xx) — ลองใหม่อีกครั้งครับ";
   }
   return "ขอโทษครับ พัง: " + (msg || "unknown error");
+}
+
+/** True if the response is a Qwen think-loop casualty: it stopped at `max_tokens` with no
+ *  usable text and no tool call. Worth one re-sample (see step()); mirrors the throw
+ *  condition in parseNativeStep so the two never disagree. */
+export function isEmptyMaxTokens(json: unknown): boolean {
+  const o = json as { stop_reason?: unknown; content?: unknown };
+  if (o?.stop_reason !== "max_tokens") return false;
+  const c = o.content;
+  if (!Array.isArray(c)) return true;
+  return !c.some((b) => {
+    const bl = b as { type?: unknown; text?: unknown };
+    return (bl?.type === "text" && typeof bl.text === "string" && bl.text.trim() !== "") || bl?.type === "tool_use";
+  });
 }
 
 /** A transient failure worth exactly one retry: an abort/timeout or a network-level error.

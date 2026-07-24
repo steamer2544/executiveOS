@@ -1063,6 +1063,24 @@ docs/scopes/           # per-phase specs (the contract handed to the implementer
   `docs/scopes/phase-38-sandbox-run-command.md`. Files: `src/agent/{command-guard,command-guard.test,
   tools,loop,types,agent.test}.ts`, `src/config.ts`, `src/ui/page.ts`, `src/channel/{types,discord}.ts`,
   `src/index.ts`.
+- **Agent think-loop fix (`temperature: 0` → Qwen sampling) — DONE** (architect, this session,
+  `/debug-mantra`): a **second** live Discord failure — the bot replied *"ขอโทษครับ พัง: … the model used
+  its entire token budget thinking and produced no answer (stop_reason: max_tokens)"* to a normal question
+  ("planner คืออะไร"). Debugged live by isolation (breadcrumb ledger): raising `max_tokens` to 40k did
+  **not** help (still ran away → a 524), and a **fresh empty transcript** still failed — so it was not
+  budget or context. Bisecting the request found it: **plain system prompt + the 15 tools → normal
+  `tool_use` in 3s**, but the **agent system prompt** (identity + AGENT_CONTRACT) tipped Qwen into an
+  infinite `<think>` loop that consumed the whole budget. Root cause: the agent hardcoded **`temperature:
+  0`** (greedy decoding), which **Qwen's own docs warn causes "endless repetitions" in thinking mode**.
+  Measured on the exact prompt: temp 0 → always loops; temp 0.6 alone → ~1/3 loops; **temp 0.6 + top_p 0.95
+  + top_k 20 → 5/5 clean** (Qwen's recommended sampling). `/no_think` and `enable_thinking:false` are
+  ignored by this gateway (still looped). Fix: `AnthropicChatBackend.step()` now sends `temperature:0.6,
+  top_p:0.95, top_k:20`, **plus a backstop** that re-samples once on an empty `max_tokens` response
+  (`isEmptyMaxTokens`, folded into the Phase-39 retry loop). **Live-verified end-to-end:** the exact
+  failing question now answers correctly in 11s (and reads real state — cites `resolve_block`). 724 passing
+  tests (+8: `isEmptyMaxTokens` + the re-sample retry). Sabotage-checked. GOTCHA §1 gained the greedy-
+  decoding trap (the other backends still use temp 0 — switch them if they ever return an empty
+  `max_tokens`). Files: `src/agent/protocol.ts` (+ `protocol.test.ts`).
 - **Phase 39 — DONE** (architect impl + self-review + sabotage-check + live smoke, this session): **State
   decay / TTL — stale manual signals age out.** Root-cause fix for the incident where the owner had to
   `emit system.unblocked` + empty `system.task` **by hand**: "newest event wins per field" had **no

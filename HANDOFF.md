@@ -6,7 +6,7 @@
 > Last updated after **Phase 39 + 39.1** (state decay/TTL; deadline decay as an opt-in dashboard toggle),
 > **Phase 38** (sandbox `run_command` + hard trust rule), **Phase 37** (repo discovery + chat markdown/
 > scroll + secrets gate), and **Phase 36 going LIVE** (Discord). Everything through 39.1 is pushed to
-> `origin/main`. **720 passing tests** + one opt-in browser e2e, all green.
+> `origin/main`. **724 passing tests** + one opt-in browser e2e, all green.
 >
 > **✅ Phase 36 is LIVE.** The owner supplied a bot token + `ownerId`, ran `ui`, and the bot **DM-answered
 > from real state** (asked "ตอนนี้ผมทำอะไรอยู่" → correct project/task/branch/file). What remains is the
@@ -55,6 +55,17 @@
 > `AnthropicChatBackend.step()` now **retries once** on a transient abort/timeout/network/5xx (NOT a 4xx —
 > the tools-downgrade needs it), and `chatErrorMessage()` gives an honest Thai message in both front doors
 > instead of the raw exception. 720 tests. See CLAUDE.md "Agent chat resilience" + GOTCHA §7.
+>
+> **Agent think-loop fix (this session, `/debug-mantra`):** a second live Discord failure — *"…the model
+> used its entire token budget thinking … (stop_reason: max_tokens)"* to "planner คืออะไร". Debugged by
+> isolation: raising `max_tokens` to 40k didn't help, a fresh transcript didn't help; **plain system +
+> tools → normal tool_use in 3s, but the agent system prompt tips Qwen into an infinite `<think>` loop.**
+> Root cause: the agent hardcoded **`temperature: 0`** (greedy decoding), which Qwen's docs say causes
+> "endless repetitions." Fix: `step()` now sends **temp 0.6 + top_p 0.95 + top_k 20** (Qwen's recommended
+> sampling — measured 5/5 clean vs temp 0 always-loops) + a backstop re-sample on empty `max_tokens`.
+> Live-verified: the failing question now answers in 11s. **`/no_think` / `enable_thinking:false` are
+> ignored by the gateway.** Other backends still use temp 0 — switch them if they ever loop. See CLAUDE.md
+> "Agent think-loop fix" + GOTCHA §1. 724 tests.
 >
 > **Recently shipped this session (all pushed):**
 > - **Phase 38 — sandbox `run_command`** — `classifyCommand` → deny/allow/ask; a **denylist in code**

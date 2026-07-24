@@ -7,6 +7,7 @@ import { describe, it, expect, afterEach } from "bun:test";
 import {
   AnthropicChatBackend,
   isTransientNetworkError,
+  isEmptyMaxTokens,
   chatErrorMessage,
 } from "./protocol.js";
 import type { TranscriptItem } from "./types.js";
@@ -58,7 +59,7 @@ describe("isTransientNetworkError", () => {
   it("true for network-level errors by message and code", () => {
     expect(isTransientNetworkError(new Error("fetch failed"))).toBe(true);
     expect(isTransientNetworkError(new Error("read ECONNRESET"))).toBe(true);
-    const e = new Error("x"); (e as { code: string }).code = "ETIMEDOUT";
+    const e = new Error("x"); (e as unknown as { code: string }).code = "ETIMEDOUT";
     expect(isTransientNetworkError(e)).toBe(true);
   });
   it("false for a plain HTTP 4xx error (must NOT retry — tools-downgrade needs it)", () => {
@@ -90,6 +91,22 @@ describe("chatErrorMessage", () => {
   });
 });
 
+// ─── isEmptyMaxTokens ───────────────────────────────────────────────────────
+
+describe("isEmptyMaxTokens", () => {
+  it("true when stopped at max_tokens with empty/whitespace content", () => {
+    expect(isEmptyMaxTokens({ stop_reason: "max_tokens", content: [] })).toBe(true);
+    expect(isEmptyMaxTokens({ stop_reason: "max_tokens", content: [{ type: "text", text: "  " }] })).toBe(true);
+  });
+  it("false when there is real text or a tool call, even at max_tokens", () => {
+    expect(isEmptyMaxTokens({ stop_reason: "max_tokens", content: [{ type: "text", text: "hi" }] })).toBe(false);
+    expect(isEmptyMaxTokens({ stop_reason: "max_tokens", content: [{ type: "tool_use", name: "get_state" }] })).toBe(false);
+  });
+  it("false for a normal end_turn even with empty content", () => {
+    expect(isEmptyMaxTokens({ stop_reason: "end_turn", content: [] })).toBe(false);
+  });
+});
+
 // ─── retry in step() ────────────────────────────────────────────────────────
 
 describe("AnthropicChatBackend.step — retry once on a transient failure", () => {
@@ -103,7 +120,7 @@ describe("AnthropicChatBackend.step — retry once on a transient failure", () =
         throw e;
       }
       return okResponse("recovered");
-    }) as typeof fetch;
+    }) as unknown as typeof fetch;
 
     const out = await makeBackend().step({ system: "s", transcript: HELLO, tools: [] });
     expect(calls).toBe(2);
@@ -115,7 +132,7 @@ describe("AnthropicChatBackend.step — retry once on a transient failure", () =
     globalThis.fetch = (async () => {
       calls++;
       return calls === 1 ? errResponse(524, "cloudflare") : okResponse("ok2");
-    }) as typeof fetch;
+    }) as unknown as typeof fetch;
 
     const out = await makeBackend().step({ system: "s", transcript: HELLO, tools: [] });
     expect(calls).toBe(2);
@@ -127,12 +144,32 @@ describe("AnthropicChatBackend.step — retry once on a transient failure", () =
     globalThis.fetch = (async () => {
       calls++;
       return errResponse(400, "bad tools");
-    }) as typeof fetch;
+    }) as unknown as typeof fetch;
 
     await expect(makeBackend().step({ system: "s", transcript: HELLO, tools: [] })).rejects.toThrow(
       /HTTP 400/,
     );
     expect(calls).toBe(1);
+  });
+
+  it("re-samples once on an empty max_tokens response (Qwen think-loop) then succeeds", async () => {
+    let calls = 0;
+    globalThis.fetch = (async () => {
+      calls++;
+      if (calls === 1) {
+        // stopped at max_tokens with no usable content — the think-loop casualty
+        return {
+          ok: true, status: 200,
+          json: async () => ({ content: [], stop_reason: "max_tokens" }),
+          text: async () => "",
+        } as unknown as Response;
+      }
+      return okResponse("answered on the second roll");
+    }) as unknown as typeof fetch;
+
+    const out = await makeBackend().step({ system: "s", transcript: HELLO, tools: [] });
+    expect(calls).toBe(2);
+    expect(out.text).toBe("answered on the second roll");
   });
 
   it("gives up after two transient failures and throws the last error", async () => {
@@ -142,7 +179,7 @@ describe("AnthropicChatBackend.step — retry once on a transient failure", () =
       const e = new Error("The operation was aborted.");
       (e as { name: string }).name = "AbortError";
       throw e;
-    }) as typeof fetch;
+    }) as unknown as typeof fetch;
 
     await expect(makeBackend().step({ system: "s", transcript: HELLO, tools: [] })).rejects.toThrow(
       /aborted/,
