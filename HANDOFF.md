@@ -3,10 +3,10 @@
 > **Purpose:** a single doc to resume this project cold if context/memory is lost. Pairs with
 > `CLAUDE.md` (the authoritative phase-by-phase log), `GOTCHA.md` (traps & non-obvious failure modes —
 > read before touching PowerShell/state/tests/LLM), and `README.md` (user-facing overview).
-> Last updated after **Phase 39** (state decay/TTL — stale manual signals age out), **Phase 38** (sandbox
-> `run_command` + hard trust rule), **Phase 37** (repo discovery + chat markdown/scroll + secrets gate),
-> and **Phase 36 going LIVE** (Discord).
-> **708 passing tests** + one opt-in browser e2e, all green.
+> Last updated after **Phase 39 + 39.1** (state decay/TTL; deadline decay as an opt-in dashboard toggle),
+> **Phase 38** (sandbox `run_command` + hard trust rule), **Phase 37** (repo discovery + chat markdown/
+> scroll + secrets gate), and **Phase 36 going LIVE** (Discord). Everything through 39.1 is pushed to
+> `origin/main`. **708 passing tests** + one opt-in browser e2e, all green.
 >
 > **✅ Phase 36 is LIVE.** The owner supplied a bot token + `ownerId`, ran `ui`, and the bot **DM-answered
 > from real state** (asked "ตอนนี้ผมทำอะไรอยู่" → correct project/task/branch/file). What remains is the
@@ -38,34 +38,32 @@
 > that touched config/fixtures: `git grep -nE "MTUz|sk-|xox[baprs]-|-----BEGIN|Bearer [A-Za-z0-9._-]{20}"
 > $(git rev-list --all)` (expect only the two `agent.test.ts` fixtures).
 >
-> **▶️ NEXT UP — the owner said "ลุยต่อให้หมดเลย" (do the rest), then cleared context. Priority order:**
-> 1. **Phase 38 — sandbox `run_command`. ✅ DONE** (this session). `src/agent/command-guard.ts`
->    `classifyCommand` → deny/allow/ask; a **denylist in code** (rm -rf, curl|sh, sudo, git push --force,
->    …) hard-refuses in `run_command.run()` even after confirm; `config.agent.commandAllowlist` only
->    *widens* the advisory "✓ known-safe" badge (owner chose **always-confirm**, no auto-run). Hard rule:
->    `NEVER_TRUSTABLE = {run_command, edit_files}` — `trustTool` refuses them AND the loop's `isTrusted`
->    ignores them even in a hand-edited config, so `trustedTools:["run_command"]` is inert; the
->    "ไว้ใจตลอด" button is hidden in the dashboard + Discord. 693 tests (+55), 4/4 sabotage checks caught.
->    See CLAUDE.md Phase 38 + `docs/scopes/phase-38-sandbox-run-command.md`. **NOT in scope (deferred):**
->    exfiltration detection (deny is destruction-only), a real OS sandbox (this is classification).
-> 2. **Phase 39 — state decay/TTL. ✅ DONE + /scrutinize'd** (this session). `buildState` ages out **only
->    the manually-asserted** signals (auto-sensed fields never decay): `BLOCKED_TTL_MS` = 24h,
->    `MANUAL_TASK_TTL_MS` = 72h (task/project → fall back to branch/repo inference). Exported constants in
->    `src/state/builder.ts`, measured against the builder's own `now` (stays pure); uncertain (bad `ts`) →
->    keep; Planner untouched. 708 tests (+incl. exact 24h/72h boundary cases), sabotage-checked.
->    **`blocked`/`task`/`project` decay unconditionally.** **Deadline decay: `/scrutinize` caught that doing
->    it *unconditionally* reverses Phase 32's deliberate "close it out" nag (a deadline is a commitment, not
->    transient state), so Phase 39.1 made it OPT-IN + DEFAULT OFF** — a dashboard **Autonomy** toggle backed
->    by `config.state.deadlineDecayDays` (null/≤0 = off; positive N = retire >N days past due; toggle writes
->    7). Default off = Phase 32's nag preserved. See CLAUDE.md Phase 39 + 39.1 +
->    `docs/scopes/phase-39-state-decay.md`. **Deferred:** the blocked/task TTLs are constants, not config
->    (promote later if the owner wants to tune them the same way).
-> 3. **SQLite/Drizzle storage. ⏭️ NEXT.** The JSONL log is 5,500+ events. Planned since Phase 1; the log
->    still works, so this is the lowest-urgency. `compact` exists for noise but not for scale.
+> **▶️ NEXT UP — everything through Phase 39.1 is DONE, /scrutinize'd, and PUSHED to `origin/main`
+> (`421e70e`). The single actionable next item is:**
 >
-> **Deferred nits from Phase 37's /scrutinize (not bugs, don't forget):** `discoverRepos` re-scans the
-> filesystem on every unknown-repo tool call (no cache) — add a per-turn/short-TTL cache if it feels slow;
-> same-basename repos across two search roots resolve to the first silently.
+> 1. **SQLite/Drizzle storage. ⏭️ NEXT (and the last big planned piece).** The JSONL log is 5,500+ events.
+>    Planned since Phase 1; the log still works, so it was left for last — but it is now the only remaining
+>    roadmap item. `compact` exists for noise but not for scale. Write a scope + hand to qwen, or do it
+>    directly. Keep the event-append contract (`append`/`read`/`tail`, monotonic `seq`) identical so the
+>    State Builder / watchers don't change; swap the JSONL EventStore for a SQLite-backed one behind the
+>    same interface.
+>
+> **Recently shipped this session (all pushed):**
+> - **Phase 38 — sandbox `run_command`** — `classifyCommand` → deny/allow/ask; a **denylist in code**
+>   (rm -rf, curl|sh, sudo, git push --force, …) hard-refuses in `run_command.run()` even after confirm;
+>   `NEVER_TRUSTABLE = {run_command, edit_files}` makes standing trust inert. See CLAUDE.md Phase 38.
+> - **Phase 39 — state decay/TTL** — `buildState` ages out **only manually-asserted** signals (auto-sensed
+>   never decay): `BLOCKED_TTL_MS`=24h, `MANUAL_TASK_TTL_MS`=72h (task/project → branch/repo inference).
+>   Measured against the builder's own `now` (pure); uncertain (bad `ts`) → keep; Planner untouched.
+> - **Phase 39.1 — opt-in deadline decay** — `/scrutinize` caught that unconditional deadline decay reverses
+>   Phase 32's "close it out" nag (a deadline is a commitment, not transient state), so it is **OPT-IN +
+>   DEFAULT OFF**: a dashboard **Autonomy** toggle backed by `config.state.deadlineDecayDays` (null/≤0 = off;
+>   positive N = retire a deadline >N days past due; toggle writes 7). See CLAUDE.md Phase 39 + 39.1.
+>
+> **Deferred nits (not bugs, don't forget):** Phase 37's /scrutinize — `discoverRepos` re-scans the
+> filesystem on every unknown-repo tool call (no cache); same-basename repos across two search roots resolve
+> to the first silently. Phase 39 — the `blocked`/`task` TTLs are constants, not config (promote to a
+> dashboard toggle like deadline decay if the owner wants to tune them).
 
 > **Design record (built in Phase 36, kept for the reasoning):** Discord is **text-first, voice
 > deferred** — the dashboard already does two-way voice locally (hold-Space in, `speechSynthesis` out),
