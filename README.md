@@ -28,7 +28,7 @@ The main loop is continuous: **Observe → Understand → Predict → Act → Ob
 
 ## Status — it works
 
-Phases 1–32 are done and verified end-to-end, most of them against live data rather than only tests.
+Phases 1–37 are done and verified end-to-end, most of them against live data rather than only tests.
 What runs today:
 
 - **Observe without being told** — a `watch` daemon senses **git commits, branch → task, repo → project,
@@ -44,12 +44,18 @@ What runs today:
   you to **approve or dismiss**; approving a code proposal can run the whole Synth → Executor pipeline.
 - **See and click** — a local `ui` dashboard (127.0.0.1 only) shows Now / Recommended / **Needs you** /
   Decisions, with buttons for the signals no watcher can sense, and push-to-talk dictation.
+- **Talk to it, and it can act** — a conversational agent (dashboard chat, or Discord DM) answers from
+  your **real** state — it reads any of your repos by name (no registration needed) and can make changes,
+  which it commits to an isolated branch after you approve. Replies render markdown.
+- **It reaches you first** (opt-in) — over Discord DM, when something new needs your decision, a short
+  rule-timed nudge arrives even with the dashboard closed; you can reply in the same thread and it enters
+  the same conversation.
 - **Read the screen** (opt-in) — window titles, and on-device OCR of a screenshot to *suggest* what
   you might be blocked on. Suggestions only; you confirm with one click.
 - **Stay informed** — `report` renders a human-readable digest, and the daemon keeps a durable
   `notifications` log so nothing that needs your decision is ever lost.
 
-456 tests pass, fully offline.
+638 tests pass, fully offline, plus two opt-in browser e2e tests.
 
 ---
 
@@ -136,6 +142,7 @@ propose                                       Ask the Advisor for proactive prop
 proposals                                     List the pending proposals awaiting your approval
 approve <id> [--apply] [--note ".."]          Approve a proposal (runs Synth→Executor if it is executable)
 dismiss <id>                                  Reject a pending proposal
+chat "<message>"                              Talk to the agent (reads real state, can act; asks before writing)
 capture <note>                                Capture a quick note (feeds the Advisor)
 download-model [id]                           Download a browser-wasm Whisper model for offline dictation
 watch                                         Start the watcher daemon (Ctrl-C to stop)
@@ -144,9 +151,10 @@ watch                                         Start the watcher daemon (Ctrl-C t
 Dev:
 
 ```bash
-bun test          # 456 offline tests
-bun run typecheck # tsc --noEmit (strict)
-bun run test:e2e  # opt-in browser test for in-browser Whisper (needs Playwright + the model)
+bun test           # 638 offline tests
+bun run typecheck  # tsc --noEmit (strict)
+bun run test:e2e       # opt-in browser test for in-browser Whisper (needs Playwright + the model)
+bun run test:e2e:chat  # opt-in browser test for chat markdown + scroll (needs Playwright only)
 ```
 
 ---
@@ -187,6 +195,31 @@ done.
   "🔴 Listening…" indicator. There is deliberately **no hidden always-on room recorder** — in a shared
   space that would capture people who never consented, and an indicator on your laptop doesn't inform
   them.
+
+---
+
+## Security & scope
+
+This is a **single-user tool that runs on your own machine** — honestly scoped so you know what you're
+running before you enable the autonomous parts:
+
+- **The dashboard is `127.0.0.1`-only and unauthenticated.** It is meant for the person sitting at the
+  machine. Don't expose the port. Over Discord, `config.discord.ownerId` is the auth boundary — the bot
+  obeys **only** that user id and drops every other sender.
+- **The agent has real tools on your machine.** It can read files across your configured repos, run shell
+  commands (`run_command`), and make code changes — the last always lands on an isolated
+  `executive/change-*` branch you review, never your working branch. Write tools ask for confirmation
+  unless you add them to `config.agent.trustedTools`.
+- **`run_command` runs with your privileges and is not sandboxed.** Treat enabling the agent like giving a
+  capable assistant a shell. Sandboxing it is a planned next step (see *Not yet*).
+- **Secrets stay in `.env`** (gitignored) referenced by name; the whole `.executive/` runtime tree is
+  gitignored and never committed. The agent's path gate refuses to read `.env`, private keys, and `.ssh`
+  even inside an allowed repo.
+- **Not hardened for hostile or multi-user or server deployment.** It assumes a trusted single operator.
+
+The default LLM backend points at the author's private flat-rate Qwen gateway, which **you cannot reach** —
+set `worker.backend: "mock"` to run fully offline, or point `worker.baseUrl`/`apiKeyEnv` at your own
+Anthropic-compatible endpoint. Screen OCR/window sensing is **Windows-only**; the rest is cross-platform.
 
 ---
 
@@ -296,8 +329,10 @@ See [`CLAUDE.md`](./CLAUDE.md) for the full phase-by-phase history and the two-`
 
 ## Not yet (deliberately)
 
-- **External delivery** of notifications (email/Slack/webhook) — outward-facing, so it stays behind an
-  explicit channel choice + approval. `notifications.jsonl` is the local substrate it will read from.
+- **External delivery beyond Discord** (email/Slack/webhook) — Discord DM nudges shipped (Phase 36); other
+  channels stay behind an explicit channel choice. `notifications.jsonl` is the local substrate they read.
+- **Sandboxing `run_command`** — the agent's shell tool runs with your privileges (see Security & scope).
+  A sandbox/allowlist is the next safety step.
 - **Vision screen-reading in practice** — the code works, but the gateway this runtime uses does not
   allow the multimodal model (HTTP 403), so on-device OCR is the working screen path. It keeps the
   image local anyway.
