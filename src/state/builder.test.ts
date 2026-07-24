@@ -16,6 +16,7 @@ import { bootstrap } from "../bootstrap.js";
 import { append, read } from "../events/store.js";
 import { execRoot, eventLogPath } from "../paths.js";
 import { buildState, writeState, taskFromBranch, BLOCKED_TTL_MS, MANUAL_TASK_TTL_MS } from "./builder.js";
+import { updateAutonomyConfig } from "../config.js";
 import { statePath, contextPath } from "../paths.js";
 import type { EventSource } from "../events/types.js";
 
@@ -888,13 +889,49 @@ describe("buildState — decay (Phase 39)", () => {
     expect(buildState(NOW).state.currentTask).toBe("dark mode");
   });
 
-  // --- deadline: a commitment, retired only by the owner — NEVER decays by age ---
+  // --- deadline: decay is OPT-IN, DEFAULT OFF (a commitment, not transient state) ---
 
-  it("10. a deadline never decays by age, however overdue (only the owner clears it)", () => {
-    // 19 days overdue — pre-scrutinize this auto-retired; it must now be KEPT so
+  it("10. a deadline does NOT decay by default, however overdue (toggle off)", () => {
+    // 19 days overdue. With no config (loadConfig unavailable here) decay is off, so
     // Phase 32's overdue nag keeps firing until the owner closes it out.
     writeRawEventAt("system", 1, "system.task", { deadline: "2026-07-01" }, hoursAgo(2));
     const { state } = buildState(NOW); // NOW = 2026-07-20
     expect(state.deadline).toBe("2026-07-01");
+  });
+});
+
+// ── Phase 39: OPT-IN deadline decay (config.state.deadlineDecayDays) ─────────
+
+describe("buildState — deadline decay (opt-in)", () => {
+  const DIR = "/tmp/executive-test-dldecay-" + randomUUID();
+  const NOW = new Date("2026-07-20T12:00:00.000Z");
+  beforeEach(() => { setExecutiveHome(DIR); bootstrap(); });
+  afterEach(() => cleanup(DIR));
+
+  it("when ENABLED, a deadline >7 days past due retires to null", () => {
+    updateAutonomyConfig({ deadlineDecayEnabled: true }); // writes deadlineDecayDays = 7
+    writeRawEventAt("system", 1, "system.task", { deadline: "2026-07-01" }, "2026-07-20T10:00:00.000Z");
+    const { state } = buildState(NOW); // 19 days overdue
+    expect(state.deadline).toBeNull();
+  });
+
+  it("when ENABLED, a freshly-overdue deadline (<=7 days) is kept (Phase 32 still nags it)", () => {
+    updateAutonomyConfig({ deadlineDecayEnabled: true });
+    writeRawEventAt("system", 1, "system.task", { deadline: "2026-07-18" }, "2026-07-20T10:00:00.000Z");
+    const { state } = buildState(NOW); // 2 days overdue
+    expect(state.deadline).toBe("2026-07-18");
+  });
+
+  it("when DISABLED (default), even a long-overdue deadline is kept", () => {
+    writeRawEventAt("system", 1, "system.task", { deadline: "2026-07-01" }, "2026-07-20T10:00:00.000Z");
+    const { state } = buildState(NOW);
+    expect(state.deadline).toBe("2026-07-01");
+  });
+
+  it("a non-date deadline never decays even when enabled", () => {
+    updateAutonomyConfig({ deadlineDecayEnabled: true });
+    writeRawEventAt("system", 1, "system.task", { deadline: "end of sprint" }, "2026-07-20T10:00:00.000Z");
+    const { state } = buildState(NOW);
+    expect(state.deadline).toBe("end of sprint");
   });
 });

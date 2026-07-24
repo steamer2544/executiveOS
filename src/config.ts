@@ -36,6 +36,11 @@ export interface Config {
   /** State builder configuration (defaults applied when absent). */
   state?: {
     intervalMs?: number;
+    /** Opt-in deadline decay (default off / null). When a positive number N, a deadline
+     *  more than N whole days past due auto-retires in the State Builder. Off = a deadline
+     *  is retired only by the owner (Phase 32's "close it out" nag stays). Dashboard toggle
+     *  writes DEADLINE_DECAY_DEFAULT_DAYS when switched on. */
+    deadlineDecayDays?: number | null;
   };
   /** Worker (LLM) configuration (defaults applied when absent). */
   worker?: {
@@ -214,6 +219,7 @@ export function defaultConfig(): Config {
     },
     state: {
       intervalMs: 30000,
+      deadlineDecayDays: null,
     },
     worker: {
       backend: "anthropic",
@@ -372,6 +378,7 @@ export function loadConfig(): Config {
     parsed.state = defaults.state!;
   }
   parsed.state.intervalMs = parsed.state.intervalMs ?? defaults.state!.intervalMs!;
+  parsed.state.deadlineDecayDays = parsed.state.deadlineDecayDays ?? null;
 
   // Merge missing worker fields with defaults.
   if (!parsed.worker) {
@@ -549,12 +556,19 @@ export function updateTranscribeConfig(patch: Record<string, unknown>): Config["
   return t;
 }
 
+/** Days-past-due the dashboard toggle writes when deadline decay is switched on. The
+ *  builder honours any positive `config.state.deadlineDecayDays`, so a hand-edited
+ *  config.json can pick a different N; the toggle just picks a sensible default. */
+export const DEADLINE_DECAY_DEFAULT_DAYS = 7;
+
 /** What the dashboard may switch on and off, and what it reads back. */
 export interface AutonomyState {
   advisorEnabled: boolean;
   inferEnabled: boolean;
   autopilotEnabled: boolean;
   agentEnabled: boolean;
+  /** Opt-in deadline decay (a State-derivation behaviour, not an LLM/repo action). */
+  deadlineDecayEnabled: boolean;
   /** Read-only here. See updateAutonomyConfig for why this is not a dashboard toggle. */
   autopilotApply: boolean;
 }
@@ -567,6 +581,7 @@ export function readAutonomyConfig(config?: Config): AutonomyState {
     inferEnabled: c.infer?.enabled === true,
     autopilotEnabled: c.autopilot?.enabled === true,
     agentEnabled: c.agent?.enabled === true,
+    deadlineDecayEnabled: typeof c.state?.deadlineDecayDays === "number" && c.state.deadlineDecayDays > 0,
     autopilotApply: c.autopilot?.apply === true,
   };
 }
@@ -605,6 +620,10 @@ export function updateAutonomyConfig(patch: Record<string, unknown>): AutonomySt
   if (typeof patch.agentSpeak === "boolean") {
     if (!config.agent) config.agent = {};
     config.agent.speak = patch.agentSpeak;
+  }
+  if (typeof patch.deadlineDecayEnabled === "boolean") {
+    if (!config.state) config.state = {};
+    config.state.deadlineDecayDays = patch.deadlineDecayEnabled ? DEADLINE_DECAY_DEFAULT_DAYS : null;
   }
   // patch.autopilotApply is ignored on purpose — see the doc comment above.
 

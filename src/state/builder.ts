@@ -9,7 +9,7 @@ import { isAbsolute, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import type { ExecEvent, EventSource } from "../events/types.js";
 import { eventLogPath, execRoot, statePath, contextPath } from "../paths.js";
-import { loadConfig } from "../config.js";
+import { loadConfig, type Config } from "../config.js";
 import {
   type State,
   type Context,
@@ -30,12 +30,12 @@ import { computePatterns } from "./patterns.js";
 // tests) are refreshed continuously by watchers, so they never decay. Decay is not
 // deletion: task/project fall back to branch/repo inference (itself always fresh).
 //
-// NOTE: `deadline` deliberately does NOT decay. A deadline is a *commitment*, not a
-// transient state — it does not resolve by being ignored — so silently retiring an
-// overdue one would undo Phase 32's deliberate "close it out, reschedule, or clear
-// it" nag exactly when the reminder matters most. It is retired only by the owner
-// (an empty `system.task {deadline:""}` / the dashboard "Clear deadline" button).
-// (Dropped after the Phase 39 /scrutinize; see docs/scopes/phase-39-state-decay.md.)
+// blocked and task/project decay UNCONDITIONALLY — they ARE transient state. `deadline`
+// is different: it is a *commitment*, not a transient state (it does not resolve by
+// being ignored), so retiring an overdue one silently undoes Phase 32's deliberate
+// "close it out, reschedule, or clear it" nag. Deadline decay is therefore OPT-IN and
+// DEFAULT OFF (`config.state.deadlineDecayDays`, a dashboard toggle) — the owner turns
+// it on deliberately when they'd rather have overdue deadlines self-retire than nag.
 
 /** A `system.blocked` with no newer `unblocked` older than this decays to not-blocked.
  *  24h — "a day-old block stops dominating". */
@@ -45,6 +45,21 @@ export const BLOCKED_TTL_MS = 24 * 60 * 60 * 1000;
  *  the Phase-15/16 branch/repo inference. 72h (3 days) — honours "a task can span days"
  *  (Phase 30) while retiring a genuinely abandoned label. */
 export const MANUAL_TASK_TTL_MS = 72 * 60 * 60 * 1000;
+
+const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
+
+/** Whole days `deadline` is past `nowIso`, or null when either is not a plain YYYY-MM-DD
+ *  date. Local copy of the Planner's `daysOverdue` — state sits BELOW the planner in the
+ *  layer graph, so it must not import from it. A non-date deadline never decays. */
+function daysPastDue(deadline: string, nowIso: string): number | null {
+  if (!DATE_ONLY.test(deadline)) return null;
+  const today = nowIso.slice(0, 10);
+  if (!DATE_ONLY.test(today)) return null;
+  const ms = Date.parse(today + "T00:00:00Z") - Date.parse(deadline + "T00:00:00Z");
+  if (Number.isNaN(ms)) return null;
+  const days = Math.floor(ms / 86_400_000);
+  return days > 0 ? days : null;
+}
 
 /** True if a signal timestamped `ts` is older than `ttlMs` relative to `nowMs`.
  *  Uncertain (unparseable ts) → false → KEEP (never drop on doubt). */
@@ -246,22 +261,28 @@ export function buildState(now?: Date): { state: State; context: Context } {
   // Decay stale MANUAL task/project (Phase 39) so a day-old label stops overriding
   // reality. Cleared BEFORE the branch/repo inference fallbacks below, so a decayed
   // manual value falls through to the continuously-sensed derivation.
+  // Config drives the (opt-in) deadline decay and the file-resolution roots below.
+  // loadConfig() throws if .executive/ isn't bootstrapped (e.g. tests) → degrade to none.
+  let cfg: Config | null = null;
+  try { cfg = loadConfig(); } catch { cfg = null; }
+
   const nowMsForDecay = clock.getTime();
   if (isStale(taskEventTs, nowMsForDecay, MANUAL_TASK_TTL_MS)) currentTask = null;
   if (isStale(projectEventTs, nowMsForDecay, MANUAL_TASK_TTL_MS)) currentProject = null;
-  // (No deadline decay — a deadline is a commitment, retired only by the owner. See the
-  // NOTE at the top of this file; Phase 32 already nags an overdue one until cleared.)
+  // Deadline decay is OPT-IN (config.state.deadlineDecayDays, default off): retire a
+  // deadline only once it is more than N whole days past due, and only when the owner
+  // enabled it (see the NOTE at the top of this file).
+  const decayDays = cfg?.state?.deadlineDecayDays;
+  if (deadline !== null && typeof decayDays === "number" && decayDays > 0) {
+    const over = daysPastDue(deadline, generatedAt);
+    if (over !== null && over > decayDays) deadline = null;
+  }
 
   // --- currentFile, recentFiles (editor.save) ---
   // Only include files that still exist on disk, resolved against the dirs the
   // FsWatcher actually watches (see fileResolutionRoots). loadConfig() may throw
   // if .executive/ hasn't been bootstrapped (e.g. in tests) — fall back to cwd-only.
-  let fileRoots: string[];
-  try {
-    fileRoots = fileResolutionRoots(loadConfig());
-  } catch {
-    fileRoots = fileResolutionRoots({});
-  }
+  const fileRoots = fileResolutionRoots(cfg ?? {});
   let currentFile: string | null = null;
   const recentFilesSet: string[] = [];
   // Walk newest → oldest to collect distinct paths

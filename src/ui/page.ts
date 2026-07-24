@@ -220,6 +220,11 @@ export function renderPage(): string {
       <input type="checkbox" id="autoAutopilot" onchange="saveAutonomy()" />
       <span><b>Autopilot</b> — runs plan→work→synth→execute when the Planner says <i>act</i>.</span>
     </label>
+    <label class="auto-row">
+      <input type="checkbox" id="autoDeadlineDecay" onchange="saveAutonomy()" />
+      <span><b>Auto-retire deadlines</b> — a deadline overdue by more than 7 days retires itself.
+      Off = it keeps nagging until you close it out or clear it. No LLM, no repo change.</span>
+    </label>
     <div id="applyState" class="muted" style="font-size:12px;margin-top:8px"></div>
   </section>
 
@@ -660,6 +665,7 @@ function populateAutonomy(a) {
   $("autoAdvisor").checked = !!a.advisorEnabled;
   $("autoInfer").checked = !!a.inferEnabled;
   $("autoAutopilot").checked = !!a.autopilotEnabled;
+  $("autoDeadlineDecay").checked = !!a.deadlineDecayEnabled;
   const note = $("applyState");
   if (a.autopilotApply) {
     note.innerHTML = a.autopilotEnabled
@@ -676,6 +682,7 @@ async function saveAutonomy() {
     advisorEnabled: $("autoAdvisor").checked,
     inferEnabled: $("autoInfer").checked,
     autopilotEnabled: $("autoAutopilot").checked,
+    deadlineDecayEnabled: $("autoDeadlineDecay").checked,
   };
   try {
     const r = await fetch("/api/autonomy", {

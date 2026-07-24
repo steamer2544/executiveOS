@@ -1090,6 +1090,24 @@ docs/scopes/           # per-phase specs (the contract handed to the implementer
   (reversed a deliberate Phase 32 design) → dropped (removing it also eliminated the `daysPastDue` /
   `daysOverdue` duplication the review flagged). Spec: `docs/scopes/phase-39-state-decay.md`. Files:
   `src/state/builder.ts`, `src/state/builder.test.ts`, `src/auto/auto.test.ts`.
+- **Phase 39.1 — DONE** (architect, this session): **opt-in deadline decay toggle.** The Phase 39
+  `/scrutinize` dropped deadline decay because unconditional auto-retire silently undoes Phase 32's
+  deliberate "close it out" nag (a deadline is a commitment, not transient state). The owner then asked for
+  it back **as a settings toggle** — the correct resolution, and squarely the project's "autonomy is opt-in,
+  layered, default-off" rule: default OFF = Phase 32's nag preserved, no silent reversal; the owner opts in
+  when they'd rather overdue deadlines self-retire. New `config.state.deadlineDecayDays` (null/≤0 = off,
+  default null; a positive **N** = retire a deadline **>N whole days past due**; a hand-edited config can
+  pick any N). `buildState` reads config once (reused for the file-resolution roots — replaced a second
+  `loadConfig()`) and decays the deadline only when `decayDays > 0`; `blocked`/`task`/`project` still decay
+  unconditionally. The toggle rides the existing Phase-34 Autonomy plumbing (no new endpoint):
+  `AutonomyState.deadlineDecayEnabled`, `readAutonomyConfig`/`updateAutonomyConfig` (writes
+  `DEADLINE_DECAY_DEFAULT_DAYS = 7` on / `null` off, atomic), a dashboard **Autonomy** checkbox
+  ("Auto-retire deadlines … overdue by more than 7 days"), re-read every tick → no restart. Deterministic,
+  NO LLM, no repo write. 708 passing tests (+5: config round-trip + 4 builder on/off/non-date cases).
+  **Sabotage-checked:** bypassing the config gate (always-on) fails exactly the two default-off tests;
+  restored. `daysPastDue` (the local copy of the Planner's `daysOverdue`, justified by the state-below-
+  planner layering) returns with the feature. Files: `src/state/builder.ts`, `src/config.ts`,
+  `src/ui/page.ts`, `src/state/builder.test.ts`, `src/config.test.ts`.
 - **Loop complete (manual trigger):** `auto --apply` runs the whole chain in one command; the human
   reviews/merges the `executive/change-<id>` branch.
 

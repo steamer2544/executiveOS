@@ -6,7 +6,7 @@
 > Last updated after **Phase 39** (state decay/TTL — stale manual signals age out), **Phase 38** (sandbox
 > `run_command` + hard trust rule), **Phase 37** (repo discovery + chat markdown/scroll + secrets gate),
 > and **Phase 36 going LIVE** (Discord).
-> **703 passing tests** + one opt-in browser e2e, all green.
+> **708 passing tests** + one opt-in browser e2e, all green.
 >
 > **✅ Phase 36 is LIVE.** The owner supplied a bot token + `ownerId`, ran `ui`, and the bot **DM-answered
 > from real state** (asked "ตอนนี้ผมทำอะไรอยู่" → correct project/task/branch/file). What remains is the
@@ -52,13 +52,14 @@
 >    the manually-asserted** signals (auto-sensed fields never decay): `BLOCKED_TTL_MS` = 24h,
 >    `MANUAL_TASK_TTL_MS` = 72h (task/project → fall back to branch/repo inference). Exported constants in
 >    `src/state/builder.ts`, measured against the builder's own `now` (stays pure); uncertain (bad `ts`) →
->    keep; Planner untouched. 703 tests (+10 incl. exact 24h/72h boundary cases), sabotage-checked.
->    **`deadline` deliberately does NOT decay** — a `/scrutinize` pass caught that auto-retiring an overdue
->    deadline reverses Phase 32's deliberate "close it out" nag (a deadline is a commitment, not a transient
->    state, so it does not resolve by being ignored); dropped, which also removed the `daysPastDue`
->    duplication the review flagged. A deadline is retired only by the owner (empty `system.task
->    {deadline:""}` / dashboard "Clear deadline"). See CLAUDE.md Phase 39 + `docs/scopes/phase-39-state-decay.md`.
->    **Deferred (not built):** TTLs are constants, not config (promote later if the owner wants to tune).
+>    keep; Planner untouched. 708 tests (+incl. exact 24h/72h boundary cases), sabotage-checked.
+>    **`blocked`/`task`/`project` decay unconditionally.** **Deadline decay: `/scrutinize` caught that doing
+>    it *unconditionally* reverses Phase 32's deliberate "close it out" nag (a deadline is a commitment, not
+>    transient state), so Phase 39.1 made it OPT-IN + DEFAULT OFF** — a dashboard **Autonomy** toggle backed
+>    by `config.state.deadlineDecayDays` (null/≤0 = off; positive N = retire >N days past due; toggle writes
+>    7). Default off = Phase 32's nag preserved. See CLAUDE.md Phase 39 + 39.1 +
+>    `docs/scopes/phase-39-state-decay.md`. **Deferred:** the blocked/task TTLs are constants, not config
+>    (promote later if the owner wants to tune them the same way).
 > 3. **SQLite/Drizzle storage. ⏭️ NEXT.** The JSONL log is 5,500+ events. Planned since Phase 1; the log
 >    still works, so this is the lowest-urgency. `compact` exists for noise but not for scale.
 >

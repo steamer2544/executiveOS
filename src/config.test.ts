@@ -179,8 +179,21 @@ describe("readAutonomyConfig / updateAutonomyConfig", () => {
     writeConfig({ ...base });
     expect(readAutonomyConfig()).toEqual({
       advisorEnabled: false, inferEnabled: false, autopilotEnabled: false, agentEnabled: false,
-      autopilotApply: false,
+      deadlineDecayEnabled: false, autopilotApply: false,
     });
+  });
+
+  it("round-trips the opt-in deadline-decay toggle (off by default, on writes N days)", () => {
+    writeConfig({ ...base });
+    expect(readAutonomyConfig().deadlineDecayEnabled).toBe(false);
+    const out = updateAutonomyConfig({ deadlineDecayEnabled: true });
+    expect(out.deadlineDecayEnabled).toBe(true);
+    // Persisted as a positive day-count the builder honours, not just a flag.
+    expect(loadConfig().state!.deadlineDecayDays).toBe(7);
+    // And can be switched back off → null (no decay).
+    updateAutonomyConfig({ deadlineDecayEnabled: false });
+    expect(readAutonomyConfig().deadlineDecayEnabled).toBe(false);
+    expect(loadConfig().state!.deadlineDecayDays).toBeNull();
   });
 
   it("round-trips the three settable gates and persists them", () => {

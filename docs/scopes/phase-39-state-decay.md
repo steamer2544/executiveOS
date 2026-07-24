@@ -3,12 +3,14 @@
 > **Audience:** implementer + reviewer (architect-implemented this phase). Everything needed is here.
 > **Author:** Claude (architect). **Layer:** `src/state/builder.ts` only + its tests. Pure, deterministic, NO LLM.
 >
-> **POST-/scrutinize UPDATE (this session):** the **deadline decay was dropped**. A deadline is a
-> *commitment*, not a transient state — it does not resolve by being ignored — so auto-retiring an overdue
-> one silently undoes Phase 32's deliberate "close it out, reschedule, or clear it" nag exactly when the
-> reminder matters. **Only `blocked` and manual `task`/`project` decay.** The deadline sections below are
-> kept struck-through-in-spirit for the record; the shipped code retires a deadline only by owner action
-> (empty `system.task {deadline:""}` / dashboard "Clear deadline").
+> **POST-/scrutinize UPDATE, then Phase 39.1 (this session):** the `/scrutinize` flagged that
+> **unconditional** deadline decay silently undoes Phase 32's deliberate "close it out, reschedule, or
+> clear it" nag — a deadline is a *commitment*, not a transient state, and doesn't resolve by being
+> ignored. So `blocked` and manual `task`/`project` decay **unconditionally**, but **deadline decay is now
+> OPT-IN and DEFAULT OFF** — a dashboard Autonomy toggle backed by `config.state.deadlineDecayDays`
+> (null/≤0 = off; a positive N = retire a deadline >N days past due; the toggle writes 7). Default off = the
+> Phase 32 nag is preserved; the owner turns it on deliberately if they'd rather overdue deadlines
+> self-retire. The deadline sections below describe the *enabled* behaviour.
 
 ---
 
