@@ -3,9 +3,10 @@
 > **Purpose:** a single doc to resume this project cold if context/memory is lost. Pairs with
 > `CLAUDE.md` (the authoritative phase-by-phase log), `GOTCHA.md` (traps & non-obvious failure modes —
 > read before touching PowerShell/state/tests/LLM), and `README.md` (user-facing overview).
-> Last updated after **Phase 38** (sandbox `run_command` + hard trust rule), **Phase 37** (repo
-> discovery + chat markdown/scroll + secrets gate), and **Phase 36 going LIVE** (Discord).
-> **693 passing tests** + one opt-in browser e2e, all green.
+> Last updated after **Phase 39** (state decay/TTL — stale manual signals age out), **Phase 38** (sandbox
+> `run_command` + hard trust rule), **Phase 37** (repo discovery + chat markdown/scroll + secrets gate),
+> and **Phase 36 going LIVE** (Discord).
+> **703 passing tests** + one opt-in browser e2e, all green.
 >
 > **✅ Phase 36 is LIVE.** The owner supplied a bot token + `ownerId`, ran `ui`, and the bot **DM-answered
 > from real state** (asked "ตอนนี้ผมทำอะไรอยู่" → correct project/task/branch/file). What remains is the
@@ -47,13 +48,19 @@
 >    "ไว้ใจตลอด" button is hidden in the dashboard + Discord. 693 tests (+55), 4/4 sabotage checks caught.
 >    See CLAUDE.md Phase 38 + `docs/scopes/phase-38-sandbox-run-command.md`. **NOT in scope (deferred):**
 >    exfiltration detection (deny is destruction-only), a real OS sandbox (this is classification).
-> 2. **Phase 39 — state decay/TTL. ⏭️ NEXT.** Root-cause fix for stale signals: this session had to `emit
->    system.unblocked` + empty `system.task` by hand because a confirmed-then-never-cleared `system.blocked`
->    (seq 4838) and a stale `system.task` (seq 4985) had overridden reality forever ("newest wins, no
->    expiry"). Give `blocked`/`deadline`/manual `task` an age-out in the State Builder (deterministic, no
->    LLM), so a day-old block stops dominating. Pure `src/state/builder.ts` change + tests.
-> 3. **SQLite/Drizzle storage** — the JSONL log is 5,500+ events. Planned since Phase 1; the log still
->    works, so this is the lowest-urgency of the three. `compact` exists for noise but not for scale.
+> 2. **Phase 39 — state decay/TTL. ✅ DONE + /scrutinize'd** (this session). `buildState` ages out **only
+>    the manually-asserted** signals (auto-sensed fields never decay): `BLOCKED_TTL_MS` = 24h,
+>    `MANUAL_TASK_TTL_MS` = 72h (task/project → fall back to branch/repo inference). Exported constants in
+>    `src/state/builder.ts`, measured against the builder's own `now` (stays pure); uncertain (bad `ts`) →
+>    keep; Planner untouched. 703 tests (+10 incl. exact 24h/72h boundary cases), sabotage-checked.
+>    **`deadline` deliberately does NOT decay** — a `/scrutinize` pass caught that auto-retiring an overdue
+>    deadline reverses Phase 32's deliberate "close it out" nag (a deadline is a commitment, not a transient
+>    state, so it does not resolve by being ignored); dropped, which also removed the `daysPastDue`
+>    duplication the review flagged. A deadline is retired only by the owner (empty `system.task
+>    {deadline:""}` / dashboard "Clear deadline"). See CLAUDE.md Phase 39 + `docs/scopes/phase-39-state-decay.md`.
+>    **Deferred (not built):** TTLs are constants, not config (promote later if the owner wants to tune).
+> 3. **SQLite/Drizzle storage. ⏭️ NEXT.** The JSONL log is 5,500+ events. Planned since Phase 1; the log
+>    still works, so this is the lowest-urgency. `compact` exists for noise but not for scale.
 >
 > **Deferred nits from Phase 37's /scrutinize (not bugs, don't forget):** `discoverRepos` re-scans the
 > filesystem on every unknown-repo tool call (no cache) — add a per-turn/short-TTL cache if it feels slow;

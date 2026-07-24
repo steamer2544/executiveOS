@@ -1063,6 +1063,33 @@ docs/scopes/           # per-phase specs (the contract handed to the implementer
   `docs/scopes/phase-38-sandbox-run-command.md`. Files: `src/agent/{command-guard,command-guard.test,
   tools,loop,types,agent.test}.ts`, `src/config.ts`, `src/ui/page.ts`, `src/channel/{types,discord}.ts`,
   `src/index.ts`.
+- **Phase 39 — DONE** (architect impl + self-review + sabotage-check + live smoke, this session): **State
+  decay / TTL — stale manual signals age out.** Root-cause fix for the incident where the owner had to
+  `emit system.unblocked` + empty `system.task` **by hand**: "newest event wins per field" had **no
+  expiry**, so a `system.blocked` (seq 4838) never followed by `unblocked` and a stale `system.task` (seq
+  4985) dominated the derived state forever. Now `buildState` ages out **only the manually-asserted**
+  signals — auto-sensed fields (branch/file/commit/repo/window/tests) are refreshed continuously by
+  watchers, so they never decay. Two TTLs (exported constants in `src/state/builder.ts`, measured against
+  the builder's own `now` so the function stays pure): `BLOCKED_TTL_MS` = **24h** (a block with no newer
+  unblock older than a day → `blocked:false`), `MANUAL_TASK_TTL_MS` = **72h** (a manual `task`/`project`
+  older than 3 days → cleared → falls back to the Phase-15/16 branch/repo inference; 3 days honours Phase
+  30's "a task can span days"). **Decay only ever removes a stale positive assertion** (never invents/sets
+  a value); **uncertain → keep** (an unparseable `ts` → `Date.parse` NaN → no decay). Deterministic, NO
+  LLM, no config/CLI change, no new event source; the Planner is untouched (it benefits automatically —
+  `resolve_block` stops firing on a decayed block). **`deadline` deliberately does NOT decay** — dropped
+  after this phase's `/scrutinize`: a deadline is a *commitment*, not a transient state (it does not resolve
+  by being ignored), so auto-retiring an overdue one would silently undo Phase 32's "close it out,
+  reschedule, or clear it" nag exactly when the reminder matters; it is retired only by the owner (empty
+  `system.task {deadline:""}` / dashboard "Clear deadline"). 703 passing tests (10 decay cases incl. exact
+  24h/72h boundary tests + a `writeRawEventAt` ts-control helper). **One test-fixture fix:** `auto.test.ts`'s
+  "blocked → ask → stop" seeded a block with a hardcoded `ts:"2026-07-17"` and let `runAuto` build state
+  with the real clock → 7 days old → correctly decayed → test red; the fixture wanted a *live* block, so it
+  now uses `new Date().toISOString()`. **Sabotage-checked:** disabling the blocked / task decay each fails
+  exactly its criterion (2 / 5). Live smoke: `build-state` on the real log derives a coherent snapshot.
+  **/scrutinize verdict:** implementation sound + traced clean; the one flagged item was deadline decay
+  (reversed a deliberate Phase 32 design) → dropped (removing it also eliminated the `daysPastDue` /
+  `daysOverdue` duplication the review flagged). Spec: `docs/scopes/phase-39-state-decay.md`. Files:
+  `src/state/builder.ts`, `src/state/builder.test.ts`, `src/auto/auto.test.ts`.
 - **Loop complete (manual trigger):** `auto --apply` runs the whole chain in one command; the human
   reviews/merges the `executive/change-<id>` branch.
 

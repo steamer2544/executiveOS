@@ -187,7 +187,9 @@ describe("runAuto — ask disposition stops", () => {
   it("blocked state (resolve_block, ask) → stops at plan, Worker never called", async () => {
     const config = makeConfig();
 
-    // Seed a blocked state by writing a system.blocked event.
+    // Seed a blocked state by writing a system.blocked event. Use a CURRENT ts:
+    // runAuto builds state with the real clock, and Phase 39 decays a block older
+    // than 24h — this test verifies the live "blocked → ask → stop" path, not decay.
     const eventsDir = join(EXEC_HOME, "events");
     mkdirSync(eventsDir, { recursive: true });
     writeFileSync(
@@ -196,7 +198,7 @@ describe("runAuto — ask disposition stops", () => {
         source: "system",
         type: "system.blocked",
         seq: 1,
-        ts: "2026-07-17T00:00:01.000Z",
+        ts: new Date().toISOString(),
         data: { reason: "waiting on external API" },
       }) + "\n"
     );

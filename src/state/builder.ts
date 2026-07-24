@@ -19,6 +19,42 @@ import {
 } from "./types.js";
 import { computePatterns } from "./patterns.js";
 
+// ─── Decay / TTL (Phase 39) ──────────────────────────────────────────────────
+//
+// "Newest event wins per field" has no expiry, so a manually-asserted signal that
+// is never explicitly retired dominates the derived state forever. Two real
+// incidents: a system.blocked (seq 4838) never followed by unblocked, and a stale
+// system.task (seq 4985) overriding the branch-derived task — both had to be cleared
+// by hand. These TTLs age out ONLY the manually-asserted state signals (blocked /
+// manual task+project); auto-sensed fields (branch, file, commit, repo, window,
+// tests) are refreshed continuously by watchers, so they never decay. Decay is not
+// deletion: task/project fall back to branch/repo inference (itself always fresh).
+//
+// NOTE: `deadline` deliberately does NOT decay. A deadline is a *commitment*, not a
+// transient state — it does not resolve by being ignored — so silently retiring an
+// overdue one would undo Phase 32's deliberate "close it out, reschedule, or clear
+// it" nag exactly when the reminder matters most. It is retired only by the owner
+// (an empty `system.task {deadline:""}` / the dashboard "Clear deadline" button).
+// (Dropped after the Phase 39 /scrutinize; see docs/scopes/phase-39-state-decay.md.)
+
+/** A `system.blocked` with no newer `unblocked` older than this decays to not-blocked.
+ *  24h — "a day-old block stops dominating". */
+export const BLOCKED_TTL_MS = 24 * 60 * 60 * 1000;
+
+/** A manual `system.task` task/project assertion older than this decays, falling back to
+ *  the Phase-15/16 branch/repo inference. 72h (3 days) — honours "a task can span days"
+ *  (Phase 30) while retiring a genuinely abandoned label. */
+export const MANUAL_TASK_TTL_MS = 72 * 60 * 60 * 1000;
+
+/** True if a signal timestamped `ts` is older than `ttlMs` relative to `nowMs`.
+ *  Uncertain (unparseable ts) → false → KEEP (never drop on doubt). */
+function isStale(ts: string | null, nowMs: number, ttlMs: number): boolean {
+  if (ts === null) return false;
+  const t = Date.parse(ts);
+  if (Number.isNaN(t)) return false;
+  return nowMs - t > ttlMs;
+}
+
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
 /** Safely extract a string field from data, or return undefined. */
@@ -179,6 +215,9 @@ export function buildState(now?: Date): { state: State; context: Context } {
   let currentProject: string | null = null;
   let currentTask: string | null = null;
   let deadline: string | null = null;
+  // ts of the event that last SET each field to a non-null value (for TTL decay below).
+  let taskEventTs: string | null = null;
+  let projectEventTs: string | null = null;
   for (const e of allEvents) {
     if (e.type === "system.task") {
       const d = e.data ?? {};
@@ -186,11 +225,13 @@ export function buildState(now?: Date): { state: State; context: Context } {
       if ("project" in d) {
         const v = typeof d.project === "string" ? d.project.trim() : "";
         currentProject = v.length > 0 ? v : null;
+        projectEventTs = v.length > 0 ? e.ts : null;
       }
       // task: absent → unchanged; non-empty → set; empty/whitespace → clear (null)
       if ("task" in d) {
         const v = typeof d.task === "string" ? d.task.trim() : "";
         currentTask = v.length > 0 ? v : null;
+        taskEventTs = v.length > 0 ? e.ts : null;
       }
       // deadline: absent → unchanged; non-empty → set; empty/whitespace → clear (null).
       // Same three-way rule as task/project — without it a past deadline can never be
@@ -201,6 +242,15 @@ export function buildState(now?: Date): { state: State; context: Context } {
       }
     }
   }
+
+  // Decay stale MANUAL task/project (Phase 39) so a day-old label stops overriding
+  // reality. Cleared BEFORE the branch/repo inference fallbacks below, so a decayed
+  // manual value falls through to the continuously-sensed derivation.
+  const nowMsForDecay = clock.getTime();
+  if (isStale(taskEventTs, nowMsForDecay, MANUAL_TASK_TTL_MS)) currentTask = null;
+  if (isStale(projectEventTs, nowMsForDecay, MANUAL_TASK_TTL_MS)) currentProject = null;
+  // (No deadline decay — a deadline is a commitment, retired only by the owner. See the
+  // NOTE at the top of this file; Phase 32 already nags an overdue one until cleared.)
 
   // --- currentFile, recentFiles (editor.save) ---
   // Only include files that still exist on disk, resolved against the dirs the
@@ -413,6 +463,7 @@ export function buildState(now?: Date): { state: State; context: Context } {
   // --- blocked / blockedReason (system.blocked / system.unblocked) ---
   let blocked = false;
   let blockedReason: string | null = null;
+  let blockedEventTs: string | null = null;
   let lastBlockedSeq = -1;
   let lastUnblockedSeq = -1;
   for (const e of allEvents) {
@@ -423,6 +474,7 @@ export function buildState(now?: Date): { state: State; context: Context } {
         lastBlockedSeq = e.seq;
         blocked = true;
         blockedReason = reason;
+        blockedEventTs = e.ts;
       }
     }
     if (e.type === "system.unblocked") {
@@ -440,6 +492,14 @@ export function buildState(now?: Date): { state: State; context: Context } {
   }
   // If lastBlockedSeq > lastUnblockedSeq, blocked stays true with its reason.
   // Equal or both 0 → default false.
+
+  // Decay a stale block (Phase 39): a system.blocked never followed by unblocked keeps
+  // firing resolve_block forever; after BLOCKED_TTL_MS treat it as resolved. Only when
+  // still blocked (a fresh block, or an unblock winning, already cleared it).
+  if (blocked && isStale(blockedEventTs, nowMsForDecay, BLOCKED_TTL_MS)) {
+    blocked = false;
+    blockedReason = null;
+  }
 
   // --- currentWindow (from screen.window events) ---
   let currentWindow: { title: string; app: string } | null = null;

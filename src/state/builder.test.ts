@@ -15,7 +15,7 @@ import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import { bootstrap } from "../bootstrap.js";
 import { append, read } from "../events/store.js";
 import { execRoot, eventLogPath } from "../paths.js";
-import { buildState, writeState, taskFromBranch } from "./builder.js";
+import { buildState, writeState, taskFromBranch, BLOCKED_TTL_MS, MANUAL_TASK_TTL_MS } from "./builder.js";
 import { statePath, contextPath } from "../paths.js";
 import type { EventSource } from "../events/types.js";
 
@@ -42,6 +42,19 @@ function cleanup(dir: string): void {
  */
 function writeRawEvent(source: EventSource, seq: number, type: string, data: Record<string, unknown>): void {
   const ts = new Date().toISOString();
+  const event = { seq, id: randomUUID(), ts, source, type, data };
+  const dir = eventLogPath(source).substring(0, eventLogPath(source).lastIndexOf("/"));
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(eventLogPath(source), JSON.stringify(event) + "\n", { flag: "a" });
+}
+
+/**
+ * Like writeRawEvent but with an EXPLICIT ts — needed to exercise Phase 39 decay
+ * (writeRawEvent stamps ts=now, which can never be "stale" against a past test clock).
+ */
+function writeRawEventAt(
+  source: EventSource, seq: number, type: string, data: Record<string, unknown>, ts: string,
+): void {
   const event = { seq, id: randomUUID(), ts, source, type, data };
   const dir = eventLogPath(source).substring(0, eventLogPath(source).lastIndexOf("/"));
   mkdirSync(dir, { recursive: true });
@@ -781,5 +794,107 @@ describe("buildState — clearable deadline", () => {
     const { state } = buildState(new Date("2026-07-22T00:00:00.000Z"));
 
     expect(state.deadline).toBe("2026-08-01");
+  });
+});
+
+// ── Phase 39: state decay / TTL — stale manual signals age out ───────────────
+
+describe("buildState — decay (Phase 39)", () => {
+  const DIR = "/tmp/executive-test-decay-" + randomUUID();
+  beforeEach(() => setExecutiveHome(DIR));
+  afterEach(() => cleanup(DIR));
+
+  const NOW = new Date("2026-07-20T12:00:00.000Z");
+  const nowMs = NOW.getTime();
+  const hoursAgo = (h: number) => new Date(nowMs - h * 3_600_000).toISOString();
+
+  // --- blocked ---
+
+  it("1. a fresh block stays blocked", () => {
+    writeRawEventAt("system", 1, "system.blocked", { reason: "waiting on X" }, hoursAgo(1));
+    const { state } = buildState(NOW);
+    expect(state.blocked).toBe(true);
+    expect(state.blockedReason).toBe("waiting on X");
+  });
+
+  it("2. a block older than 24h decays to not-blocked", () => {
+    writeRawEventAt("system", 1, "system.blocked", { reason: "stale blocker" }, hoursAgo(25));
+    const { state } = buildState(NOW);
+    expect(state.blocked).toBe(false);
+    expect(state.blockedReason).toBeNull();
+  });
+
+  it("3. a stale block followed by a fresh block stays blocked (winning event is fresh)", () => {
+    writeRawEventAt("system", 1, "system.blocked", { reason: "old" }, hoursAgo(40));
+    writeRawEventAt("system", 2, "system.blocked", { reason: "new" }, hoursAgo(1));
+    const { state } = buildState(NOW);
+    expect(state.blocked).toBe(true);
+    expect(state.blockedReason).toBe("new");
+  });
+
+  it("4. an unparseable ts is kept (uncertain → do not drop)", () => {
+    writeRawEventAt("system", 1, "system.blocked", { reason: "x" }, "not-a-real-date");
+    const { state } = buildState(NOW);
+    expect(state.blocked).toBe(true);
+  });
+
+  // --- task / project ---
+
+  it("5. a stale manual task decays and falls back to the branch-derived task", () => {
+    writeRawEventAt("git", 1, "git.branch_switch", { to: "feat/dark-mode" }, hoursAgo(2));
+    writeRawEventAt("system", 2, "system.task", { task: "old thing" }, hoursAgo(96)); // 4 days
+    const { state } = buildState(NOW);
+    expect(state.currentTask).toBe("dark mode");
+  });
+
+  it("6. a fresh manual task is kept", () => {
+    writeRawEventAt("git", 1, "git.branch_switch", { to: "feat/dark-mode" }, hoursAgo(2));
+    writeRawEventAt("system", 2, "system.task", { task: "still working on this" }, hoursAgo(1));
+    const { state } = buildState(NOW);
+    expect(state.currentTask).toBe("still working on this");
+  });
+
+  it("7. a stale manual project decays and falls back to the active repo", () => {
+    writeRawEventAt("git", 1, "git.commit",
+      { repo: "myshi", branch: "main", sha: "abc123", subject: "wip" }, hoursAgo(2));
+    writeRawEventAt("system", 2, "system.task", { project: "old-proj" }, hoursAgo(96)); // 4 days
+    const { state } = buildState(NOW);
+    expect(state.currentProject).toBe("myshi");
+  });
+
+  // --- exact boundaries (isStale uses strict >, so exactly-TTL is KEPT) ---
+
+  it("8. a block at exactly 24h is kept; just over decays", () => {
+    // exactly at the TTL → kept
+    writeRawEventAt("system", 1, "system.blocked", { reason: "edge" },
+      new Date(nowMs - BLOCKED_TTL_MS).toISOString());
+    expect(buildState(NOW).state.blocked).toBe(true);
+    // 1 ms over the TTL → decays
+    cleanup(DIR); setExecutiveHome(DIR);
+    writeRawEventAt("system", 1, "system.blocked", { reason: "edge" },
+      new Date(nowMs - BLOCKED_TTL_MS - 1).toISOString());
+    expect(buildState(NOW).state.blocked).toBe(false);
+  });
+
+  it("9. a manual task at exactly 72h is kept; just over decays to branch inference", () => {
+    writeRawEventAt("git", 1, "git.branch_switch", { to: "feat/dark-mode" }, hoursAgo(1));
+    writeRawEventAt("system", 2, "system.task", { task: "edge task" },
+      new Date(nowMs - MANUAL_TASK_TTL_MS).toISOString());
+    expect(buildState(NOW).state.currentTask).toBe("edge task");
+    cleanup(DIR); setExecutiveHome(DIR);
+    writeRawEventAt("git", 1, "git.branch_switch", { to: "feat/dark-mode" }, hoursAgo(1));
+    writeRawEventAt("system", 2, "system.task", { task: "edge task" },
+      new Date(nowMs - MANUAL_TASK_TTL_MS - 1).toISOString());
+    expect(buildState(NOW).state.currentTask).toBe("dark mode");
+  });
+
+  // --- deadline: a commitment, retired only by the owner — NEVER decays by age ---
+
+  it("10. a deadline never decays by age, however overdue (only the owner clears it)", () => {
+    // 19 days overdue — pre-scrutinize this auto-retired; it must now be KEPT so
+    // Phase 32's overdue nag keeps firing until the owner closes it out.
+    writeRawEventAt("system", 1, "system.task", { deadline: "2026-07-01" }, hoursAgo(2));
+    const { state } = buildState(NOW); // NOW = 2026-07-20
+    expect(state.deadline).toBe("2026-07-01");
   });
 });
