@@ -241,14 +241,19 @@ export class AnthropicChatBackend implements ChatBackend {
     if (this.opts.apiKey) headers["Authorization"] = "Bearer " + this.opts.apiKey;
     const payload = JSON.stringify(body);
 
-    // Retry ONCE on a transient failure — an abort/timeout, a network error, or a gateway
-    // 5xx/524. This gateway's latency is bursty (usually 1-6 s, occasionally >120 s → an
-    // abort); a single retry turns a one-off spike into a normal answer instead of a dead
-    // turn. A 4xx is NOT retried: it is a real request problem, and the loop's native→json
-    // tools-downgrade (isToolsUnsupported) depends on seeing it.
-    const MAX_ATTEMPTS = 2;
+    // Two independent retry budgets:
+    //  • TRANSIENT_MAX — infra failures (abort/timeout, network error, gateway 5xx/524, or an
+    //    unparseable body). One retry is enough: a spike clears fast.
+    //  • SAMPLE_MAX — the model looped in its <think> phase and returned an EMPTY max_tokens
+    //    response. Even with Qwen's recommended sampling this still happens ~25% of the time on
+    //    a reasoning-heavy prompt; each roll is independent at temperature>0, so re-sampling 3×
+    //    drives ~25% down to ~0.4%. This is the COMMON failure, hence the larger budget.
+    // A 4xx is NEVER retried — real request problem, and the native→json tools-downgrade
+    // (isToolsUnsupported) depends on seeing it.
+    const SAMPLE_MAX = 4;
+    const TRANSIENT_MAX = 2;
     let lastErr: unknown;
-    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    for (let attempt = 1; attempt <= SAMPLE_MAX; attempt++) {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), this.opts.timeoutMs);
       try {
@@ -260,18 +265,28 @@ export class AnthropicChatBackend implements ChatBackend {
         });
         if (!res.ok) {
           const text = await res.text();
-          if (res.status >= 500 && attempt < MAX_ATTEMPTS) {
+          if (res.status >= 500 && attempt < TRANSIENT_MAX) {
             lastErr = new Error(`agent HTTP ${res.status}: ${text.slice(0, 200)}`);
             await sleep(RETRY_BACKOFF_MS);
             continue;
           }
           throw new Error(`agent HTTP ${res.status}: ${text.slice(0, 400)}`);
         }
-        const json = await res.json();
-        // Backstop: the sampling fix makes the think-loop rare, not impossible. If the model
-        // still burned the whole budget with no usable output, re-sample once (temperature
-        // > 0 makes the retry a genuinely different roll) instead of failing the turn.
-        if (isEmptyMaxTokens(json) && attempt < MAX_ATTEMPTS) {
+        let json: unknown;
+        try {
+          json = await res.json();
+        } catch (pe) {
+          // Truncated / non-JSON body — a transient gateway hiccup; retry like a 5xx.
+          lastErr = pe;
+          if (attempt < TRANSIENT_MAX) {
+            await sleep(RETRY_BACKOFF_MS);
+            continue;
+          }
+          throw new Error("agent: gateway returned an unparseable response");
+        }
+        // The model looped and produced no usable output — re-sample (a fresh roll at
+        // temperature>0 usually answers) instead of failing the turn.
+        if (isEmptyMaxTokens(json) && attempt < SAMPLE_MAX) {
           lastErr = new Error("agent: empty max_tokens response — re-sampling");
           await sleep(RETRY_BACKOFF_MS);
           continue;
@@ -289,7 +304,7 @@ export class AnthropicChatBackend implements ChatBackend {
         };
       } catch (e) {
         lastErr = e;
-        if (attempt < MAX_ATTEMPTS && isTransientNetworkError(e)) {
+        if (attempt < TRANSIENT_MAX && isTransientNetworkError(e)) {
           await sleep(RETRY_BACKOFF_MS);
           continue;
         }
@@ -298,7 +313,8 @@ export class AnthropicChatBackend implements ChatBackend {
         clearTimeout(timer);
       }
     }
-    // Only reached if the last attempt was a retryable 5xx (the catch path rethrows directly).
+    // Reached only if the last attempt was a retryable case that fell through (e.g. the final
+    // empty-max_tokens); parseNativeStep on that path throws its own descriptive error first.
     throw lastErr ?? new Error("agent: request failed");
   }
 }

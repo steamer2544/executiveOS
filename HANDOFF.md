@@ -65,7 +65,7 @@
 > sampling — measured 5/5 clean vs temp 0 always-loops) + a backstop re-sample on empty `max_tokens`.
 > Live-verified: the failing question now answers in 11s. **`/no_think` / `enable_thinking:false` are
 > ignored by the gateway.** Other backends still use temp 0 — switch them if they ever loop. See CLAUDE.md
-> "Agent think-loop fix" + GOTCHA §1. 724 tests.
+> "Agent think-loop fix" + GOTCHA §1. **Hardened after the owner still saw it live: real loop rate ~25%, so step() re-samples up to 3x (SAMPLE_MAX=4). The running bot must be RESTARTED to pick up the code change.** 727 tests.
 >
 > **Recently shipped this session (all pushed):**
 > - **Phase 38 — sandbox `run_command`** — `classifyCommand` → deny/allow/ask; a **denylist in code**

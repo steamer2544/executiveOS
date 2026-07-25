@@ -1081,6 +1081,17 @@ docs/scopes/           # per-phase specs (the contract handed to the implementer
   tests (+8: `isEmptyMaxTokens` + the re-sample retry). Sabotage-checked. GOTCHA §1 gained the greedy-
   decoding trap (the other backends still use temp 0 — switch them if they ever return an empty
   `max_tokens`). Files: `src/agent/protocol.ts` (+ `protocol.test.ts`).
+  **HARDENING (same session — the owner still saw it live after the first fix):** the "5/5 clean" reading
+  was **luck**. An 8-run stress test measured the *real* single-call loop rate at **~25%** even with the
+  recommended sampling — so sampling alone is insufficient. The retry loop now uses **two budgets**:
+  `SAMPLE_MAX=4` re-samples an empty `max_tokens` up to 3× (~25% → ~0.4% effective fail; each roll is
+  independent at temp>0), and `TRANSIENT_MAX=2` retries infra failures once (abort/network/5xx **and** an
+  unparseable JSON body — a real hiccup seen in the stress run). Verified **5/5 end-to-end** through the
+  full CLI path (tail latency up to ~300s on the rare multi-loop case, but it never fails; max_tokens kept
+  at 8192 so genuinely-hard questions aren't truncated into failure). **CRITICAL: the owner's running bot
+  must be RESTARTED to pick this up** — `temperature` lives in `protocol.ts` (code, loaded once at process
+  start); only `config.json` is hot-reloaded per tick. 727 tests (+3). Files: `src/agent/protocol.ts`
+  (+ `protocol.test.ts`).
 - **Phase 39 — DONE** (architect impl + self-review + sabotage-check + live smoke, this session): **State
   decay / TTL — stale manual signals age out.** Root-cause fix for the incident where the owner had to
   `emit system.unblocked` + empty `system.task` **by hand**: "newest event wins per field" had **no

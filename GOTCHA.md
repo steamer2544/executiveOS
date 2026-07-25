@@ -22,15 +22,22 @@
   ~90s. Raising `max_tokens` did NOT help (40k → still ran away, then a 524); it is a *loop*, not a
   budget shortfall. *Cause:* Qwen's own docs warn that greedy decoding "can lead to endless repetitions"
   in thinking mode. *Measured live on the exact failing prompt:* `temp 0` → always loops · `temp 0.3` →
-  loops · `temp 0.6` alone → ~1/3 still loops · **`temp 0.6 + top_p 0.95 + top_k 20` → 5/5 clean** (Qwen's
-  recommended thinking-mode sampling). `/no_think` and `chat_template_kwargs:{enable_thinking:false}` are
-  **ignored by this gateway** (both still looped). *Fix:* the agent backend (`src/agent/protocol.ts`
-  `step()`) now sends `temperature:0.6, top_p:0.95, top_k:20`, plus a backstop that re-samples once on an
-  empty `max_tokens` response (`isEmptyMaxTokens`). **Isolation that found it:** plain system + the 15
-  tools → normal `tool_use` in 3s; the *agent system prompt* (identity + AGENT_CONTRACT) is what tips it
-  into the loop — so the trigger is the prompt, the cure is the sampling. Other backends
-  (worker/synth/infer) still use `temperature:0` and could hit this on a reasoning-heavy prompt — switch
-  them to the same sampling if they ever return an empty `max_tokens`.
+  loops · `temp 0.6` alone → ~1/3 loops · `temp 0.6 + top_p 0.95 + top_k 20` (Qwen's recommended
+  thinking-mode sampling) → **still ~25%** (an early "5/5" reading was luck; an 8-run stress test found the
+  true rate). `/no_think` and `chat_template_kwargs:{enable_thinking:false}` are **ignored by this gateway**
+  (both still looped). *Fix (two parts):* (1) the agent backend (`src/agent/protocol.ts` `step()`) sends
+  `temperature:0.6, top_p:0.95, top_k:20`; (2) because sampling only halves the rate, `step()` **re-samples
+  an empty `max_tokens` up to 3×** (`SAMPLE_MAX=4`, `isEmptyMaxTokens`) — each roll is independent, so ~25%
+  → ~0.4%. Keep `max_tokens` at 8192: lowering it makes a genuinely-hard question (long legit thinking)
+  *truncate into* an empty-max_tokens and fail, trading one bug for another. **Isolation that found it:**
+  plain system + the 15 tools → normal `tool_use` in 3s; the *agent system prompt* (identity +
+  AGENT_CONTRACT) is what tips it into the loop — trigger is the prompt, cure is sampling + re-sample.
+  Other backends (worker/synth/infer) still use `temperature:0` and could hit this on a reasoning-heavy
+  prompt — give them the same treatment if they ever return an empty `max_tokens`.
+- **A code fix does NOT reach a running daemon until it restarts.** The owner kept seeing the think-loop
+  error *after* the fix was pushed because their `ui`/Discord bot process was still running the old
+  `protocol.ts` in memory. `config.json` is re-read every tick (hot), but **source is loaded once at
+  process start.** After any code change to the agent/watchers/server, tell the owner to restart `ui`.
 - **Two different API shapes — do not mix them.** All text (worker/synth/infer/advisor) speaks the
   **Anthropic** `POST /v1/messages` shape (text at `content[].text`). **Vision (`qwen-vl-max`, Phase 29)**
   speaks the **OpenAI-compatible** `POST /v1/chat/completions` with `image_url` base64 data-URL content

@@ -172,6 +172,47 @@ describe("AnthropicChatBackend.step — retry once on a transient failure", () =
     expect(out.text).toBe("answered on the second roll");
   });
 
+  it("re-samples an empty max_tokens up to 3 times then succeeds on the 4th", async () => {
+    let calls = 0;
+    const empty = { ok: true, status: 200, json: async () => ({ content: [], stop_reason: "max_tokens" }), text: async () => "" } as unknown as Response;
+    globalThis.fetch = (async () => {
+      calls++;
+      return calls < 4 ? empty : okResponse("finally");
+    }) as unknown as typeof fetch;
+
+    const out = await makeBackend().step({ system: "s", transcript: HELLO, tools: [] });
+    expect(calls).toBe(4);
+    expect(out.text).toBe("finally");
+  });
+
+  it("gives up after SAMPLE_MAX empty max_tokens and throws the budget error", async () => {
+    let calls = 0;
+    globalThis.fetch = (async () => {
+      calls++;
+      return { ok: true, status: 200, json: async () => ({ content: [], stop_reason: "max_tokens" }), text: async () => "" } as unknown as Response;
+    }) as unknown as typeof fetch;
+
+    await expect(makeBackend().step({ system: "s", transcript: HELLO, tools: [] })).rejects.toThrow(
+      /max_tokens/,
+    );
+    expect(calls).toBe(4); // SAMPLE_MAX
+  });
+
+  it("retries once on an unparseable body (transient gateway hiccup) then succeeds", async () => {
+    let calls = 0;
+    globalThis.fetch = (async () => {
+      calls++;
+      if (calls === 1) {
+        return { ok: true, status: 200, json: async () => { throw new Error("Failed to parse JSON"); }, text: async () => "garbage" } as unknown as Response;
+      }
+      return okResponse("parsed ok");
+    }) as unknown as typeof fetch;
+
+    const out = await makeBackend().step({ system: "s", transcript: HELLO, tools: [] });
+    expect(calls).toBe(2);
+    expect(out.text).toBe("parsed ok");
+  });
+
   it("gives up after two transient failures and throws the last error", async () => {
     let calls = 0;
     globalThis.fetch = (async () => {
