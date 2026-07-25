@@ -3,10 +3,12 @@
 > **Purpose:** a single doc to resume this project cold if context/memory is lost. Pairs with
 > `CLAUDE.md` (the authoritative phase-by-phase log), `GOTCHA.md` (traps & non-obvious failure modes —
 > read before touching PowerShell/state/tests/LLM), and `README.md` (user-facing overview).
-> Last updated after **Phase 39 + 39.1** (state decay/TTL; deadline decay as an opt-in dashboard toggle),
-> **Phase 38** (sandbox `run_command` + hard trust rule), **Phase 37** (repo discovery + chat markdown/
-> scroll + secrets gate), and **Phase 36 going LIVE** (Discord). Everything through 39.1 is pushed to
-> `origin/main`. **724 passing tests** + one opt-in browser e2e, all green.
+> Last updated after a **live-hardening session on the Discord agent** (think-loop fix + retry resilience +
+> message chunking + button feedback + session trust) on top of **Phase 39 + 39.1** (state decay/TTL;
+> deadline decay as an opt-in dashboard toggle), **Phase 38** (sandbox `run_command`), and **Phase 36 LIVE**
+> (Discord). Everything is pushed to `origin/main` (latest `5658a47`). **736 passing tests** + one opt-in
+> browser e2e, all green. The agent is **live-confirmed working** end-to-end over Discord (owner analyzed
+> opm-be + opm-fe). **If a running bot misbehaves after a pull, RESTART it — code isn't hot-reloaded.**
 >
 > **✅ Phase 36 is LIVE.** The owner supplied a bot token + `ownerId`, ran `ui`, and the bot **DM-answered
 > from real state** (asked "ตอนนี้ผมทำอะไรอยู่" → correct project/task/branch/file). What remains is the
@@ -62,10 +64,36 @@
 > tools → normal tool_use in 3s, but the agent system prompt tips Qwen into an infinite `<think>` loop.**
 > Root cause: the agent hardcoded **`temperature: 0`** (greedy decoding), which Qwen's docs say causes
 > "endless repetitions." Fix: `step()` now sends **temp 0.6 + top_p 0.95 + top_k 20** (Qwen's recommended
-> sampling — measured 5/5 clean vs temp 0 always-loops) + a backstop re-sample on empty `max_tokens`.
-> Live-verified: the failing question now answers in 11s. **`/no_think` / `enable_thinking:false` are
-> ignored by the gateway.** Other backends still use temp 0 — switch them if they ever loop. See CLAUDE.md
-> "Agent think-loop fix" + GOTCHA §1. **Hardened after the owner still saw it live: real loop rate ~25%, so step() re-samples up to 3x (SAMPLE_MAX=4). The running bot must be RESTARTED to pick up the code change.** 727 tests.
+> sampling — but even so a stress test measured the real loop rate at **~25%**, so sampling alone is NOT
+> enough), plus **`SAMPLE_MAX=4` — re-sample an empty `max_tokens` up to 3×** (~25% → ~0.4%), and retry an
+> unparseable body. `max_tokens` kept at 8192 (lowering it truncates hard questions into failure). Rare
+> multi-loop tail up to ~300s but it never fails now. **`/no_think` / `enable_thinking:false` are ignored
+> by the gateway.** Other backends still use temp 0 — switch them if they ever loop. See CLAUDE.md "Agent
+> think-loop fix" + GOTCHA §1. **LIVE-CONFIRMED working:** the owner analyzed opm-be + opm-fe end-to-end.
+>
+> **Discord UX fixes + session trust (this session, live owner feedback — all LIVE-CONFIRMED):**
+> - **Long replies were truncated at Discord's 2000-char limit** (answer cut mid-word while the dashboard
+>   had it whole) → `chunkContent()` splits a reply into ≤2000-char messages (newline-preferring), buttons
+>   ride the last chunk. `truncateContent` deleted.
+> - **A tapped confirm button lingered with no feedback** (bare `type:6` ack) → the callback is now a
+>   **`type:7` UPDATE_MESSAGE** that edits the confirm message in place: strips buttons + stamps the choice
+>   (`✅`/`🤝`/`❌`).
+> - **Owner didn't want to confirm every command** (agent runs `Get-ChildItem`, `git diff`, … each a
+>   separate tap) → Phase 38 keeps run_command/edit_files **never persistently trustable**, so the owner
+>   chose a **session-scoped** trust: a **"ไว้ใจทั้งแชทนี้"** button trusts a tool for the rest of the
+>   conversation only, **resets on clear**. New `agent-session-trust.json` store; `isTrusted` checks it
+>   first (covers the NEVER_TRUSTABLE tools, bounded); new `ConfirmDecision "trust_session"`. **Guardrail
+>   held:** the run_command **denylist still hard-refuses destructive commands even when session-trusted**
+>   (check is inside `run_command.run()`; session trust only skips the *confirm*). See CLAUDE.md "Discord
+>   UX fixes" + "Session trust". 736 tests.
+>
+> **⚠️ Every code fix above needs a bot RESTART to take effect** — `temperature`, the retry, chunking, the
+> buttons all live in source (loaded once at process start); only `config.json` is hot-reloaded. The owner
+> kept seeing the think-loop error for a while precisely because the running `ui` had the old code. After
+> any agent/channel/server code change: stop `ui`, `git pull`, restart. (GOTCHA §1 has this too.)
+>
+> **Known non-bug:** Qwen occasionally garbles Thai spelling in its own output (`ปจจุบัน`, `ผ่่านมา`) — a
+> model tokenization artifact, not our code; still readable, left as-is.
 >
 > **Recently shipped this session (all pushed):**
 > - **Phase 38 — sandbox `run_command`** — `classifyCommand` → deny/allow/ask; a **denylist in code**
