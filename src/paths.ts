@@ -136,6 +136,11 @@ export function agentSessionTrustPath(): string {
   return execRoot() + "/agent-session-trust.json";
 }
 
+/** Absolute path to .executive/events.db (the SQLite event store, Phase 40). */
+export function eventDbPath(): string {
+  return execRoot() + "/events.db";
+}
+
 /** Absolute path to .executive/nudges.jsonl (proactive nudges sent + whether they were answered). */
 export function nudgeLogPath(): string {
   return execRoot() + "/nudges.jsonl";

@@ -1,23 +1,17 @@
-// EventStore: append, read, and tail events from JSONL log files.
+// EventStore: append, read, and tail events. The public API of this module is the
+// event-append contract every other layer depends on; where the events actually live
+// (JSONL files or SQLite) is the backend's business — see events/backend.ts.
 //
-// Concurrency note: each append writes the full line in one write call
-// (Bun.write is atomic for small writes). If multiple callers append
-// concurrently, lines may interleave at the byte level for very large
-// payloads, but for Phase 1 event sizes this is not a concern.
+// Concurrency note (JSONL backend): each append writes the full line in one write call.
+// If multiple callers append concurrently, lines may interleave at the byte level for
+// very large payloads, but for these event sizes this is not a concern.
 
-import {
-  readFileSync,
-  appendFileSync,
-  writeFileSync,
-  existsSync,
-  mkdirSync,
-} from "node:fs";
-import { eventLogPath, eventsDir } from "../paths.js";
 import type { EventSource, ExecEvent } from "./types.js";
 import { isValidType } from "./types.js";
-import { nextSeq, currentSeq } from "./seq.js";
+import { nextSeq } from "./seq.js";
+import { getBackend } from "./backend.js";
 
-/** Append one event to the source's JSONL log. */
+/** Append one event to the store. */
 export async function append(input: {
   source: EventSource;
   type: string;
@@ -34,8 +28,9 @@ export async function append(input: {
     );
   }
 
-  // Ensure the log file and directory exist (bootstrap-level safety).
-  ensureLogExists(source);
+  // Get the backend and ensure it's initialized.
+  const backend = getBackend();
+  backend.init();
 
   const seq = providedSeq !== undefined ? providedSeq : nextSeq();
 
@@ -48,45 +43,15 @@ export async function append(input: {
     data,
   };
 
-  // Write the full line in one call to avoid partial-line interleaving.
-  const line = JSON.stringify(event) + "\n";
-  appendFileSync(eventLogPath(source), line);
+  // Persist via the backend.
+  backend.append(event);
 
   return event;
 }
 
 /** Read all events from one source's log, oldest → newest. */
 export async function read(source: EventSource): Promise<ExecEvent[]> {
-  const path = eventLogPath(source);
-  if (!existsSync(path)) {
-    return [];
-  }
-
-  const raw = readFileSync(path, "utf-8");
-  const lines = raw.split("\n");
-  const events: ExecEvent[] = [];
-
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    if (!line || line.trim() === "") continue; // skip blank lines
-
-    try {
-      const event = JSON.parse(line) as ExecEvent;
-      // Legacy line without seq — default to 0 so it doesn't crash.
-      if (event.seq === undefined) {
-        event.seq = 0;
-      }
-      events.push(event);
-    } catch {
-      // A single corrupt line must NOT crash the whole read.
-      // Log a warning to stderr with the line number.
-      process.stderr.write(
-        `Warning: skipping corrupt line ${i + 1} in ${path}\n`
-      );
-    }
-  }
-
-  return events;
+  return getBackend().read(source);
 }
 
 /**
@@ -97,36 +62,21 @@ export async function tail(
   n: number,
   source?: EventSource
 ): Promise<ExecEvent[]> {
-  if (source) {
-    // Single source: read all, return last n by seq.
-    const events = await read(source);
-    events.sort((a, b) => a.seq - b.seq || (a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : 0));
-    return events.slice(-n);
-  }
-
-  // All sources: read every log, merge, sort ascending by seq (primary),
-  // ts ascending (tie-break only if seq missing), return last n.
-  const sources: EventSource[] = ["git", "terminal", "editor", "system", "screen"];
-  const all: ExecEvent[] = [];
-  for (const src of sources) {
-    const events = await read(src);
-    all.push(...events);
-  }
-
-  // Sort by seq ascending (primary), ts ascending (tie-break).
-  all.sort((a, b) => a.seq - b.seq || (a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : 0));
-
-  return all.slice(-n);
+  return getBackend().tail(n, source);
 }
 
-/** Ensure the directory and jsonl file for a source exist. */
-function ensureLogExists(source: EventSource): void {
-  const dir = eventsDir();
-  if (!existsSync(dir)) {
-    mkdirSync(dir, { recursive: true });
-  }
-  const path = eventLogPath(source);
-  if (!existsSync(path)) {
-    writeFileSync(path, "");
-  }
+/**
+ * Synchronous read of all events from one source, oldest → newest.
+ * Used by the synchronous State Builder.
+ */
+export function readSync(source: EventSource): ExecEvent[] {
+  return getBackend().read(source);
+}
+
+/**
+ * Synchronous read of the last N events (same semantics as `tail`).
+ * Used by the synchronous State Builder.
+ */
+export function tailSync(n: number, source?: EventSource): ExecEvent[] {
+  return getBackend().tail(n, source);
 }

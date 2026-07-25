@@ -42,6 +42,11 @@ export interface Config {
      *  writes DEADLINE_DECAY_DEFAULT_DAYS when switched on. */
     deadlineDecayDays?: number | null;
   };
+  /** Event storage backend (defaults applied when absent). */
+  storage?: {
+    /** "jsonl" (default) = five .jsonl files; "sqlite" = .executive/events.db. */
+    backend?: "jsonl" | "sqlite";
+  };
   /** Worker (LLM) configuration (defaults applied when absent). */
   worker?: {
     backend?: "mock" | "anthropic"; // which Worker to build
@@ -221,6 +226,9 @@ export function defaultConfig(): Config {
       intervalMs: 30000,
       deadlineDecayDays: null,
     },
+    storage: {
+      backend: "jsonl",
+    },
     worker: {
       backend: "anthropic",
       baseUrl: "https://gateway.9arm.co",
@@ -379,6 +387,20 @@ export function loadConfig(): Config {
   }
   parsed.state.intervalMs = parsed.state.intervalMs ?? defaults.state!.intervalMs!;
   parsed.state.deadlineDecayDays = parsed.state.deadlineDecayDays ?? null;
+
+  // Merge missing storage fields with defaults.
+  if (!parsed.storage) {
+    parsed.storage = defaults.storage!;
+  }
+  parsed.storage.backend = parsed.storage.backend ?? defaults.storage!.backend!;
+
+  // Validate storage.backend defensively — never throw, just warn and fall back.
+  if (parsed.storage.backend !== "jsonl" && parsed.storage.backend !== "sqlite") {
+    process.stderr.write(
+      "config: invalid storage.backend \"" + parsed.storage.backend + "\", falling back to \"jsonl\"\n"
+    );
+    parsed.storage.backend = "jsonl";
+  }
 
   // Merge missing worker fields with defaults.
   if (!parsed.worker) {
