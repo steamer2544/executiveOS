@@ -178,9 +178,13 @@ export function parseNativeStep(json: unknown): ModelStep {
   // hid a real outage for hours (Phase 29.2 / 33.1).
   if (texts.length === 0 && toolCalls.length === 0) {
     if (stopReason === "max_tokens") {
+      // Do NOT tell the owner to "raise config.worker.maxTokens": step() already escalated
+      // the ceiling up to 4x across its retries (BUDGET_LADDER), so by the time this throws,
+      // the budget is not the remaining lever — the question is too big for this model.
       throw new Error(
-        "agent: the model used its entire token budget thinking and produced no answer " +
-          "(stop_reason: max_tokens) — raise config.worker.maxTokens"
+        "agent: the model spent its whole thinking budget without answering, even after " +
+          "retrying with more headroom (stop_reason: max_tokens) — try asking for something " +
+          "smaller, or one step at a time"
       );
     }
     throw new Error("agent: no text and no tool call in the response");
@@ -239,15 +243,12 @@ export class AnthropicChatBackend implements ChatBackend {
       "anthropic-version": "2023-06-01",
     };
     if (this.opts.apiKey) headers["Authorization"] = "Bearer " + this.opts.apiKey;
-    const payload = JSON.stringify(body);
 
     // Two independent retry budgets:
     //  • TRANSIENT_MAX — infra failures (abort/timeout, network error, gateway 5xx/524, or an
     //    unparseable body). One retry is enough: a spike clears fast.
-    //  • SAMPLE_MAX — the model looped in its <think> phase and returned an EMPTY max_tokens
-    //    response. Even with Qwen's recommended sampling this still happens ~25% of the time on
-    //    a reasoning-heavy prompt; each roll is independent at temperature>0, so re-sampling 3×
-    //    drives ~25% down to ~0.4%. This is the COMMON failure, hence the larger budget.
+    //  • SAMPLE_MAX — the model spent the whole budget thinking and returned an EMPTY
+    //    max_tokens response. Each retry ALSO RAISES THE CEILING (see BUDGET_LADDER).
     // A 4xx is NEVER retried — real request problem, and the native→json tools-downgrade
     // (isToolsUnsupported) depends on seeing it.
     const SAMPLE_MAX = 4;
@@ -256,6 +257,15 @@ export class AnthropicChatBackend implements ChatBackend {
     for (let attempt = 1; attempt <= SAMPLE_MAX; attempt++) {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), this.opts.timeoutMs);
+      // Re-sampling at the SAME ceiling does not fix an exhausted budget, and measurement
+      // says so plainly: on "สร้างโปรแกรมเครื่องคิดเลข…" at 8192, all four attempts came
+      // back with output_tokens EXACTLY 8192 — four identical failures, not four fresh
+      // rolls. At 32768 the same request answered 4/4. Meanwhile the calls that DO answer
+      // cost 937–2,775 output tokens, so paying 32768 up front would be waste on ~every
+      // normal turn. Hence a ladder: cheap first, headroom only once the model has proven
+      // it needs it.
+      const budget = attemptBudget(this.opts.maxTokens, attempt);
+      const payload = JSON.stringify({ ...body, max_tokens: budget });
       try {
         const res = await fetch(this.opts.baseUrl + "/v1/messages", {
           method: "POST",
@@ -284,10 +294,12 @@ export class AnthropicChatBackend implements ChatBackend {
           }
           throw new Error("agent: gateway returned an unparseable response");
         }
-        // The model looped and produced no usable output — re-sample (a fresh roll at
-        // temperature>0 usually answers) instead of failing the turn.
+        // The model spent the whole ceiling thinking and produced no usable output — retry
+        // with a bigger one (and a fresh roll at temperature>0) instead of failing the turn.
         if (isEmptyMaxTokens(json) && attempt < SAMPLE_MAX) {
-          lastErr = new Error("agent: empty max_tokens response — re-sampling");
+          lastErr = new Error(
+            `agent: empty max_tokens response at ${budget} — retrying with more headroom`
+          );
           await sleep(RETRY_BACKOFF_MS);
           continue;
         }
@@ -346,6 +358,28 @@ export function chatErrorMessage(e: unknown): string {
     return "gateway มีปัญหาชั่วคราว (5xx) — ลองใหม่อีกครั้งครับ";
   }
   return "ขอโทษครับ พัง: " + (msg || "unknown error");
+}
+
+/**
+ * How much output budget attempt `n` gets, as a multiple of the configured base.
+ *
+ * Measured on the real gateway with the owner's live transcript (input 21,493 tokens,
+ * 15 tool schemas), asking it to build a desktop calculator — an open-ended agentic
+ * request, the class that thinks hardest:
+ *   • base 8192  → 1/8 runs answered. Every failing run burned output_tokens = 8192
+ *     on all four attempts: re-sampling alone changed nothing.
+ *   • 32768      → 4/4 answered.
+ *   • calls that answer cost 937–2,775 output tokens, so the ceiling is not the cost —
+ *     it only matters on the runs that spiral.
+ * Hence: pay the cheap ceiling first, and buy headroom only after the model proves it
+ * needs it. Capped at 4× so a genuinely non-terminating loop still ends the turn.
+ */
+export const BUDGET_LADDER = [1, 2, 4, 4];
+
+/** The output-token ceiling for attempt `n` (1-based). */
+export function attemptBudget(base: number, attempt: number): number {
+  const factor = BUDGET_LADDER[Math.min(attempt, BUDGET_LADDER.length) - 1] ?? 1;
+  return base * factor;
 }
 
 /** True if the response is a Qwen think-loop casualty: it stopped at `max_tokens` with no

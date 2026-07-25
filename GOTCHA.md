@@ -72,6 +72,27 @@
   must stay on: `NODE_EXTRA_CA_CERTS=<corp-root.pem>` — but note **Bun does NOT honor it from `.env`**
   (the TLS store initializes before `.env` loads); it must be a real process env var, or use Bun's
   per-request `fetch(url, { tls: { ca } })`. Not a product bug — do not "fix" it in code. (Phase 29 live)
+- **An empty `max_tokens` is usually a CEILING problem, and re-sampling alone CANNOT fix it.**
+  *Symptom:* the agent answers a normal question fine, then fails a bigger one with *"the model used
+  its entire token budget thinking and produced no answer"* — after burning 3–5 minutes.
+  **This is NOT the temperature-0 think-loop above.** That one was a genuine non-terminating loop and
+  raising `max_tokens` to 40k did **not** help. This one is the opposite: with Qwen's recommended
+  sampling the thinking *does* terminate, it just needs more room than the 8192 floor. Both are true —
+  do not use one to dismiss the other. *Measured live* (owner's transcript, `input_tokens` 21,493,
+  15 tool schemas, asking it to build a desktop calculator): at **8192 → 1/8 runs answered**, and every
+  failing run reported `output_tokens` **exactly 8192 on all four attempts**; at **32768 → 4/4
+  answered**; calls that DO answer cost **937–2,775** output tokens. So the old comment's premise —
+  "each roll is independent at temperature>0, so re-sampling 3× drives 25% → 0.4%" — was measurably
+  wrong here: four fresh rolls produced four identical exhaustions. **The loop rate is
+  prompt-dependent** (~25% on a meta-question, ~93% on an open-ended agentic ask); never generalise one
+  prompt's rate. *Fix:* `BUDGET_LADDER` in `src/agent/protocol.ts` — attempt *n* gets 1x/2x/4x/4x the
+  configured ceiling, so the common cheap turn stays cheap and headroom is bought only after the model
+  proves it needs it (verified 6/6 after, vs 1/8 before). *Diagnosing a new instance:* the only reliable
+  signal is `usage.output_tokens` + `stop_reason` **per attempt** — drop a temporary `[DBG-…]` probe
+  right after `res.json()`. Every attempt pinned to the ceiling → ceiling problem; wildly varying
+  numbers → real loop. *Price:* a prompt that needs the ladder answers in ~190–290 s. If that becomes
+  the complaint, the lever is the 21k input tokens (system prompt + 15 tool schemas + 20 history
+  turns), not the ceiling.
 
 ## 2. Windows / PowerShell
 

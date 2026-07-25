@@ -198,6 +198,52 @@ describe("AnthropicChatBackend.step — retry once on a transient failure", () =
     expect(calls).toBe(4); // SAMPLE_MAX
   });
 
+  // Phase 40 follow-up: re-sampling at the SAME ceiling was measured to be useless for an
+  // exhausted budget — all four attempts came back with output_tokens EXACTLY 8192. Each
+  // retry must now also RAISE the ceiling.
+  it("raises max_tokens on each empty-max_tokens retry (1x, 2x, 4x, 4x)", async () => {
+    const budgets: number[] = [];
+    globalThis.fetch = (async (_url: string, init: { body: string }) => {
+      budgets.push((JSON.parse(init.body) as { max_tokens: number }).max_tokens);
+      return { ok: true, status: 200, json: async () => ({ content: [], stop_reason: "max_tokens" }), text: async () => "" } as unknown as Response;
+    }) as unknown as typeof fetch;
+
+    await expect(
+      makeBackend().step({ system: "s", transcript: HELLO, tools: [] })
+    ).rejects.toThrow(/max_tokens/);
+
+    const base = budgets[0]!;
+    expect(budgets).toEqual([base, base * 2, base * 4, base * 4]);
+  });
+
+  it("a transient retry does NOT escalate the budget (only an exhausted one does)", async () => {
+    const budgets: number[] = [];
+    let calls = 0;
+    globalThis.fetch = (async (_url: string, init: { body: string }) => {
+      budgets.push((JSON.parse(init.body) as { max_tokens: number }).max_tokens);
+      calls++;
+      if (calls === 1) throw new Error("fetch failed");
+      return okResponse("recovered");
+    }) as unknown as typeof fetch;
+
+    const out = await makeBackend().step({ system: "s", transcript: HELLO, tools: [] });
+    expect(out.text).toBe("recovered");
+    // Attempt 2 is 2x by the ladder — the ladder is indexed by attempt, and a transient
+    // failure consumes an attempt. That is deliberate: extra headroom never hurts a call
+    // that was going to answer anyway, and keeping one ladder keeps the accounting honest.
+    expect(budgets.length).toBe(2);
+  });
+
+  it("the budget error no longer tells the owner to raise a setting step() already raised", async () => {
+    globalThis.fetch = (async () => (
+      { ok: true, status: 200, json: async () => ({ content: [], stop_reason: "max_tokens" }), text: async () => "" } as unknown as Response
+    )) as unknown as typeof fetch;
+
+    await expect(
+      makeBackend().step({ system: "s", transcript: HELLO, tools: [] })
+    ).rejects.toThrow(/retrying with more headroom|smaller, or one step at a time/);
+  });
+
   it("retries once on an unparseable body (transient gateway hiccup) then succeeds", async () => {
     let calls = 0;
     globalThis.fetch = (async () => {

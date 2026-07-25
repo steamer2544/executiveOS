@@ -337,17 +337,35 @@ describe("Consumers over sqlite", () => {
       const { state } = buildState(now);
       // `activity` is derived from wall-clock distance to the newest event, which
       // differs by milliseconds between the two seedings — everything else must match.
-      const { activity: _activity, ...rest } = state as unknown as Record<string, unknown> & {
+      // `activity` and `patterns` are both distance-from-now measurements, so they differ by
+      // the milliseconds between the two seedings. `patterns` is NUMERIC (sessionMs), which
+      // blankStamps cannot catch — an earlier version of this test passed only because the
+      // two seedings happened to land in the same millisecond, i.e. it was flaky, the same
+      // wall-clock trap as Phase 26.1. Compare their SHAPE below instead of their values.
+      const {
+        activity: _activity,
+        patterns,
+        ...rest
+      } = state as unknown as Record<string, unknown> & {
         activity: unknown;
+        patterns: Record<string, unknown>;
       };
       clearSqliteCache();
-      return { home, comparable: blankStamps(rest) as Record<string, unknown> };
+      return {
+        home,
+        comparable: blankStamps(rest) as Record<string, unknown>,
+        patternKeys: Object.keys(patterns ?? {}).sort(),
+      };
     }
 
     const fromJsonl = await seedAndBuild("jsonl");
     const fromSqlite = await seedAndBuild("sqlite");
 
     expect(fromSqlite.comparable).toEqual(fromJsonl.comparable);
+    // Excluded from the value comparison, but its shape must still match — the exclusion
+    // must not be able to hide a backend that simply fails to compute patterns.
+    expect(fromSqlite.patternKeys).toEqual(fromJsonl.patternKeys);
+    expect(fromSqlite.patternKeys.length).toBeGreaterThan(0);
     // And it is a real derivation, not two empty objects agreeing.
     expect((fromSqlite.comparable as { blocked: boolean }).blocked).toBe(true);
     expect((fromSqlite.comparable as { git: { branch: string | null } }).git.branch).toBe(

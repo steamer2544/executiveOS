@@ -1234,6 +1234,30 @@ docs/scopes/           # per-phase specs (the contract handed to the implementer
   `docs/scopes/phase-40-sqlite-storage.md`. Files: `src/events/{backend,jsonl-backend,sqlite-backend,
   store,migrate}.ts`, `src/{config,paths,bootstrap,index}.ts`, `src/state/builder.ts`,
   `src/compact/compact.ts` (+ tests).
+- **Agent budget ladder (`/debug-mantra`, this session)** — a **second, different** `max_tokens`
+  failure, found live on Discord: the bot answered *"เป็นยังไงบ้าง"* correctly from real state, then
+  failed *"คุณสร้างโปรแกรมเครื่องคิดเลขง่ายๆ ไว้บนเดสทอปผมได้ไหม"* with *"used its entire token budget
+  thinking"*. **Not the temperature-0 think-loop** (that was a true non-terminating loop where 40k did
+  not help); with Qwen's recommended sampling the thinking terminates, it just needs more room than the
+  8192 floor. Reproduced by looping the identical prompt with the conversation reset each time: **1/8
+  answered at 8192; 4/4 at 32768** — and a `[DBG]` probe showed every failing run burning
+  `output_tokens` **exactly 8192 on all four attempts**, disproving the old code's premise that
+  "each roll is independent … re-sampling 3× drives 25% → 0.4%". Four fresh rolls, four identical
+  exhaustions. (The ~25% was measured on a meta-question; **the loop rate is prompt-dependent** — this
+  class of open-ended agentic ask is ~93% per call.) Calls that DO answer cost only **937–2,775** output
+  tokens, so paying 32768 up front would tax every normal turn. Fix: **`BUDGET_LADDER = [1,2,4,4]`** +
+  `attemptBudget()` in `src/agent/protocol.ts` — the payload is now rebuilt per attempt, so a retry
+  raises the ceiling instead of re-rolling at the same one; capped at 4× so a genuine loop still ends
+  the turn. The error message no longer says "raise `config.worker.maxTokens`" (step() already escalated
+  it — it now suggests asking for something smaller). **Live-verified 6/6 at the owner's own config**
+  (base 8192) vs 1/8 before; ~190–290 s on the hard prompt, i.e. slow but correct. 771 tests (+4).
+  Sabotage-checked (flat ladder → the escalation test goes red). **Also fixed a flaky test I had just
+  written**: the Phase-40 State-Builder-parity case compared `patterns.sessionMs`, a wall-clock-derived
+  **number** that the ISO-string normalizer could not blank, so it passed only when both seedings landed
+  in the same millisecond (the Phase 26.1 trap again) — `patterns` is now compared by shape, with an
+  explicit assertion that the exclusion cannot hide a backend that fails to compute it. `GOTCHA.md` §1
+  gained the full diagnosis. **The owner's running bot must be RESTARTED to pick this up** — the ladder
+  lives in source, and only `config.json` is hot-reloaded.
 - **Loop complete (manual trigger):** `auto --apply` runs the whole chain in one command; the human
   reviews/merges the `executive/change-<id>` branch.
 
