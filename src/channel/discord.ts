@@ -35,7 +35,25 @@ interface GatewayPayload {
 
 const GATEWAY_URL = "wss://gateway.discord.gg/?v=10&encoding=json";
 const DISCORD_CONTENT_LIMIT = 2000;
-const TRUNCATE_SUFFIX = " …";
+
+/** Split content into Discord-sized (≤2000-char) chunks, preferring newline boundaries so a
+ *  long answer arrives whole across several messages instead of being truncated. A single
+ *  overlong line with no newline is hard-cut. Exported for tests. */
+export function chunkContent(text: string, limit = DISCORD_CONTENT_LIMIT): string[] {
+  if (text.length <= limit) return [text];
+  const chunks: string[] = [];
+  let rest = text;
+  while (rest.length > limit) {
+    let cut = rest.lastIndexOf("\n", limit);
+    // Avoid a tiny sliver: if the nearest newline is in the front 60%, hard-cut at the limit.
+    if (cut < limit * 0.6) cut = limit;
+    chunks.push(rest.slice(0, cut));
+    rest = rest.slice(cut);
+    if (rest.startsWith("\n")) rest = rest.slice(1);
+  }
+  if (rest.length > 0) chunks.push(rest);
+  return chunks;
+}
 
 // ── public API ───────────────────────────────────────────────────────────────
 
@@ -79,7 +97,9 @@ export function createDiscordChannel(opts: DiscordChannelOptions): Channel {
     return dmChannelId;
   }
 
-  /** Send a message to the DM channel. Never throws. */
+  /** Send a message to the DM channel, splitting content > 2000 chars across several
+   *  messages (Discord's per-message limit) instead of truncating. Buttons ride the LAST
+   *  chunk so they sit under the full answer. Never throws. */
   async function sendDiscordMessage(
     content: string,
     components?: unknown
@@ -87,24 +107,25 @@ export function createDiscordChannel(opts: DiscordChannelOptions): Channel {
     const fetch = fetchImpl ?? globalThis.fetch;
     try {
       const channelId = await resolveDmChannel();
-      const body: Record<string, unknown> = { content: truncateContent(content) };
-      if (components) body.components = components;
+      const chunks = chunkContent(content);
+      for (let i = 0; i < chunks.length; i++) {
+        const isLast = i === chunks.length - 1;
+        const body: Record<string, unknown> = { content: chunks[i] };
+        if (isLast && components) body.components = components;
 
-      const res = await fetch(`https://discord.com/api/v10/channels/${channelId}/messages`, {
-        method: "POST",
-        headers: {
-          Authorization: `Bot ${token}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(body),
-      });
+        const res = await fetch(`https://discord.com/api/v10/channels/${channelId}/messages`, {
+          method: "POST",
+          headers: {
+            Authorization: `Bot ${token}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(body),
+        });
 
-      if (!res.ok) {
-        const text = await res.text().catch(() => "");
-        return {
-          ok: false,
-          error: `${res.status}: ${text.slice(0, 200)}`,
-        };
+        if (!res.ok) {
+          const text = await res.text().catch(() => "");
+          return { ok: false, error: `${res.status}: ${text.slice(0, 200)}` };
+        }
       }
       return { ok: true };
     } catch (e) {
@@ -113,10 +134,16 @@ export function createDiscordChannel(opts: DiscordChannelOptions): Channel {
   }
 
   /**
- * Acknowledge an interaction before the 3-second deadline.
- * Sends a DEFERRED_UPDATE_MESSAGE (type 6).
- */
-  async function ackInteraction(interactionId: string, interactionToken: string): Promise<void> {
+   * Respond to a button click within the 3-second deadline with an UPDATE_MESSAGE (type 7):
+   * edit the confirm message in place to STRIP the buttons and stamp the owner's choice, so
+   * the tap has visible feedback (issue: buttons used to linger with no "clicked" state).
+   * `originalContent` is the confirm text (from the interaction's `message`) so it is kept.
+   */
+  async function updateInteractionMessage(
+    interactionId: string,
+    interactionToken: string,
+    newContent: string
+  ): Promise<void> {
     const fetch = fetchImpl ?? globalThis.fetch;
     try {
       await fetch(`https://discord.com/api/v10/interactions/${interactionId}/${interactionToken}/callback`, {
@@ -125,18 +152,22 @@ export function createDiscordChannel(opts: DiscordChannelOptions): Channel {
           Authorization: `Bot ${token}`,
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ type: 6 }),
+        body: JSON.stringify({
+          type: 7, // UPDATE_MESSAGE
+          data: { content: chunkContent(newContent)[0], components: [] },
+        }),
       });
     } catch {
-      // Best effort — if this fails Discord will show "interaction failed"
-      // but we still try to call the handler.
+      // Best effort — if this fails Discord shows "interaction failed", but we still
+      // call the handler so the decision is acted on.
     }
   }
 
-  /** Truncate content to Discord's 2000-char limit. */
-  function truncateContent(text: string): string {
-    if (text.length <= DISCORD_CONTENT_LIMIT) return text;
-    return text.slice(0, DISCORD_CONTENT_LIMIT - TRUNCATE_SUFFIX.length) + TRUNCATE_SUFFIX;
+  /** The status line stamped onto a confirm message once the owner taps a button. */
+  function decisionStamp(decision: "run" | "trust" | "no"): string {
+    if (decision === "no") return "❌ ยกเลิกแล้ว";
+    if (decision === "trust") return "🤝 ไว้ใจ tool นี้ตลอด — กำลังทำ…";
+    return "✅ ทำเลย — กำลังทำ…";
   }
 
   // ── button components ────────────────────────────────────────────────────
@@ -237,6 +268,7 @@ export function createDiscordChannel(opts: DiscordChannelOptions): Channel {
     token: string;
     member?: { user?: { id: string } };
     user?: { id: string };
+    message?: { content?: string };
     data?: { custom_id: string };
   }): void {
     const senderId = d.member?.user?.id ?? d.user?.id;
@@ -250,8 +282,11 @@ export function createDiscordChannel(opts: DiscordChannelOptions): Channel {
     const pendingId = match[1]!;
     const decision = match[2] as "run" | "trust" | "no";
 
-    // Ack before calling handler (3-second Discord deadline).
-    void ackInteraction(d.id, d.token).then(() => {
+    // Update the confirm message in place (strip buttons + stamp the choice) before
+    // calling the handler — this IS the interaction ack, within the 3-second deadline.
+    const original = d.message?.content ?? "";
+    const updated = (original ? original + "\n\n" : "") + decisionStamp(decision);
+    void updateInteractionMessage(d.id, d.token, updated).then(() => {
       const h = handler;
       if (h) h({ kind: "confirm", pendingId, decision });
     });
@@ -278,6 +313,7 @@ export function createDiscordChannel(opts: DiscordChannelOptions): Channel {
           token: string;
           member?: { user?: { id: string } };
           user?: { id: string };
+          message?: { content?: string };
           data?: { custom_id: string };
         });
         break;

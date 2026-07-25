@@ -5,7 +5,7 @@
 
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import type { WebSocketLike, InboundMessage, OutboundMessage } from "./types.js";
-import { createDiscordChannel } from "./discord.js";
+import { createDiscordChannel, chunkContent } from "./discord.js";
 
 // ── test doubles ─────────────────────────────────────────────────────────────
 
@@ -291,6 +291,7 @@ describe("createDiscordChannel", () => {
           id: interactionId,
           token: interactionToken,
           user: { id: ownerId },
+          message: { content: "รันคำสั่ง: git status" },
           data: { custom_id: "confirm:pending-1:run" },
         },
       });
@@ -298,16 +299,19 @@ describe("createDiscordChannel", () => {
       // Wait for the async ack + handler call.
       await new Promise((r) => setTimeout(r, 100));
 
-      // The fetch call for the ack should have happened.
+      // The callback updates the message in place (type 7): strips buttons + stamps the choice.
       const ackCall = fakeFetch.calls.find(
         (c) => c.url.includes("/interactions/") && c.url.includes("/callback")
       );
       expect(ackCall).toBeDefined();
       expect(ackCall!.method).toBe("POST");
       const ackBody = JSON.parse(ackCall!.body!);
-      expect(ackBody.type).toBe(6); // DEFERRED_UPDATE_MESSAGE
+      expect(ackBody.type).toBe(7); // UPDATE_MESSAGE
+      expect(ackBody.data.components).toEqual([]); // buttons removed
+      expect(ackBody.data.content).toContain("รันคำสั่ง: git status"); // original kept
+      expect(ackBody.data.content).toContain("✅"); // choice stamped
 
-      // Handler should have been called with correct parsed data.
+      // Handler should still have been called with correct parsed data.
       expect(received).toHaveLength(1);
       expect(received[0]).toEqual({
         kind: "confirm",
@@ -594,5 +598,37 @@ describe("createDiscordChannel", () => {
       // No more heartbeats should be sent.
       expect(fakeWs.sent.length).toBe(sentBefore);
     });
+  });
+});
+
+// ── issue 3: long messages are chunked, not truncated ────────────────────────
+
+describe("chunkContent", () => {
+  it("returns a single chunk when under the limit", () => {
+    expect(chunkContent("short", 2000)).toEqual(["short"]);
+  });
+
+  it("splits a long message into ≤limit pieces (nothing lost)", () => {
+    const text = Array.from({ length: 50 }, (_, i) => "line " + i + " " + "x".repeat(60)).join("\n");
+    const chunks = chunkContent(text, 500);
+    expect(chunks.length).toBeGreaterThan(1);
+    for (const c of chunks) expect(c.length).toBeLessThanOrEqual(500);
+    // Re-joining recovers the original (newlines at split points are consumed by the cut).
+    expect(chunks.join("\n")).toBe(text);
+  });
+
+  it("hard-cuts a single overlong line with no newline", () => {
+    const chunks = chunkContent("y".repeat(4500), 2000);
+    expect(chunks.length).toBe(3);
+    expect(chunks[0]!.length).toBe(2000);
+    expect(chunks.join("")).toBe("y".repeat(4500));
+  });
+
+  it("preserves full Thai content across chunks (the opm-be truncation bug)", () => {
+    const thai = "ผู้รับผิดชอบ ".repeat(400); // > 2000 chars
+    expect(thai.length).toBeGreaterThan(2000);
+    const chunks = chunkContent(thai);
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks.join("")).toBe(thai); // no "…" truncation, all of it survives
   });
 });

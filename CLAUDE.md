@@ -1155,6 +1155,18 @@ docs/scopes/           # per-phase specs (the contract handed to the implementer
   in 1–6 s). 720 passing tests (+12: `isTransientNetworkError` / `chatErrorMessage` / `step()` retry via a
   stubbed `globalThis.fetch`). **Sabotage-checked:** `MAX_ATTEMPTS=1` fails exactly the 3 retry tests.
   Files: `src/agent/protocol.ts` (+ `protocol.test.ts`), `src/index.ts`, `src/ui/server.ts`.
+- **Discord UX fixes — DONE** (architect, this session, from live owner feedback on the opm-be analysis
+  reply): two channel-adapter bugs. (1) **Long replies were truncated at Discord's 2000-char limit** — the
+  owner saw the answer cut off mid-word (`"(ผู้รับผิดช …"`) in Discord while the dashboard showed it whole.
+  New `chunkContent()` splits a reply into ≤2000-char messages (preferring newline boundaries, hard-cutting
+  an overlong line) and `sendDiscordMessage` sends them in sequence with the confirm buttons riding the
+  **last** chunk; `truncateContent` deleted. (2) **A tapped confirm button lingered with no feedback** — the
+  interaction was acked with a bare `type: 6` (DEFERRED_UPDATE_MESSAGE) that never followed through, so the
+  buttons stayed and the owner couldn't tell if the tap registered. Now the callback is a **`type: 7`
+  (UPDATE_MESSAGE)** that edits the confirm message in place: strips the buttons and stamps the choice
+  (`✅ ทำเลย — กำลังทำ…` / `🤝 ไว้ใจ… ` / `❌ ยกเลิกแล้ว`), reading the original text from the interaction's
+  `message.content`. 731 tests (+5: chunking incl. a Thai case + the type-7 update). Files:
+  `src/channel/discord.ts` (+ `discord.test.ts`).
 - **Loop complete (manual trigger):** `auto --apply` runs the whole chain in one command; the human
   reviews/merges the `executive/change-<id>` branch.
 
