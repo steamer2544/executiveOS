@@ -40,15 +40,26 @@
 > that touched config/fixtures: `git grep -nE "MTUz|sk-|xox[baprs]-|-----BEGIN|Bearer [A-Za-z0-9._-]{20}"
 > $(git rev-list --all)` (expect only the two `agent.test.ts` fixtures).
 >
-> **▶️ NEXT UP — everything through Phase 39.1 is DONE, /scrutinize'd, and PUSHED to `origin/main`
-> (`421e70e`). The single actionable next item is:**
+> **▶️ NEXT UP — Phase 40 (SQLite storage) is DONE, so the planned roadmap is now empty.** Everything
+> through Phase 40 is committed on `main` but **NOT yet pushed** (`origin/main` is still at `46a75a1`).
 >
-> 1. **SQLite/Drizzle storage. ⏭️ NEXT (and the last big planned piece).** The JSONL log is 5,500+ events.
->    Planned since Phase 1; the log still works, so it was left for last — but it is now the only remaining
->    roadmap item. `compact` exists for noise but not for scale. Write a scope + hand to qwen, or do it
->    directly. Keep the event-append contract (`append`/`read`/`tail`, monotonic `seq`) identical so the
->    State Builder / watchers don't change; swap the JSONL EventStore for a SQLite-backed one behind the
->    same interface.
+> **Phase 40 shipped SQLite behind a config gate** — `bun:sqlite`, no new dependency, one `events` table
+> with `seq INTEGER PRIMARY KEY`. `append`/`read`/`tail` kept their exact signatures so **no caller
+> changed**; `seq` allocation deliberately stayed in `seq.ts`/`meta.json` for both backends, so flipping
+> the backend back and forth is coherent. **The default is still `"jsonl"` and the owner's live runtime is
+> still on it** — an `events.db` with 7,004 migrated rows is sitting ready in `.executive/`.
+>
+> **To actually switch (owner's call, ~1 minute):** stop `ui`, run `bun run src/index.ts migrate-events
+> --apply` (idempotent — it catches up whatever the daemon appended since), set `"storage": { "backend":
+> "sqlite" }` in `.executive/config.json`, restart `ui`. To go back, set it to `"jsonl"` again — the JSONL
+> files were never touched, but any event appended *while* on sqlite lives only in the db, so don't
+> ping-pong with a live daemon. Verify with `tail 3` after the flip.
+>
+> **The next thing is no longer on a roadmap — it should come from measurement.** The two candidates that
+> were already waiting are §6's Candidate A (surface `State.patterns` in the digest/dashboard) and
+> Candidate B (derive the Tesseract OCR language from the window title). The bigger unfinished business is
+> still **reading `nudges.jsonl`** (sent vs answered per source) after Phase 36 has run a couple of weeks —
+> that measurement gates the `rules+llm` nudge dial.
 >
 > **Agent chat resilience (this session, `/debug-mantra`):** the Discord bot answered "สวัสดี" with
 > **"ขอโทษครับ พัง: The operation was aborted."** — diagnosed live as a **transient gateway latency spike
@@ -290,6 +301,15 @@ a `CLAUDE.md` phase entry.
   --add-dir C:/Users/yiw20/Programming/myshi/executive`, with an explicit line in the prompt saying
   **"do NOT read CLAUDE.md / HANDOFF.md / GOTCHA.md — everything you need is in the spec"**, plus
   "work file by file, grep rather than reading whole files".
+- **⚠️ …and forbid raw `bun test` output — that is the real context killer.** Phase 40's Job 1 died to the
+  same `ContextWindowExceededError` *despite* running from outside the repo with the docs explicitly
+  banned. The suite prints **750+ `(pass)` lines ≈ 20–30 k tokens per run**, and an implementer runs it
+  several times (plus once per sabotage step). `CLAUDE.md` is only ~30 k; a few test runs dwarf it. Put
+  **"NEVER print full test output — always `bun test 2>&1 | tail -20`"** in every delegation prompt, and
+  cap the final report ("under 20 lines"). Job 2 got that instruction and survived to report.
+- **A run that dies at the report stage has usually still done the work.** Both Phase 40 jobs wrote every
+  file before dying / reporting. Check `git status` before assuming a failed run produced nothing — and
+  then review it exactly as if it had reported success, because its acceptance criteria were never run.
 - **Delegation depends on Arm's box being up.** Phase 31's runs died to a gateway outage mid-task; when
   that happens the architect finishes the work rather than blocking. Split jobs so they touch **disjoint
   files** — a parallel run whose `bun run typecheck` sees another job's half-edited file will try to

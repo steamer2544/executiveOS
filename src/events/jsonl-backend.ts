@@ -2,6 +2,7 @@ import {
   readFileSync,
   appendFileSync,
   writeFileSync,
+  copyFileSync,
   existsSync,
   mkdirSync,
 } from "node:fs";
@@ -87,6 +88,18 @@ export function createJsonlBackend(): EventBackend {
       );
 
       return all.slice(-n);
+    },
+
+    backupSources(destDir: string, sources: EventSource[]): string[] {
+      const written: string[] = [];
+      for (const source of sources) {
+        const src = eventLogPath(source);
+        if (!existsSync(src)) continue;
+        const dest = destDir + "/" + source + ".jsonl";
+        copyFileSync(src, dest);
+        written.push(dest);
+      }
+      return written;
     },
 
     replaceAll(source: EventSource, events: ExecEvent[]): void {

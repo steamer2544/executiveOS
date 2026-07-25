@@ -23,6 +23,14 @@ export interface EventBackend {
   tail(n: number, source?: EventSource): ExecEvent[];
   /** Replace every event of one source (used only by compaction). */
   replaceAll(source: EventSource, events: ExecEvent[]): void;
+  /**
+   * Copy whatever this backend stores for `sources` into `destDir`, so a caller that is
+   * about to rewrite them can be reversed. Returns the absolute paths it wrote.
+   *
+   * This belongs to the backend, not the caller: only the backend knows which files hold
+   * a source (five logs vs one database), and only it can flush a write-ahead log first.
+   */
+  backupSources(destDir: string, sources: EventSource[]): string[];
 }
 
 /** All five sources, in the order `tail()` merges them. */

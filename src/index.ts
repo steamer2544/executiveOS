@@ -28,6 +28,7 @@ import { readNotifications } from "./report/notify.js";
 import { runDigestTick, createDigestTickState, type DigestTickResult } from "./report/tick.js";
 import type { NeedsYouItem } from "./report/types.js";
 import { runCompaction } from "./compact/compact.js";
+import { migrateEventsToSqlite } from "./events/migrate.js";
 import { installHooks } from "./hooks/install.js";
 import { startUiServer } from "./ui/server.js";
 import { runInference, writeInference } from "./infer/infer.js";
@@ -76,6 +77,7 @@ Commands:
   report                                        Render a human-readable digest of the current state
   notifications [n]                             Show the last n "Needs you" notifications (default 10)
   compact [--apply]                             Rewrite historical logs with today's noise filters (dry-run without --apply)
+  migrate-events [--apply]                      Copy JSONL event logs into .executive/events.db (dry-run without --apply)
   install-hooks [--test "<cmd>"]                Install a git post-commit hook that auto-emits test results
   ui [--port N] [--no-watch]                    Open a local web dashboard (also watches git+files unless --no-watch)
   infer                                         Ask the LLM to guess block/deadline (suggestions only) → inferred.json
@@ -883,6 +885,43 @@ async function main(): Promise<void> {
           process.stdout.write("restore by copying those files back over .executive/\n");
         } else {
           process.stdout.write("\nDry run — nothing written. Re-run with --apply to rewrite.\n");
+        }
+        process.exit(0);
+      } catch (err) {
+        process.stderr.write("Error: " + (err as Error).message + "\n");
+        process.exit(1);
+      }
+    }
+
+    case "migrate-events": {
+      try {
+        const applyFlag = args.includes("--apply");
+        const r = migrateEventsToSqlite({ apply: applyFlag });
+        process.stdout.write("mode: " + r.mode + "\n");
+        process.stdout.write("db: " + r.dbPath + "\n");
+        for (const source of ["git", "terminal", "editor", "system", "screen"] as const) {
+          if (r.read[source] > 0) {
+            process.stdout.write(source + ": " + r.read[source] + " events\n");
+          }
+        }
+        process.stdout.write("inserted: " + r.inserted + "\n");
+        process.stdout.write("already present: " + r.alreadyPresent + "\n");
+        if (r.conflicts.length > 0) {
+          process.stdout.write("\n" + r.conflicts.length + " conflict(s):\n");
+          for (const c of r.conflicts) {
+            process.stdout.write(
+              "  seq " + c.seq + ": db id=" + c.existingId + " vs jsonl id=" + c.incomingId + "\n"
+            );
+          }
+          process.exit(1);
+        }
+        if (r.mode === "dry-run") {
+          process.stdout.write("\nDry run — no rows inserted. Run with --apply to migrate.\n");
+        } else {
+          process.stdout.write(
+            "\nMigration complete. To use SQLite, set \"storage\": { \"backend\": \"sqlite\" } " +
+            "in .executive/config.json and restart the daemon.\n"
+          );
         }
         process.exit(0);
       } catch (err) {

@@ -5,6 +5,7 @@
 // This backend NEVER allocates a seq; callers pass a fully-formed event.
 
 import { Database } from "bun:sqlite";
+import { copyFileSync } from "node:fs";
 import type { EventSource, ExecEvent } from "./types.js";
 import type { EventBackend } from "./backend.js";
 import { eventDbPath } from "../paths.js";
@@ -32,6 +33,18 @@ interface EventRow {
   source: string;
   type: string;
   data: string;
+}
+
+/**
+ * Open a standalone handle to the event database with the schema applied. The CALLER
+ * owns it and must close it — this is for one-shot tools (migration) that must not
+ * disturb, or be disturbed by, the long-lived cached backend handle.
+ */
+export function openEventDb(path: string = eventDbPath()): Database {
+  const db = new Database(path, { create: true });
+  db.exec("PRAGMA journal_mode = WAL");
+  db.exec(SCHEMA);
+  return db;
 }
 
 /** Open handles, keyed by resolved db path, so a test can close them before rmSync.
@@ -76,9 +89,7 @@ export function createSqliteBackend(): EventBackend {
   const dbPath = eventDbPath();
   let db = openDatabases.get(dbPath);
   if (!db) {
-    db = new Database(dbPath, { create: true });
-    db.exec("PRAGMA journal_mode = WAL");
-    db.exec(SCHEMA);
+    db = openEventDb(dbPath);
     openDatabases.set(dbPath, db);
   }
   const handle = db;
@@ -126,6 +137,18 @@ export function createSqliteBackend(): EventBackend {
 
       rows.reverse();
       return rows.map(rowToEvent);
+    },
+
+    backupSources(destDir: string, _sources: EventSource[]): string[] {
+      // Every source lives in the one database file, so a backup is whole-database
+      // regardless of which sources the caller is about to rewrite.
+      //
+      // Checkpoint FIRST: in WAL mode recent commits can still live in events.db-wal,
+      // so copying events.db alone would silently produce an incomplete backup.
+      handle.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+      const dest = destDir + "/events.db";
+      copyFileSync(dbPath, dest);
+      return [dest];
     },
 
     replaceAll(source: EventSource, events: ExecEvent[]): void {

@@ -6,9 +6,10 @@ import { execRoot, eventsDir, logsDir, configPath, claudeMdPath } from "./paths.
 import type { EventSource } from "./events/types.js";
 import { defaultConfig } from "./config.js";
 import { DEFAULT_IDENTITY } from "./worker/identity.js";
+import { getBackend } from "./events/backend.js";
 
-/** The four event sources that get their own jsonl file. */
-const SOURCES: EventSource[] = ["git", "terminal", "editor", "system"];
+/** The five event sources that get their own jsonl file. */
+const SOURCES: EventSource[] = ["git", "terminal", "editor", "system", "screen"];
 
 /**
  * Create .executive/, its subdirs, empty jsonl files, default config,
@@ -46,4 +47,8 @@ export async function bootstrap(): Promise<void> {
   if (!existsSync(idPath)) {
     writeFileSync(idPath, DEFAULT_IDENTITY);
   }
+
+  // Initialize the active event backend (creates schema for sqlite, ensures
+  // jsonl files exist — harmless to call repeatedly).
+  getBackend().init();
 }

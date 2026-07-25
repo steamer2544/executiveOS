@@ -3,12 +3,13 @@
 // 100% rule-based. No decision-making, no LLM.
 // Reads JSONL event logs, walks events in seq order, derives a compact snapshot.
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync, statSync } from "node:fs";
 import { renameOverwrite } from "../fs-atomic.js";
 import { isAbsolute, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import type { ExecEvent, EventSource } from "../events/types.js";
-import { eventLogPath, execRoot, statePath, contextPath } from "../paths.js";
+import { execRoot, statePath, contextPath } from "../paths.js";
+import { readSync } from "../events/store.js";
 import { loadConfig, type Config } from "../config.js";
 import {
   type State,
@@ -171,27 +172,9 @@ function fileStillExists(p: string, roots: string[]): boolean {
 
 // ─── readEventsSync ─────────────────────────────────────────────────────────
 
-/** Read all events from one source's JSONL log synchronously. */
+/** Read all events from one source synchronously, via the active backend. */
 function readEventsSync(source: EventSource): ExecEvent[] {
-  const path = eventLogPath(source);
-  if (!existsSync(path)) {
-    return [];
-  }
-  const raw = readFileSync(path, "utf-8");
-  const lines = raw.split("\n");
-  const events: ExecEvent[] = [];
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    if (!line || line.trim() === "") continue;
-    try {
-      const event = JSON.parse(line) as ExecEvent;
-      if (event.seq === undefined) event.seq = 0;
-      events.push(event);
-    } catch {
-      // Skip corrupt lines — never crash the builder.
-    }
-  }
-  return events;
+  return readSync(source);
 }
 
 // ─── buildState ─────────────────────────────────────────────────────────────

@@ -13,14 +13,14 @@
 // `seq` is never renumbered: dropping events leaves the survivors monotonic, and
 // meta.json's next-seq stays ahead of them.
 
-import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { renameOverwrite } from "../fs-atomic.js";
+import { copyFileSync, existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
-import { randomUUID } from "node:crypto";
-import { execRoot, eventLogPath, advisorPath } from "../paths.js";
+import { execRoot, advisorPath } from "../paths.js";
 import { normalizeTitle } from "../watchers/screen.js";
 import { judgeNote } from "../capture/note.js";
 import { isRepeatIntent, readStore, writeStore } from "../advisor/store.js";
+import { readSync } from "../events/store.js";
+import { getBackend } from "../events/backend.js";
 import type { ExecEvent } from "../events/types.js";
 import type { AdvisorStore } from "../advisor/types.js";
 
@@ -44,29 +44,6 @@ export interface CompactionReport {
 
 const SAMPLE_CAP = 5;
 
-/** Read a JSONL log into events, skipping corrupt lines. Missing file → []. */
-function readJsonl(path: string): ExecEvent[] {
-  if (!existsSync(path)) return [];
-  const out: ExecEvent[] = [];
-  for (const line of readFileSync(path, "utf-8").split("\n")) {
-    if (line.trim() === "") continue;
-    try {
-      out.push(JSON.parse(line) as ExecEvent);
-    } catch {
-      // A corrupt line carries no signal and cannot be rewritten — drop it.
-    }
-  }
-  return out;
-}
-
-/** Write events back as JSONL, atomically (temp + rename). No-op when there was no log
- *  to begin with — compaction must never conjure an events dir that bootstrap owns. */
-function writeJsonl(path: string, events: ExecEvent[]): void {
-  if (!existsSync(path)) return;
-  const tmp = path + "." + randomUUID();
-  writeFileSync(tmp, events.map((e) => JSON.stringify(e)).join("\n") + (events.length > 0 ? "\n" : ""));
-  renameOverwrite(tmp, path);
-}
 
 /**
  * Collapse spinner/notification-count frames in a screen log.
@@ -153,10 +130,9 @@ function section(before: number, after: number, samples: string[]): CompactionSe
 export function runCompaction(opts: { apply?: boolean } = {}): CompactionReport {
   const apply = opts.apply === true;
 
-  const screenPath = eventLogPath("screen");
-  const systemPath = eventLogPath("system");
-  const screenEvents = readJsonl(screenPath);
-  const systemEvents = readJsonl(systemPath);
+  // Read events through the active backend (jsonl or sqlite).
+  const screenEvents = readSync("screen");
+  const systemEvents = readSync("system");
 
   const screenResult = compactScreenEvents(screenEvents);
   const noteResult = compactNoteEvents(systemEvents);
@@ -189,17 +165,26 @@ export function runCompaction(opts: { apply?: boolean } = {}): CompactionReport 
 
   if (!apply) return report;
 
-  // Back up every file we are about to rewrite, then rewrite.
+  // Back up everything we are about to rewrite, then rewrite.
+  //
+  // The event backup is delegated to the ACTIVE backend, never inferred from which files
+  // happen to exist: a `migrate-events` run (even a dry one) leaves an events.db behind
+  // while the config may still say "jsonl", and keying off that file would back up the
+  // database while rewriting the JSONL logs — destroying the originals unbacked.
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
   const backupDir = join(execRoot(), "backup-" + stamp);
   mkdirSync(backupDir, { recursive: true });
-  for (const src of [screenPath, systemPath, advisorPath()]) {
-    if (existsSync(src)) copyFileSync(src, join(backupDir, src.split(/[\\/]/).pop()!));
+
+  const backend = getBackend();
+  backend.backupSources(backupDir, ["screen", "system"]);
+  if (existsSync(advisorPath())) {
+    copyFileSync(advisorPath(), join(backupDir, "advisor.json"));
   }
   report.backupDir = backupDir;
 
-  writeJsonl(screenPath, screenResult.kept);
-  writeJsonl(systemPath, noteResult.kept);
+  // Write back through the same backend.
+  backend.replaceAll("screen", screenResult.kept);
+  backend.replaceAll("system", noteResult.kept);
   writeStore(storeCopy);
 
   return report;

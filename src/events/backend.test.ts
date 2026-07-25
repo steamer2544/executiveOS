@@ -278,6 +278,160 @@ for (const backend of ["jsonl", "sqlite"] as const) {
   runTests(backend);
 }
 
+// ─── Criteria 12/14/15: the consumers must work over SQLite too ─────────────
+//
+// The point of Phase 40 is that nothing above the store notices the swap. These drive
+// the real State Builder, the real compaction and the real bootstrap against a sqlite
+// home — the parity tests above only prove the store itself.
+
+describe("Consumers over sqlite", () => {
+  let dir = "";
+  beforeEach(() => {
+    dir = "/tmp/executive-test-consumers-" + randomUUID();
+    setExecutiveHome(dir);
+    clearSqliteCache();
+  });
+  afterEach(() => {
+    clearSqliteCache();
+    cleanup(dir);
+  });
+
+  // Criterion 12
+  it("State Builder derives the same state from sqlite as from jsonl", async () => {
+    const now = new Date("2026-07-25T10:00:00.000Z");
+
+    // The two seedings run milliseconds apart, so every wall-clock stamp the builder
+    // copies out of the events differs by construction. Blank those out — the point of
+    // the comparison is the derivation, not the clock. (An ISO stamp is the only thing
+    // replaced, so a value that stops being a timestamp still fails the comparison.)
+    const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
+    function blankStamps(value: unknown): unknown {
+      if (typeof value === "string") return ISO.test(value) ? "<ts>" : value;
+      if (Array.isArray(value)) return value.map(blankStamps);
+      if (value && typeof value === "object") {
+        const out: Record<string, unknown> = {};
+        for (const [k, v] of Object.entries(value)) out[k] = blankStamps(v);
+        return out;
+      }
+      return value;
+    }
+
+    async function seedAndBuild(backend: "jsonl" | "sqlite") {
+      const home = "/tmp/executive-test-consumers-" + backend + "-" + randomUUID();
+      setExecutiveHome(home);
+      clearSqliteCache();
+      writeBackendConfig(home, backend);
+
+      await append({
+        source: "git",
+        type: "git.branch_switch",
+        data: { to: "feat/dark-mode", repo: "myshi" },
+      });
+      await append({
+        source: "system",
+        type: "system.blocked",
+        data: { reason: "รอ API key จากทีมการเงิน" },
+      });
+
+      const { buildState } = await import("../state/builder.js");
+      const { state } = buildState(now);
+      // `activity` is derived from wall-clock distance to the newest event, which
+      // differs by milliseconds between the two seedings — everything else must match.
+      const { activity: _activity, ...rest } = state as unknown as Record<string, unknown> & {
+        activity: unknown;
+      };
+      clearSqliteCache();
+      return { home, comparable: blankStamps(rest) as Record<string, unknown> };
+    }
+
+    const fromJsonl = await seedAndBuild("jsonl");
+    const fromSqlite = await seedAndBuild("sqlite");
+
+    expect(fromSqlite.comparable).toEqual(fromJsonl.comparable);
+    // And it is a real derivation, not two empty objects agreeing.
+    expect((fromSqlite.comparable as { blocked: boolean }).blocked).toBe(true);
+    expect((fromSqlite.comparable as { git: { branch: string | null } }).git.branch).toBe(
+      "feat/dark-mode"
+    );
+
+    cleanup(fromJsonl.home);
+    cleanup(fromSqlite.home);
+    setExecutiveHome(dir);
+  });
+
+  // Criterion 14
+  it("compaction over sqlite keeps survivors, never renumbers seq, and backs up the db", async () => {
+    writeBackendConfig(dir, "sqlite");
+
+    const a = await append({
+      source: "screen",
+      type: "screen.window",
+      data: { title: "Sprint Board", app: "brave" },
+    });
+    await append({
+      source: "screen",
+      type: "screen.window",
+      data: { title: "Sprint Board", app: "brave" }, // adjacent repeat → dropped
+    });
+    const c = await append({
+      source: "screen",
+      type: "screen.window",
+      data: { title: "Inbox", app: "brave" },
+    });
+
+    const { runCompaction } = await import("../compact/compact.js");
+    const report = runCompaction({ apply: true });
+
+    expect(report.screen.before).toBe(3);
+    expect(report.screen.after).toBe(2);
+
+    const survivors = await read("screen");
+    expect(survivors.map((e) => e.seq)).toEqual([a.seq, c.seq]); // seq never renumbered
+
+    expect(report.backupDir).not.toBeNull();
+    expect(existsSync(report.backupDir + "/events.db")).toBe(true);
+    // And the JSONL logs must NOT be what got backed up.
+    expect(existsSync(report.backupDir + "/screen.jsonl")).toBe(false);
+  });
+
+  // Regression: compaction must back up what it ACTUALLY rewrites.
+  //
+  // `migrate-events` leaves an events.db behind even on a dry run, so a home can sit on
+  // the JSONL backend with a database file present. Inferring the backup target from
+  // "does events.db exist" backs up the database while rewriting the JSONL logs — the
+  // originals are destroyed with no backup, breaking the reversibility guarantee.
+  it("compaction on the jsonl backend backs up the jsonl logs even when an events.db exists", async () => {
+    writeBackendConfig(dir, "jsonl");
+
+    await append({ source: "screen", type: "screen.window", data: { title: "A", app: "x" } });
+    await append({ source: "screen", type: "screen.window", data: { title: "A", app: "x" } });
+
+    // A leftover database from a `migrate-events` run — present, but NOT the live store.
+    writeFileSync(eventDbPath(), "");
+
+    const { runCompaction } = await import("../compact/compact.js");
+    const report = runCompaction({ apply: true });
+
+    expect(report.backupDir).not.toBeNull();
+    expect(existsSync(report.backupDir + "/screen.jsonl")).toBe(true);
+    expect(existsSync(report.backupDir + "/system.jsonl")).toBe(true);
+  });
+
+  // Criterion 15
+  it("bootstrap() twice on a sqlite home errors nothing and loses nothing", async () => {
+    writeBackendConfig(dir, "sqlite");
+    const { bootstrap } = await import("../bootstrap.js");
+
+    await bootstrap();
+    await append({ source: "git", type: "git.commit", data: { sha: "keepme" } });
+    await bootstrap();
+
+    const events = await read("git");
+    expect(events.length).toBe(1);
+    expect(events[0]!.data).toEqual({ sha: "keepme" });
+  });
+});
+
 // ─── Criterion 11: an invalid backend value must degrade, never brick ────────
 
 describe("Config gate — invalid storage.backend", () => {

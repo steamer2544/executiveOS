@@ -1184,6 +1184,56 @@ docs/scopes/           # per-phase specs (the contract handed to the implementer
   `/api/chat/confirm` accepts the new decision). 736 tests (+5, sabotage-checked: disabling the
   `isTrusted` session check fails exactly the session-trust tests). Files: `src/agent/{session,loop,
   types}.ts`, `src/paths.ts`, `src/channel/{discord,types}.ts`, `src/ui/{page,server}.ts` (+ tests).
+- **Phase 40 — DONE** (architect scope + qwen impl of both jobs + architect review/fixes/live-validation,
+  this session): **SQLite event storage behind a config gate** — the last planned roadmap item (promised
+  since Phase 1's tech stack). The JSONL log had reached **6,709 events / 1.5 MB**, and *every* consumer
+  re-read all five files in full: the State Builder on a 30 s timer **and** the dashboard on every
+  `GET /api/state` (a 5 s refresh). New `EventBackend` interface (`init`/`append`/`read`/`tail`/
+  `replaceAll`/`backupSources`) with two implementations — `jsonl-backend.ts` (today's logic, moved) and
+  `sqlite-backend.ts` (`bun:sqlite`, **no new dependency**, one `events` table, `seq INTEGER PRIMARY KEY`
+  so seq is the rowid: unique, indexed, and **never renumbered on delete** — compaction keeps its
+  guarantee). `store.ts` becomes a thin dispatcher: `append`/`read`/`tail` keep their names, signatures
+  and error messages, so **not one caller changed**; it only *adds* `readSync`/`tailSync` for the
+  synchronous State Builder. `tail(n)` on sqlite is `ORDER BY seq DESC LIMIT n`, not a full read + sort.
+  **`seq` allocation deliberately did NOT move** — `seq.ts`/`meta.json` stay authoritative for both
+  backends, so flipping `config.storage.backend` back and forth stays coherent. **Default is `"jsonl"`
+  and byte-identical to before**; an invalid value warns and falls back. Two consumers that bypassed the
+  store and read files directly (`state/builder.ts` `readEventsSync`, `compact/compact.ts`) were routed
+  through it; `bootstrap.ts` gained the missing 5th source (`screen`) + `getBackend().init()`. New
+  `migrate-events [--apply]` (`src/events/migrate.ts`): **dry-run by default**, **never deletes or
+  rewrites a `.jsonl` file** (they stay as the backup), idempotent, and a seq that already exists with a
+  **different `id`** is a reported `conflict` (CLI exits 1) rather than a silent skip. 768 passing tests
+  (+32). **Live-validated on the real 7,300-event log:** dry-run → 7,004 counted / 0 rows written; apply →
+  7,004 rows, `seq` 1→7512 (gaps preserved from an old `compact`, never renumbered), all five JSONL files
+  **md5-identical** after; re-run → `inserted: 0, alreadyPresent: 7004`. Then, on a **copy of the real
+  home with the JSONL logs deleted**, `tail`/`report`/`emit` all worked from SQLite alone (full state +
+  planner rule fired). **Architect defects found + fixed (qwen's two runs both wrote working code but
+  neither ran its own acceptance):** (1) **the compaction backup was destructive** — it chose what to back
+  up by `existsSync(events.db)` instead of by the active backend, so a home that had run `migrate-events`
+  (which creates the db **even on a dry run**) while still configured for `"jsonl"` would rewrite the
+  JSONL logs and back up the *database* — the originals destroyed with no backup, breaking the project's
+  reversibility rule; fixed by moving the backup into the backend (`backupSources`), + a regression test
+  that fails against the old code. (2) The sqlite backup copied `events.db` **while WAL was on**, so
+  recent commits still in `events.db-wal` would be silently missing — now `PRAGMA wal_checkpoint(TRUNCATE)`
+  first. (3) **The sqlite half of the parity suite was vacuous** (GOTCHA §4): forcing `getBackend()` to
+  always return JSONL left every "sqlite" parity case green, because they only assert behaviour both
+  backends share — added an **anchor test** asserting the physical artifact, which takes that sabotage
+  from 2 red to 3. (4) **Criteria 12/14/15 had no tests at all** despite the run reporting "criteria 12–21
+  implemented" — added State-Builder-parity-over-sqlite, compaction-over-sqlite, and bootstrap-twice.
+  (5) `migrate.ts` leaked its DB handle (the test had a hack to reopen-and-close it — a workaround for a
+  product bug), derived `meta.json` by `dbPath.replace("/events.db", …)`, duplicated the schema, and
+  re-`prepare`d the INSERT per row (6,700 times on the real log). (6) Garbled Thai in a test fixture and
+  four dead imports. **Sabotage-checked (5/5, all run by the architect, not taken on report):** force
+  JSONL → 3 red; drop the sqlite `tail` reversal → 2 red; restore the `existsSync` backup heuristic →
+  the regression test red; make dry-run insert → criterion 16 red; drop the `id` comparison → criterion
+  19 red. **Delegation note:** the Job 1 run again died to `ContextWindowExceededError` **after** writing
+  all 7 files — the real culprit is not `CLAUDE.md` but **`bun test` printing 750+ `(pass)` lines
+  (~20–30 k tokens) per run**; Job 2 was told to pipe it through `tail` and survived to report.
+  **NOT flipped on the owner's live runtime** — `config.storage.backend` is still `"jsonl"`; the migrated
+  `events.db` sits ready and a re-run of `migrate-events --apply` catches it up (idempotent). Spec:
+  `docs/scopes/phase-40-sqlite-storage.md`. Files: `src/events/{backend,jsonl-backend,sqlite-backend,
+  store,migrate}.ts`, `src/{config,paths,bootstrap,index}.ts`, `src/state/builder.ts`,
+  `src/compact/compact.ts` (+ tests).
 - **Loop complete (manual trigger):** `auto --apply` runs the whole chain in one command; the human
   reviews/merges the `executive/change-<id>` branch.
 
@@ -1201,6 +1251,7 @@ bun run src/index.ts synth [--files a,b] [--proposal <id>]  # synthesize a Chang
 bun run src/index.ts auto [--apply] [--files a,b]   # run the whole chain plan→work→synth→execute (dry-run without --apply)
 bun run src/index.ts report                         # render a human-readable digest of the current state → digest.md
 bun run src/index.ts notifications [n]              # show the last n "Needs you" notifications (daemon-logged)
+bun run src/index.ts migrate-events [--apply]       # copy the JSONL event logs into .executive/events.db (dry-run without --apply)
 bun run src/index.ts install-hooks [--test "<cmd>"] # install a git post-commit hook that auto-emits test results
 bun run src/index.ts ui [--port N] [--no-watch]     # local web dashboard + git/file watchers (Ctrl-C to stop)
 bun run src/index.ts infer                          # LLM guesses block/deadline (suggestions only) → inferred.json
