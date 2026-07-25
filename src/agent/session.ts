@@ -6,7 +6,7 @@
 import { appendFileSync, existsSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 
 import type { ChatMessage, PendingWrite, TranscriptItem } from "./types.js";
-import { conversationPath, agentPendingPath, execRoot } from "../paths.js";
+import { conversationPath, agentPendingPath, agentSessionTrustPath, execRoot } from "../paths.js";
 import { loadWorkerIdentity } from "../worker/identity.js";
 import { renameOverwrite } from "../fs-atomic.js";
 
@@ -81,11 +81,52 @@ export function appendMessage(msg: Omit<ChatMessage, "id" | "ts">): ChatMessage 
 
 /** Start fresh. The old conversation is archived, never deleted. */
 export function clearConversation(): string | null {
+  // Session trust is scoped to a conversation, so clearing the chat retires it too.
+  clearSessionTrust();
   const p = conversationPath();
   if (!existsSync(p)) return null;
   const archived = `${execRoot()}/conversation-${Date.now()}.jsonl`;
   renameSync(p, archived);
   return archived;
+}
+
+// ─── Session trust (Phase: Discord UX) ─────────────────────────────────────────
+//
+// The owner can tap "ไว้ใจทั้งแชทนี้" to stop being asked about a tool for the REST of the
+// current conversation — chosen over persistent trust for the never-trustable tools
+// (run_command / edit_files) so the convenience is bounded to one session and vanishes on
+// clear. It never touches config.agent.trustedTools, and the run_command denylist still
+// hard-refuses a destructive command even when the tool is session-trusted.
+
+export function readSessionTrust(): string[] {
+  const p = agentSessionTrustPath();
+  if (!existsSync(p)) return [];
+  try {
+    const arr = JSON.parse(readFileSync(p, "utf-8"));
+    return Array.isArray(arr) ? arr.filter((x): x is string => typeof x === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+export function addSessionTrust(toolName: string): void {
+  const current = readSessionTrust();
+  if (current.includes(toolName)) return;
+  const next = [...current, toolName];
+  const p = agentSessionTrustPath();
+  const tmp = `${p}.tmp.${process.pid}.${Math.random().toString(36).slice(2)}`;
+  writeFileSync(tmp, JSON.stringify(next, null, 2));
+  renameOverwrite(tmp, p);
+}
+
+export function clearSessionTrust(): void {
+  const p = agentSessionTrustPath();
+  if (!existsSync(p)) return;
+  try {
+    unlinkSync(p);
+  } catch {
+    // Best effort — a stale file is harmless (it only ever GRANTS trust the owner opted into).
+  }
 }
 
 // ─── Transcript reconstruction ────────────────────────────────────────────────

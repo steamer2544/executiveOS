@@ -164,9 +164,10 @@ export function createDiscordChannel(opts: DiscordChannelOptions): Channel {
   }
 
   /** The status line stamped onto a confirm message once the owner taps a button. */
-  function decisionStamp(decision: "run" | "trust" | "no"): string {
+  function decisionStamp(decision: "run" | "trust" | "trust_session" | "no"): string {
     if (decision === "no") return "❌ ยกเลิกแล้ว";
     if (decision === "trust") return "🤝 ไว้ใจ tool นี้ตลอด — กำลังทำ…";
+    if (decision === "trust_session") return "🤝 ไว้ใจทั้งแชทนี้ — กำลังทำ…";
     return "✅ ทำเลย — กำลังทำ…";
   }
 
@@ -182,15 +183,13 @@ export function createDiscordChannel(opts: DiscordChannelOptions): Channel {
         custom_id: `confirm:${pendingId}:run`,
       },
     ];
-    // run_command / edit_files are never blanket-trustable (Phase 38) — omit the trust button.
-    if (trustable) {
-      components.push({
-        type: 2,
-        style: 2, // Secondary
-        label: "ไว้ใจ tool นี้ตลอด",
-        custom_id: `confirm:${pendingId}:trust`,
-      });
-    }
+    // A trustable tool gets persistent trust; run_command / edit_files (never persistently
+    // trustable, Phase 38) get SESSION trust instead — bounded to this conversation.
+    components.push(
+      trustable
+        ? { type: 2, style: 2, label: "ไว้ใจ tool นี้ตลอด", custom_id: `confirm:${pendingId}:trust` }
+        : { type: 2, style: 2, label: "ไว้ใจทั้งแชทนี้", custom_id: `confirm:${pendingId}:trust_session` }
+    );
     components.push({
       type: 2,
       style: 4, // Danger
@@ -276,11 +275,11 @@ export function createDiscordChannel(opts: DiscordChannelOptions): Channel {
     if (!handler) return;
     if (!d.data?.custom_id) return;
 
-    const match = d.data.custom_id.match(/^confirm:(.+):(run|trust|no)$/);
+    const match = d.data.custom_id.match(/^confirm:(.+):(run|trust|trust_session|no)$/);
     if (!match) return;
 
     const pendingId = match[1]!;
-    const decision = match[2] as "run" | "trust" | "no";
+    const decision = match[2] as "run" | "trust" | "trust_session" | "no";
 
     // Update the confirm message in place (strip buttons + stamp the choice) before
     // calling the handler — this IS the interaction ack, within the 3-second deadline.

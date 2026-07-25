@@ -130,6 +130,12 @@ export function agentPendingPath(): string {
   return execRoot() + "/agent-pending.json";
 }
 
+/** Absolute path to .executive/agent-session-trust.json — tools the owner trusted for the
+ *  CURRENT conversation only (reset when the chat is cleared). Session-scoped, never config. */
+export function agentSessionTrustPath(): string {
+  return execRoot() + "/agent-session-trust.json";
+}
+
 /** Absolute path to .executive/nudges.jsonl (proactive nudges sent + whether they were answered). */
 export function nudgeLogPath(): string {
   return execRoot() + "/nudges.jsonl";

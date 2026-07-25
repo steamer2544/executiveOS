@@ -26,7 +26,7 @@ export interface OutboundMessage {
 /** What comes back from the owner. Anything from anyone else must never reach here. */
 export type InboundMessage =
   | { kind: "text"; text: string }
-  | { kind: "confirm"; pendingId: string; decision: "run" | "trust" | "no" };
+  | { kind: "confirm"; pendingId: string; decision: "run" | "trust" | "trust_session" | "no" };
 
 export interface Channel {
   name: string;

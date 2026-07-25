@@ -30,6 +30,8 @@ import {
   readConversation,
   readPending,
   writePending,
+  readSessionTrust,
+  addSessionTrust,
 } from "./session.js";
 import { llmMaxTokens, llmTimeoutMs, trustTool, NEVER_TRUSTABLE } from "../config.js";
 
@@ -57,7 +59,11 @@ function ctxFor(config: Config): ToolContext {
 }
 
 function isTrusted(name: string, config: Config): boolean {
-  // run_command / edit_files can never be trusted, even if a hand-edited config lists them (Phase 38).
+  // Session trust (this conversation only) covers ANY tool, including the never-persistently-
+  // trustable ones — it is bounded and resets on clear, and the run_command denylist still
+  // hard-refuses a destructive command even here (command-guard, checked inside run_command).
+  if (readSessionTrust().includes(name)) return true;
+  // Persistent trust: run_command / edit_files can never be trusted via config (Phase 38).
   if (NEVER_TRUSTABLE.has(name)) return false;
   return (config.agent?.trustedTools ?? []).includes(name);
 }
@@ -169,6 +175,10 @@ export async function resumeTurn(
   } else {
     if (decision === "trust") {
       config = trustTool(pending.toolName);
+    } else if (decision === "trust_session") {
+      // Trust this tool for the rest of the conversation only (resets on clear). Covers the
+      // never-persistently-trustable tools; the denylist still guards run_command.
+      addSessionTrust(pending.toolName);
     }
     const tool = toolsFor(opts).find((t) => t.name === pending.toolName);
     if (!tool) {

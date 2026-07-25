@@ -1167,6 +1167,23 @@ docs/scopes/           # per-phase specs (the contract handed to the implementer
   (`✅ ทำเลย — กำลังทำ…` / `🤝 ไว้ใจ… ` / `❌ ยกเลิกแล้ว`), reading the original text from the interaction's
   `message.content`. 731 tests (+5: chunking incl. a Thai case + the type-7 update). Files:
   `src/channel/discord.ts` (+ `discord.test.ts`).
+- **Session trust ("ไว้ใจทั้งแชทนี้") — DONE** (architect + owner decision, this session): the third piece
+  of the same feedback — the owner didn't want to tap-confirm *every* command when the agent inspects a
+  repo (it ran `Get-ChildItem`, `git diff`, … each a separate confirm). Phase 38 made `run_command` /
+  `edit_files` **never persistently trustable** on purpose (they run `sh -c <anything>` / write the repo).
+  Rather than weaken that, the owner chose a **session-scoped** trust: a new **"ไว้ใจทั้งแชทนี้"** button
+  (shown for exactly the non-persistently-trustable tools, in place of the hidden "ไว้ใจตลอด") trusts a
+  tool for the **rest of the current conversation only** and **resets when the chat is cleared**. New
+  `agent-session-trust.json` store (`readSessionTrust`/`addSessionTrust`/`clearSessionTrust` in
+  `session.ts`, path in `paths.ts`), cleared by `clearConversation`; `isTrusted` consults it **first** (so
+  it can cover the NEVER_TRUSTABLE tools — bounded, never `config.agent.trustedTools`); a new
+  `ConfirmDecision "trust_session"` handled in `resumeTurn`. **Guardrail preserved:** the run_command
+  **denylist still hard-refuses a destructive command even when the tool is session-trusted** (the check is
+  inside `run_command.run()`, untouched — session trust only skips the *confirm*, not the classifier).
+  Wired through both front doors (Discord button + custom_id parse + type-7 stamp; dashboard chat button;
+  `/api/chat/confirm` accepts the new decision). 736 tests (+5, sabotage-checked: disabling the
+  `isTrusted` session check fails exactly the session-trust tests). Files: `src/agent/{session,loop,
+  types}.ts`, `src/paths.ts`, `src/channel/{discord,types}.ts`, `src/ui/{page,server}.ts` (+ tests).
 - **Loop complete (manual trigger):** `auto --apply` runs the whole chain in one command; the human
   reviews/merges the `executive/change-<id>` branch.
 

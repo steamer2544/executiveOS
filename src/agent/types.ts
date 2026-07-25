@@ -80,12 +80,16 @@ export interface PendingWrite {
   args: Record<string, unknown>;
   /** One line, in the owner's language, describing what will happen if approved. */
   preview: string;
-  /** Phase 38: false for tools that may never be blanket-trusted (run_command / edit_files),
-   *  so both front doors hide the "trust forever" button. Absent/true = the button is shown. */
+  /** Phase 38: false for tools that may never be blanket-trusted (run_command / edit_files).
+   *  Those get a **session**-trust button ("ไว้ใจทั้งแชทนี้") instead of the persistent
+   *  "ไว้ใจตลอด"; trustable (absent/true) tools keep the persistent one. */
   trustable?: boolean;
 }
 
-export type ConfirmDecision = "run" | "trust" | "no";
+/** "run" = do it once. "trust" = persist to config.agent.trustedTools (persistent, only for
+ *  trustable tools). "trust_session" = trust for the current conversation only (used for the
+ *  never-persistent-trustable tools; resets on clear). "no" = decline. */
+export type ConfirmDecision = "run" | "trust" | "trust_session" | "no";
 
 // ─── Turn result ──────────────────────────────────────────────────────────────
 

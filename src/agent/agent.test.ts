@@ -19,7 +19,7 @@ import {
 } from "./protocol.js";
 import { resolveSafePath, resolveRepo, humanDuration, findTool, READ_TOOLS, WRITE_TOOLS, ALL_TOOLS } from "./tools.js";
 import { runTurn, resumeTurn } from "./loop.js";
-import { readConversation, buildTranscript, readPending, AGENT_CONTRACT } from "./session.js";
+import { readConversation, buildTranscript, readPending, AGENT_CONTRACT, clearConversation, readSessionTrust } from "./session.js";
 import { loadConfig, defaultConfig, trustTool, NEVER_TRUSTABLE } from "../config.js";
 import { configPath } from "../paths.js";
 
@@ -535,6 +535,51 @@ describe("write confirmation", () => {
     const turn2 = await runTurn("อีกที", { config: loadConfig(), backend: again, tools: FAKE_TOOLS });
     expect(turn2.pending).toBeNull();
     expect(writeRuns).toBe(2);
+  });
+
+  it("'trust_session' trusts the tool for THIS conversation only, never in config", async () => {
+    const backend = mockBackend([callStep("emit_event", { type: "system.blocked" })]);
+    const turn = await runTurn("x", { config: loadConfig(), backend, tools: FAKE_TOOLS });
+    await resumeTurn(turn.pending!.id, "trust_session", {
+      config: loadConfig(),
+      backend: mockBackend([textStep("ok")]),
+      tools: FAKE_TOOLS,
+    });
+
+    // Session store holds it; config does NOT (this is the whole point — bounded, not persistent).
+    expect(readSessionTrust()).toContain("emit_event");
+    expect(loadConfig().agent?.trustedTools ?? []).not.toContain("emit_event");
+
+    // Second time in the same conversation: no parking, it just runs.
+    const again = mockBackend([callStep("emit_event", { type: "system.blocked" }), textStep("ok")]);
+    const turn2 = await runTurn("อีกที", { config: loadConfig(), backend: again, tools: FAKE_TOOLS });
+    expect(turn2.pending).toBeNull();
+    expect(writeRuns).toBe(2);
+  });
+
+  it("clearing the chat resets session trust — the owner is asked again", async () => {
+    const turn = await runTurn("x", {
+      config: loadConfig(),
+      backend: mockBackend([callStep("emit_event", { type: "system.blocked" })]),
+      tools: FAKE_TOOLS,
+    });
+    await resumeTurn(turn.pending!.id, "trust_session", {
+      config: loadConfig(),
+      backend: mockBackend([textStep("ok")]),
+      tools: FAKE_TOOLS,
+    });
+    expect(readSessionTrust()).toContain("emit_event");
+
+    clearConversation();
+    expect(readSessionTrust()).toEqual([]);
+
+    // Now it parks again instead of auto-running.
+    const turn2 = await runTurn("x", {
+      config: loadConfig(),
+      backend: mockBackend([callStep("emit_event", { type: "system.blocked" })]),
+      tools: FAKE_TOOLS,
+    });
+    expect(turn2.pending).not.toBeNull();
   });
 
   it("'no' declines without running, and tells the model so it stops retrying", async () => {

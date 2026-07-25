@@ -632,3 +632,59 @@ describe("chunkContent", () => {
     expect(chunks.join("")).toBe(thai); // no "…" truncation, all of it survives
   });
 });
+
+// ── issue 2: session-trust button for never-persistently-trustable tools ─────
+
+describe("confirm button: session vs persistent trust", () => {
+  const token = "bot-token-test";
+  const ownerId = "owner-1";
+
+  async function componentsFor(trustable: boolean): Promise<Array<{ custom_id: string; label: string }>> {
+    const fakeFetch = new FakeFetch();
+    const ch = createDiscordChannel({
+      token, ownerId,
+      wsFactory: makeWsFactory(new FakeWebSocket("wss://gateway.discord.gg/?v=10&encoding=json")),
+      fetchImpl: fakeFetch.mock as unknown as typeof fetch,
+    });
+    await ch.send({ text: "รันคำสั่ง: ls", confirm: { pendingId: "p1", trustable } });
+    const msg = fakeFetch.calls.find((c) => c.url.includes("/messages") && c.method === "POST");
+    const body = JSON.parse(msg!.body!);
+    return body.components[0].components as Array<{ custom_id: string; label: string }>;
+  }
+
+  it("a non-trustable tool (run_command/edit_files) gets a SESSION-trust button", async () => {
+    const btns = await componentsFor(false);
+    const ids = btns.map((b) => b.custom_id);
+    expect(ids).toContain("confirm:p1:trust_session");
+    expect(ids).not.toContain("confirm:p1:trust"); // never persistent (Phase 38)
+    expect(btns.some((b) => b.label === "ไว้ใจทั้งแชทนี้")).toBe(true);
+  });
+
+  it("a trustable tool keeps the persistent-trust button", async () => {
+    const btns = await componentsFor(true);
+    const ids = btns.map((b) => b.custom_id);
+    expect(ids).toContain("confirm:p1:trust");
+    expect(ids).not.toContain("confirm:p1:trust_session");
+  });
+
+  it("parses a trust_session button click into the right decision", async () => {
+    const fakeWs = new FakeWebSocket("wss://gateway.discord.gg/?v=10&encoding=json");
+    const fakeFetch = new FakeFetch();
+    const ch = createDiscordChannel({
+      token, ownerId, wsFactory: makeWsFactory(fakeWs),
+      fetchImpl: fakeFetch.mock as unknown as typeof fetch,
+    });
+    const received: InboundMessage[] = [];
+    ch.onInbound((m) => { received.push(m); return Promise.resolve(); });
+    await ch.start();
+    fakeWs.emit({ op: 10, d: { heartbeat_interval: 500 } });
+    fakeWs.emit({
+      op: 0, t: "INTERACTION_CREATE",
+      d: { id: "i", token: "t", user: { id: ownerId },
+        message: { content: "รันคำสั่ง: ls" },
+        data: { custom_id: "confirm:p1:trust_session" } },
+    });
+    await new Promise((r) => setTimeout(r, 100));
+    expect(received).toEqual([{ kind: "confirm", pendingId: "p1", decision: "trust_session" }]);
+  });
+});

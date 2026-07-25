@@ -357,9 +357,9 @@ export function startUiServer(opts: UiServerOptions) {
           try {
             const body = (await req.json()) as { pendingId?: string; decision?: ConfirmDecision };
             const d = body.decision;
-            if (!body.pendingId || (d !== "run" && d !== "trust" && d !== "no")) {
+            if (!body.pendingId || (d !== "run" && d !== "trust" && d !== "trust_session" && d !== "no")) {
               return Response.json(
-                { ok: false, error: "need { pendingId, decision: run|trust|no }" },
+                { ok: false, error: "need { pendingId, decision: run|trust|trust_session|no }" },
                 { status: 400 },
               );
             }
