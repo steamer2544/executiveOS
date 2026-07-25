@@ -2,6 +2,8 @@
 // every case either uses a pure helper or a deliberately bogus executable path.
 
 import { describe, test, expect } from "bun:test";
+import { tmpdir } from "node:os";
+import { randomUUID } from "node:crypto";
 import { ocrImage, normalizeThaiOcr, resolveTesseractPath } from "./ocr.js";
 
 // Thai sara-am as Tesseract emits it: ก + U+0E4D (nikhahit) + U+0E32 (sara aa).
@@ -70,7 +72,19 @@ describe("ocrImage engine dispatch", () => {
 
   test("omitting opts keeps the default (WinRT) engine reachable without throwing", () => {
     // A non-existent image on the WinRT path must degrade to "" rather than throw.
-    expect(typeof ocrImage("C:\\nope\\img.png")).toBe("string");
+    //
+    // The WinRT path stages a temp .ps1 under tmpDir(), so EXECUTIVE_HOME must point at a
+    // temp directory: without it this test wrote its scratch file into the owner's LIVE
+    // .executive/tmp.
+    const prev = process.env.EXECUTIVE_HOME;
+    process.env.EXECUTIVE_HOME =
+      tmpdir() + "/executive-test-ocr-" + randomUUID();
+    try {
+      expect(typeof ocrImage("C:\\nope\\img.png")).toBe("string");
+    } finally {
+      if (prev === undefined) delete process.env.EXECUTIVE_HOME;
+      else process.env.EXECUTIVE_HOME = prev;
+    }
   });
 });
 

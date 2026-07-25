@@ -7,6 +7,20 @@ import type { EventSource } from "./events/types.js";
 export function execRoot(): string {
   const env = process.env.EXECUTIVE_HOME;
   if (env) return env;
+  // Under `bun test`, falling back to <cwd>/.executive means a test resolves a path into
+  // the OWNER'S LIVE RUNTIME DIRECTORY. That is not hypothetical: a test that wrote a
+  // config fixture while EXECUTIVE_HOME happened to be unset destroyed the real
+  // config.json (every dashboard/Discord/screen-sense setting) on 2026-07-25. Tests must
+  // always set EXECUTIVE_HOME to a temp dir — failing loudly here is the only way that
+  // mistake surfaces as a red test instead of as silent data loss.
+  if (process.env.NODE_ENV === "test") {
+    throw new Error(
+      "execRoot(): EXECUTIVE_HOME is not set. A test must point it at a temp directory — " +
+        "refusing to fall back to " +
+        process.cwd() +
+        "/.executive (the real runtime data)."
+    );
+  }
   return process.cwd() + "/.executive";
 }
 

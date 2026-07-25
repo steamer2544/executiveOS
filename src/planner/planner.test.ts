@@ -8,7 +8,6 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { describe, expect, it } from "bun:test";
-import { execRoot } from "../paths.js";
 import type { State, Context } from "../state/types.js";
 import { plan, writePlan, applyGuardrail } from "./planner.js";
 import { RULES, daysOverdue } from "./rules.js";
@@ -213,24 +212,14 @@ describe("planner — determinism", () => {
 
 describe("planner — plan reads only State", () => {
   it("plan() works with no .executive/ on disk", () => {
-    // Ensure we're not relying on any files.
-    const home = execRoot();
-    const wasPresent = existsSync(home);
-    try {
-      const s = makeState({ tests: "failing" });
-      const p = plan(s);
-      expect(p.actions.length).toBe(1);
-      expect(p.topAction!.kind).toBe("fix_tests");
-    } finally {
-      if (!wasPresent) {
-        // Clean up if we created it.
-        try {
-          // Only remove if we didn't create it, but it existed before — leave it.
-        } catch {
-          // ignore
-        }
-      }
-    }
+    // `plan()` takes a State object and touches no file, which is the whole point of the
+    // test. It used to call execRoot()/existsSync purely as ceremony — a finally block
+    // whose only content was comments — and that ceremony was the single thing in here
+    // that reached for a path at all.
+    const s = makeState({ tests: "failing" });
+    const p = plan(s);
+    expect(p.actions.length).toBe(1);
+    expect(p.topAction!.kind).toBe("fix_tests");
   });
 
   it("RULES and planner do not import event store", () => {
