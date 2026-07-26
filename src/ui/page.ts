@@ -228,6 +228,32 @@ export function renderPage(): string {
     <div id="applyState" class="muted" style="font-size:12px;margin-top:8px"></div>
   </section>
 
+  <section class="card" id="fileOutputCard">
+    <h2>File output (save_file)</h2>
+    <div class="muted" style="font-size:12px;margin-bottom:10px">
+      Folders the agent may save a finished file into — your Desktop, a scratch folder. This is
+      the only agent write with <b>no git undo</b>: a repo change lands on an isolated branch you
+      can delete, a file here is just a file. Empty list = the tool does not exist.
+      Every save still asks you first.
+    </div>
+    <label class="muted" style="font-size:12px">Folders (one per line, absolute paths)</label>
+    <textarea id="foDirs" rows="2" placeholder="C:\\Users\\you\\Desktop"
+      style="width:100%;margin:4px 0 10px;font-family:ui-monospace,monospace;font-size:12px"></textarea>
+    <label class="auto-row">
+      <input type="checkbox" id="foExec" />
+      <span><b>Allow files Windows runs on double-click</b> (.exe .bat .ps1 .vbs .js .reg …).
+      Off = you get .html/.txt/.csv instead. Leave off unless you need it: a wrong or
+      prompt-injected file of this kind runs the moment you click it.</span>
+    </label>
+    <label class="auto-row">
+      <input type="checkbox" id="foOverwrite" />
+      <span><b>Allow overwriting an existing file.</b> Off = it saves as
+      <code>name-2.ext</code> next to yours instead of replacing it.</span>
+    </label>
+    <button class="btn" onclick="saveFileOutput()" style="margin-top:8px">Save</button>
+    <span id="foStatus" class="muted" style="font-size:12px;margin-left:8px"></span>
+  </section>
+
   <section class="card" id="proposalsCard">
     <h2 style="display:flex;justify-content:space-between;align-items:center">
       <span>Decisions for you</span>
@@ -648,6 +674,7 @@ async function loadCaptureConfig() {
       if (agentOn) loadChat();
     }
     if (j.autonomy) populateAutonomy(j.autonomy);
+    if (j.fileOutput) populateFileOutput(j.fileOutput);
   } catch {}
   const sel = $("lang"); if (sel) sel.value = cfgT.language || "";
   populateSettings();
@@ -674,6 +701,45 @@ function populateAutonomy(a) {
   } else {
     note.textContent = "autopilot.apply is off — Autopilot will dry-run only and write nothing to your repo.";
   }
+}
+
+// ── save_file output settings ───────────────────────────────────────────────
+// Only these three fields are writable; the executable EXTENSION LIST lives in code
+// (EXECUTABLE_EXT), so this page can decide whether the gate applies, never widen it.
+function populateFileOutput(f) {
+  $("foDirs").value = (f.dirs || []).join("\\n");
+  $("foExec").checked = !!f.allowExecutable;
+  $("foOverwrite").checked = !!f.allowOverwrite;
+}
+
+async function saveFileOutput() {
+  const dirs = $("foDirs").value.split("\\n").map(function (s) { return s.trim(); })
+    .filter(function (s) { return s !== ""; });
+  const patch = {
+    dirs: dirs,
+    allowExecutable: $("foExec").checked,
+    allowOverwrite: $("foOverwrite").checked,
+  };
+  const status = $("foStatus");
+  try {
+    const r = await fetch("/api/file-output", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(patch),
+    });
+    const j = await r.json();
+    if (j.fileOutput) {
+      populateFileOutput(j.fileOutput);
+      // Report what was KEPT, not what was sent — a relative path is dropped server-side,
+      // and silently showing it back would look like it had been accepted.
+      status.textContent = j.fileOutput.dirs.length
+        ? "saved · " + j.fileOutput.dirs.length + " folder(s)"
+        : "saved · no folders — save_file is off";
+    } else {
+      status.textContent = "error: " + (j.error || "unknown");
+    }
+  } catch (e) {
+    status.textContent = "error: " + e;
+  }
+  setTimeout(function () { status.textContent = ""; }, 4000);
 }
 
 async function saveAutonomy() {

@@ -4,7 +4,7 @@
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import { mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { randomUUID } from "node:crypto";
-import { loadConfig, updateTranscribeConfig, updateScreenConfig, updateAutonomyConfig, readAutonomyConfig, defaultConfig } from "./config.js";
+import { loadConfig, updateTranscribeConfig, updateScreenConfig, updateAutonomyConfig, readAutonomyConfig, defaultConfig, readFileOutputConfig, updateFileOutputConfig } from "./config.js";
 import { configPath } from "./paths.js";
 
 const DIR = "/tmp/executive-test-config-" + randomUUID();
@@ -248,5 +248,48 @@ describe("readAutonomyConfig / updateAutonomyConfig", () => {
     const c = loadConfig();
     expect(c.advisor!.cooldownMs).toBe(999);
     expect(c.advisor!.maxOpen).toBe(3);
+  });
+});
+
+// save_file output settings. The tool has no git undo, so "absent block = off" and
+// "a patch cannot reach anything else" are guarantees, not conveniences.
+describe("readFileOutputConfig / updateFileOutputConfig", () => {
+  beforeEach(() => { process.env.EXECUTIVE_HOME = DIR; writeConfig(defaultConfig()); });
+  afterEach(() => { try { rmSync(DIR, { recursive: true, force: true }); } catch {} delete process.env.EXECUTIVE_HOME; });
+
+  it("a config written before this feature existed loads with the tool off", () => {
+    const base = defaultConfig() as unknown as Record<string, unknown>;
+    delete (base.agent as Record<string, unknown>).fileOutput;
+    writeConfig(base as never);
+    const f = readFileOutputConfig(loadConfig());
+    expect(f.dirs).toEqual([]);
+    expect(f.allowExecutable).toBe(false);
+    expect(f.allowOverwrite).toBe(false);
+  });
+
+  it("round-trips dirs and both switches", () => {
+    updateFileOutputConfig({ dirs: ["C:/Users/me/Desktop"], allowExecutable: true, allowOverwrite: true });
+    const f = readFileOutputConfig(loadConfig());
+    expect(f.dirs).toEqual(["C:/Users/me/Desktop"]);
+    expect(f.allowExecutable).toBe(true);
+    expect(f.allowOverwrite).toBe(true);
+  });
+
+  it("drops a relative directory — it would resolve against the daemon's cwd", () => {
+    updateFileOutputConfig({ dirs: ["Desktop", "../out", "", "C:/ok", "/home/me/out"] });
+    expect(readFileOutputConfig(loadConfig()).dirs).toEqual(["C:/ok", "/home/me/out"]);
+  });
+
+  it("ignores a non-boolean switch instead of coercing it on", () => {
+    updateFileOutputConfig({ allowExecutable: "yes" as unknown as boolean });
+    expect(readFileOutputConfig(loadConfig()).allowExecutable).toBe(false);
+  });
+
+  it("writes only the fileOutput block — a patch cannot reach other config", () => {
+    updateFileOutputConfig({ dirs: ["C:/ok"], enabled: false, worker: { baseUrl: "http://evil" } } as never);
+    const c = loadConfig();
+    expect(c.agent!.enabled).toBe(defaultConfig().agent!.enabled);
+    expect(c.worker!.baseUrl).toBe(defaultConfig().worker!.baseUrl);
+    expect((c as unknown as Record<string, unknown>).enabled).toBeUndefined();
   });
 });

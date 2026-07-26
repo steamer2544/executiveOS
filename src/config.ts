@@ -123,6 +123,26 @@ export interface Config {
       quietFrom?: string; // start of the do-not-disturb window "HH:MM". Default "22:00".
       quietTo?: string;   // end of it. Wraps midnight. from === to disables quiet hours. Default "08:00".
     };
+    /** Where `save_file` may write OUTSIDE a git repo (the Desktop, a scratch folder, …).
+     *
+     *  This is the one path the agent has to real files with no git safety net — a repo
+     *  edit lands on an isolated `executive/change-*` branch and is reversible with
+     *  `git branch -D`; a file written here is just a file, and an overwrite is gone.
+     *  So it is deliberately narrow: an empty `dirs` (the default) means the tool does
+     *  not exist at all, and the two loosening switches are OFF until the owner turns
+     *  them on in the dashboard. `save_file` is a write tool, so every call is confirmed
+     *  regardless, and it can never be granted standing trust (NEVER_TRUSTABLE). */
+    fileOutput?: {
+      /** Absolute directories the agent may write into. Empty = the tool is unavailable.
+       *  A path is resolved and contained inside one of these — no `..` escape. Default []. */
+      dirs?: string[];
+      /** Allow file types Windows executes on double-click (.exe/.bat/.ps1/.vbs/.js/…).
+       *  Default false: the owner asks for a calculator and gets HTML, never a .bat. */
+      allowExecutable?: boolean;
+      /** Allow replacing a file that already exists. Default false — a Desktop file has no
+       *  undo, so the tool renames to `name-2.ext` instead of destroying the original. */
+      allowOverwrite?: boolean;
+    };
   };
   /** Discord channel (Phase 36) — how a nudge reaches the owner with the dashboard closed,
    *  and how their reply gets back into the SAME conversation. OFF by default.
@@ -274,6 +294,11 @@ export function defaultConfig(): Config {
       commandTimeoutMs: 60000,
       commandAllowlist: [],
       repoSearchRoots: [],
+      fileOutput: {
+        dirs: [],
+        allowExecutable: false,
+        allowOverwrite: false,
+      },
       proactive: {
         enabled: false,
         maxPerDay: 6,
@@ -473,6 +498,12 @@ export function loadConfig(): Config {
     parsed.agent.commandTimeoutMs ?? defaults.agent!.commandTimeoutMs!;
   parsed.agent.commandAllowlist = parsed.agent.commandAllowlist ?? [];
   parsed.agent.repoSearchRoots = parsed.agent.repoSearchRoots ?? [];
+  // Absent block = the tool is unavailable, and both loosening switches stay off. A config
+  // written before this existed must never come back with the guardrails already relaxed.
+  if (!parsed.agent.fileOutput) parsed.agent.fileOutput = { ...defaults.agent!.fileOutput! };
+  parsed.agent.fileOutput.dirs = parsed.agent.fileOutput.dirs ?? [];
+  parsed.agent.fileOutput.allowExecutable = parsed.agent.fileOutput.allowExecutable ?? false;
+  parsed.agent.fileOutput.allowOverwrite = parsed.agent.fileOutput.allowOverwrite ?? false;
   if (!parsed.agent.proactive) {
     parsed.agent.proactive = defaults.agent!.proactive!;
   }
@@ -656,14 +687,75 @@ export function updateAutonomyConfig(patch: Record<string, unknown>): AutonomySt
   return readAutonomyConfig(config);
 }
 
+/** What the dashboard shows and edits for `agent.fileOutput`. */
+export interface FileOutputState {
+  dirs: string[];
+  allowExecutable: boolean;
+  allowOverwrite: boolean;
+}
+
+export function readFileOutputConfig(config?: Config): FileOutputState {
+  const c = config ?? loadConfig();
+  const f = c.agent?.fileOutput ?? {};
+  return {
+    dirs: (f.dirs ?? []).filter((d) => typeof d === "string" && d.trim() !== ""),
+    allowExecutable: f.allowExecutable === true,
+    allowOverwrite: f.allowOverwrite === true,
+  };
+}
+
 /**
- * Write tools that may NEVER be granted standing trust (Phase 38). They run `sh -c <anything>`
- * or drive Synth→Executor onto the repo, so each execution must always face a per-action human
- * click. Enforced in two places for defence in depth: `trustTool` refuses to persist these, and
- * the loop's `isTrusted` ignores them even if a hand-edited `config.json` lists them — so a
- * `trustedTools:["run_command"]` in config is inert, not a re-armed footgun.
+ * Persist the owner's `save_file` settings from the dashboard.
+ *
+ * Whitelisted field by field and written atomically, like the other `update*Config` helpers.
+ * Only the three fields are writable — a patch cannot reach any other part of config, and it
+ * cannot widen the executable list (that lives in code, `EXECUTABLE_EXT`); it only decides
+ * whether that list is enforced. `dirs` entries must be absolute: a relative output directory
+ * would resolve against whatever the daemon's cwd happens to be, which is not something the
+ * owner can reason about from a settings page.
  */
-export const NEVER_TRUSTABLE: ReadonlySet<string> = new Set(["run_command", "edit_files"]);
+export function updateFileOutputConfig(patch: Record<string, unknown>): FileOutputState {
+  const config = loadConfig();
+  if (!config.agent) config.agent = {};
+  if (!config.agent.fileOutput) config.agent.fileOutput = {};
+  const f = config.agent.fileOutput;
+
+  if (Array.isArray(patch.dirs)) {
+    f.dirs = patch.dirs
+      .filter((d): d is string => typeof d === "string")
+      .map((d) => d.trim())
+      .filter((d) => d !== "" && isAbsolutePath(d));
+  }
+  if (typeof patch.allowExecutable === "boolean") f.allowExecutable = patch.allowExecutable;
+  if (typeof patch.allowOverwrite === "boolean") f.allowOverwrite = patch.allowOverwrite;
+
+  const raw = JSON.stringify(config, null, 2) + "\n";
+  const tmp = configPath() + ".tmp";
+  writeFileSync(tmp, raw);
+  renameOverwrite(tmp, configPath());
+  return readFileOutputConfig(config);
+}
+
+/** Absolute on either platform: `/x`, `C:\x` or `C:/x`. Kept local so config.ts stays
+ *  dependency-free of node:path's platform-specific `isAbsolute`. */
+function isAbsolutePath(p: string): boolean {
+  return p.startsWith("/") || /^[a-zA-Z]:[\\/]/.test(p);
+}
+
+/**
+ * Write tools that may NEVER be granted standing trust (Phase 38). They run `sh -c <anything>`,
+ * drive Synth→Executor onto the repo, or write a real file with no git history behind it, so each
+ * execution must always face a per-action human click. Enforced in two places for defence in
+ * depth: `trustTool` refuses to persist these, and the loop's `isTrusted` ignores them even if a
+ * hand-edited `config.json` lists them — so a `trustedTools:["run_command"]` in config is inert,
+ * not a re-armed footgun. (`save_file` joins them: unlike an isolated-branch edit, a file dropped
+ * on the Desktop cannot be undone with `git branch -D`.)
+ */
+export const NEVER_TRUSTABLE: ReadonlySet<string> = new Set([
+  "run_command",
+  "edit_files",
+  "save_file",
+]);
 
 /**
  * Record that the owner trusts a write tool from now on ("ไว้ใจแล้ว" on the confirm chip).

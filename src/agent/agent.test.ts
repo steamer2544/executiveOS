@@ -2,7 +2,7 @@
 // Entirely offline: the model is a scripted mock, so no test depends on the gateway.
 
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
-import { mkdirSync, writeFileSync, rmSync, existsSync } from "node:fs";
+import { mkdirSync, writeFileSync, rmSync, existsSync, readFileSync } from "node:fs";
 import { resolve, join } from "node:path";
 import { randomUUID } from "node:crypto";
 
@@ -18,7 +18,7 @@ import {
   isToolsUnsupported,
   ContextTooHeavyError,
 } from "./protocol.js";
-import { resolveSafePath, resolveRepo, humanDuration, findTool, READ_TOOLS, WRITE_TOOLS, ALL_TOOLS } from "./tools.js";
+import { resolveSafePath, resolveRepo, humanDuration, findTool, previewWrite, nextFreePath, shellFor, resolveNewRepoPath, READ_TOOLS, WRITE_TOOLS, ALL_TOOLS } from "./tools.js";
 import { runTurn, resumeTurn, CONTEXT_LADDER } from "./loop.js";
 import { readConversation, buildTranscript, trimTranscript, readPending, AGENT_CONTRACT, clearConversation, readSessionTrust, appendMessage } from "./session.js";
 import { loadConfig, defaultConfig, trustTool, NEVER_TRUSTABLE } from "../config.js";
@@ -923,6 +923,220 @@ describe("trimTranscript", () => {
     const rungs = CONTEXT_LADDER.filter((r): r is number => r !== null);
     expect(rungs).toEqual([...rungs].sort((a, b) => b - a));
     expect(rungs[rungs.length - 1]).toBe(1);
+  });
+});
+
+// save_file is the only agent write with no git undo, so its four fences are tested
+// directly: containment, the executable-type gate, the overwrite gate, and the fact that
+// an unconfigured output directory means the tool does nothing at all.
+describe("save_file", () => {
+  const OUT = DIR + "/out";
+  const tool = findTool("save_file")!;
+
+  function ctxWith(fileOutput: Record<string, unknown>): ToolContext {
+    const config = { ...defaultConfig(), agent: { ...defaultConfig().agent, fileOutput } } as Config;
+    return { config, roots: [] };
+  }
+
+  beforeEach(() => {
+    mkdirSync(OUT, { recursive: true });
+  });
+  afterEach(() => {
+    try { rmSync(OUT, { recursive: true, force: true }); } catch {}
+  });
+
+  it("is a write tool, so it always faces a confirmation", () => {
+    expect(tool.kind).toBe("write");
+  });
+
+  it("can never be granted standing trust — a Desktop file has no `git branch -D`", () => {
+    expect(NEVER_TRUSTABLE.has("save_file")).toBe(true);
+  });
+
+  it("does nothing when no output directory is configured", async () => {
+    const r = await tool.run({ path: "a.txt", content: "hi" }, ctxWith({ dirs: [] }));
+    expect(r.ok).toBe(false);
+    expect(r.content).toContain("no output directory");
+  });
+
+  it("writes the file and reports the exact path", async () => {
+    const r = await tool.run({ path: "note.txt", content: "สวัสดี" }, ctxWith({ dirs: [OUT] }));
+    expect(r.ok).toBe(true);
+    expect(readFileSync(join(OUT, "note.txt"), "utf-8")).toBe("สวัสดี");
+    expect(r.content).toContain(join(OUT, "note.txt"));
+  });
+
+  it("refuses to escape the output directory", async () => {
+    for (const p of ["../escaped.txt", "../../escaped.txt", "a/../../escaped.txt", "//host/share/x"]) {
+      const r = await tool.run({ path: p, content: "x" }, ctxWith({ dirs: [OUT] }));
+      expect(r.ok).toBe(false);
+    }
+    expect(existsSync(resolve(OUT, "../escaped.txt"))).toBe(false);
+    expect(existsSync(resolve(OUT, "../../escaped.txt"))).toBe(false);
+  });
+
+  it("saves flat — a directory the model prefixed is dropped, never nested", async () => {
+    // Observed live TWICE: asked to save to the Desktop, the model passed
+    // "Desktop/calculator.html" and got <Desktop>\Desktop\calculator.html. Safe, but not
+    // where the owner looks. Matching the prefix against the folder name cannot fix it —
+    // the real folder is named "เดสก์ท็อป" while the model says "Desktop".
+    for (const p of ["Desktop/note.txt", "a/b/c/note.txt", "เดสก์ท็อป/note.txt"]) {
+      rmSync(join(OUT, "note.txt"), { force: true });
+      const r = await tool.run({ path: p, content: "x" }, ctxWith({ dirs: [OUT] }));
+      expect(r.ok).toBe(true);
+      expect(existsSync(join(OUT, "note.txt"))).toBe(true);
+      expect(existsSync(join(OUT, "Desktop"))).toBe(false);
+      expect(existsSync(join(OUT, "a"))).toBe(false);
+    }
+  });
+
+  it("an absolute path is flattened to its name, never honoured as a location", async () => {
+    const r = await tool.run({ path: "C:/Windows/System32/evil.txt", content: "x" }, ctxWith({ dirs: [OUT] }));
+    expect(r.ok).toBe(true);
+    expect(existsSync(join(OUT, "evil.txt"))).toBe(true);
+    expect(r.content).toContain(join(OUT, "evil.txt"));
+  });
+
+  it("refuses a secret filename even inside the output directory", async () => {
+    const r = await tool.run({ path: ".env", content: "KEY=1" }, ctxWith({ dirs: [OUT] }));
+    expect(r.ok).toBe(false);
+    expect(existsSync(join(OUT, ".env"))).toBe(false);
+  });
+
+  it("refuses a double-clickable file type by default, and writes nothing", async () => {
+    for (const p of ["run.bat", "x.exe", "go.ps1", "a.vbs", "app.js", "fix.reg"]) {
+      const r = await tool.run({ path: p, content: "x" }, ctxWith({ dirs: [OUT] }));
+      expect(r.ok).toBe(false);
+      expect(r.content).toMatch(/double-click/);
+      expect(existsSync(join(OUT, p))).toBe(false);
+    }
+  });
+
+  it("allows an executable type only once the owner turns it on", async () => {
+    const r = await tool.run(
+      { path: "run.bat", content: "echo hi" },
+      ctxWith({ dirs: [OUT], allowExecutable: true })
+    );
+    expect(r.ok).toBe(true);
+    expect(existsSync(join(OUT, "run.bat"))).toBe(true);
+  });
+
+  it("still writes ordinary formats while the executable gate is on", async () => {
+    const r = await tool.run({ path: "calc.html", content: "<html></html>" }, ctxWith({ dirs: [OUT] }));
+    expect(r.ok).toBe(true);
+  });
+
+  it("does NOT destroy an existing file by default — it saves alongside it", async () => {
+    writeFileSync(join(OUT, "note.txt"), "ของเดิม");
+    const r = await tool.run({ path: "note.txt", content: "ของใหม่" }, ctxWith({ dirs: [OUT] }));
+    expect(r.ok).toBe(true);
+    expect(readFileSync(join(OUT, "note.txt"), "utf-8")).toBe("ของเดิม"); // untouched
+    expect(readFileSync(join(OUT, "note-2.txt"), "utf-8")).toBe("ของใหม่");
+  });
+
+  it("overwrites only once the owner turns it on", async () => {
+    writeFileSync(join(OUT, "note.txt"), "ของเดิม");
+    const r = await tool.run(
+      { path: "note.txt", content: "ของใหม่" },
+      ctxWith({ dirs: [OUT], allowOverwrite: true })
+    );
+    expect(r.ok).toBe(true);
+    expect(readFileSync(join(OUT, "note.txt"), "utf-8")).toBe("ของใหม่");
+    expect(existsSync(join(OUT, "note-2.txt"))).toBe(false);
+  });
+
+  it("the confirm preview names the real path and warns before an overwrite", () => {
+    const cfg = ctxWith({ dirs: [OUT], allowOverwrite: true }).config;
+    writeFileSync(join(OUT, "note.txt"), "เดิม");
+    expect(previewWrite("save_file", { path: "note.txt", content: "x" }, cfg)).toContain("เขียนทับ");
+    expect(previewWrite("save_file", { path: "fresh.txt", content: "x" }, cfg)).toContain(
+      join(OUT, "fresh.txt")
+    );
+  });
+
+  it("the preview says up front when a file type will be refused", () => {
+    const cfg = ctxWith({ dirs: [OUT] }).config;
+    expect(previewWrite("save_file", { path: "run.bat", content: "x" }, cfg)).toContain("⛔");
+  });
+});
+
+// Three bugs found live, none of which the suite noticed: save_file crashed trying to
+// mkdir an output folder that already existed, run_command spawned a shell that does not
+// exist on Windows, and edit_files rejected any file it was asked to CREATE.
+describe("live-found regressions", () => {
+  const OUT = DIR + "/reg";
+  const tool = findTool("save_file")!;
+  function ctxWith(fileOutput: Record<string, unknown>): ToolContext {
+    const config = { ...defaultConfig(), agent: { ...defaultConfig().agent, fileOutput } } as Config;
+    return { config, roots: [] };
+  }
+  beforeEach(() => mkdirSync(OUT, { recursive: true }));
+  afterEach(() => { try { rmSync(OUT, { recursive: true, force: true }); } catch {} });
+
+  it("save_file writes into an output folder that already exists", async () => {
+    // The live failure: `mkdirSync(dir, {recursive:true})` threw EEXIST on the owner's real
+    // (OneDrive-backed) Desktop, so nothing was written — while the model claimed success.
+    const r = await tool.run({ path: "a.html", content: "<b>hi</b>" }, ctxWith({ dirs: [OUT] }));
+    expect(r.ok).toBe(true);
+    expect(readFileSync(join(OUT, "a.html"), "utf-8")).toBe("<b>hi</b>");
+  });
+
+  it("save_file reports a missing output folder instead of creating one", async () => {
+    const missing = join(DIR, "not-there");
+    const r = await tool.run({ path: "a.txt", content: "x" }, ctxWith({ dirs: [missing] }));
+    expect(r.ok).toBe(false);
+    expect(r.content).toContain("does not exist");
+    expect(existsSync(missing)).toBe(false);
+  });
+
+  it("run_command picks a shell that exists on this platform", () => {
+    const argv = shellFor("echo hi");
+    expect(argv[argv.length - 1]).toBe("echo hi");
+    expect(argv[0]).toBe(process.platform === "win32" ? "cmd.exe" : "sh");
+  });
+
+  it("run_command actually runs — the live failure was 'sh not found in $PATH'", () => {
+    const proc = Bun.spawnSync(shellFor("echo pong"), { stdout: "pipe", stderr: "pipe" });
+    expect(proc.exitCode).toBe(0);
+    expect(new TextDecoder().decode(proc.stdout)).toContain("pong");
+  });
+
+  it("resolveNewRepoPath accepts a file that does not exist yet", () => {
+    // edit_files used the READ resolver, which requires the file to be on disk, so every
+    // "create pong.html" was refused with "file not allowed or not found" (5x in one turn).
+    expect(resolveNewRepoPath("pong.html", OUT)).toBe(resolve(OUT, "pong.html"));
+    expect(resolveSafePath("pong.html", [OUT])).toBeNull(); // the old gate, for contrast
+  });
+
+  it("resolveNewRepoPath keeps subdirectories — a repo change is not flat", () => {
+    expect(resolveNewRepoPath("src/game/pong.ts", OUT)).toBe(resolve(OUT, "src/game/pong.ts"));
+  });
+
+  it("resolveNewRepoPath still contains and still refuses secrets", () => {
+    for (const p of ["../out.txt", "/etc/passwd", "C:/Windows/x", ".git/config", ".env", "a/../../x"]) {
+      expect(resolveNewRepoPath(p, OUT)).toBeNull();
+    }
+  });
+});
+
+describe("nextFreePath", () => {
+  const OUT = DIR + "/free";
+  beforeEach(() => mkdirSync(OUT, { recursive: true }));
+  afterEach(() => { try { rmSync(OUT, { recursive: true, force: true }); } catch {} });
+
+  it("returns the path unchanged when nothing is there", () => {
+    expect(nextFreePath(join(OUT, "a.txt"))).toBe(join(OUT, "a.txt"));
+  });
+
+  it("keeps the extension when it steps around a collision", () => {
+    writeFileSync(join(OUT, "a.txt"), "1");
+    writeFileSync(join(OUT, "a-2.txt"), "2");
+    expect(nextFreePath(join(OUT, "a.txt"))).toBe(join(OUT, "a-3.txt"));
+  });
+
+  it("handles a name with no extension", () => {
+    writeFileSync(join(OUT, "README"), "1");
+    expect(nextFreePath(join(OUT, "README"))).toBe(join(OUT, "README-2"));
   });
 });
 

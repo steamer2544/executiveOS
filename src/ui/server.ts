@@ -9,7 +9,7 @@ import { buildState, writeState } from "../state/builder.js";
 import { plan, writePlan } from "../planner/planner.js";
 import { buildDigest } from "../report/digest.js";
 import { append } from "../events/store.js";
-import { loadConfig, llmTimeoutMs, updateTranscribeConfig, updateScreenConfig, updateAutonomyConfig, readAutonomyConfig, TRANSCRIBE_PRESETS } from "../config.js";
+import { loadConfig, llmTimeoutMs, updateTranscribeConfig, updateScreenConfig, updateAutonomyConfig, readAutonomyConfig, updateFileOutputConfig, readFileOutputConfig, TRANSCRIBE_PRESETS } from "../config.js";
 import { modelsDir, vendorDir } from "../paths.js";
 import { readStore, pending } from "../advisor/store.js";
 import { runAdvisor, decideProposal } from "../advisor/advisor.js";
@@ -140,6 +140,9 @@ export function startUiServer(opts: UiServerOptions) {
             // Gates the dashboard can switch. autopilotApply is reported but not settable —
             // see updateAutonomyConfig for why arming repo-writing autonomy stays a file edit.
             autonomy: readAutonomyConfig(cfg),
+            // Where save_file may write, and whether the two loosening switches are on.
+            // Paths only — nothing here is a secret.
+            fileOutput: readFileOutputConfig(cfg),
           });
         } catch (err) {
           return Response.json({ error: (err as Error).message }, { status: 500 });
@@ -150,6 +153,15 @@ export function startUiServer(opts: UiServerOptions) {
         try {
           const body = (await req.json()) as Record<string, unknown>;
           return Response.json({ ok: true, autonomy: updateAutonomyConfig(body) });
+        } catch (err) {
+          return Response.json({ error: (err as Error).message }, { status: 400 });
+        }
+      }
+
+      if (req.method === "POST" && url.pathname === "/api/file-output") {
+        try {
+          const body = (await req.json()) as Record<string, unknown>;
+          return Response.json({ ok: true, fileOutput: updateFileOutputConfig(body) });
         } catch (err) {
           return Response.json({ error: (err as Error).message }, { status: 400 });
         }

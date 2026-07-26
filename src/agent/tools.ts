@@ -7,8 +7,8 @@
 // Path safety lives here too, because every filesystem-touching tool must go through
 // the same gate. See resolveSafePath().
 
-import { existsSync, readFileSync, statSync, readdirSync } from "node:fs";
-import { resolve, relative, isAbsolute, sep, join, extname } from "node:path";
+import { existsSync, readFileSync, statSync, readdirSync, writeFileSync, mkdirSync } from "node:fs";
+import { resolve, relative, isAbsolute, sep, join, extname, dirname, basename } from "node:path";
 
 import type { AgentTool, ToolContext, ToolResult } from "./types.js";
 import type { Config } from "../config.js";
@@ -87,6 +87,88 @@ export function resolveSafePath(p: string, roots: string[]): string | null {
     if (existsSync(candidate)) return candidate;
   }
   return null;
+}
+
+/**
+ * File types Windows executes on a double-click.
+ *
+ * A guardrail in code, not config — `agent.fileOutput.allowExecutable` decides whether the
+ * gate applies, but the LIST is not owner-editable, for the same reason the run_command
+ * denylist is not (Phase 38): a confused model that can drop a `.bat` on the Desktop has
+ * turned "write me a calculator" into "run arbitrary code next time you click something".
+ * `.js`/`.vbs` are here because Windows Script Host runs them directly; a `.js` meant for a
+ * project belongs in a repo (edit_files), not loose on the Desktop.
+ */
+export const EXECUTABLE_EXT = new Set([
+  "exe", "com", "scr", "msi", "msp", "cpl", "dll",
+  "bat", "cmd", "ps1", "psm1", "vbs", "vbe", "js", "jse", "wsf", "wsh",
+  "reg", "lnk", "hta", "pif", "jar", "msc",
+]);
+
+/** The file's extension, lowercased, or "" when it has none. */
+export function fileExt(name: string): string {
+  const i = name.lastIndexOf(".");
+  return i > 0 ? name.slice(i + 1).toLowerCase() : "";
+}
+
+/**
+ * Resolve a path for a file the agent is about to CREATE inside one of `dirs`.
+ *
+ * **Only a file name survives — every directory component is dropped.** The model reliably
+ * prefixes the destination it was asked for ("Desktop/calculator.html"), which produced a
+ * nested `เดสก์ท็อป\Desktop\calculator.html` twice in live testing. Matching that prefix
+ * against the folder's own name does not work either: the owner's Desktop is literally named
+ * `เดสก์ท็อป`, while the model says "Desktop" — any alias table for that is guesswork in every
+ * language. Since this tool exists to drop ONE finished file where the owner will see it, a
+ * subfolder buys nothing and costs a whole class of confusion. The resolved path is echoed in
+ * both the confirm preview and the tool result, so what actually happened is never hidden.
+ *
+ * Same rejections as `resolveSafePath` — absolute paths, drive letters, `..`, deny-listed
+ * segments, secret names — but the target is NOT required to exist, because the whole point
+ * is to write something new. Returns null when the name is not allowed.
+ */
+export function resolveOutputPath(p: string, dirs: string[]): string | null {
+  if (typeof p !== "string" || p.trim() === "") return null;
+  const raw = p.trim().replace(/\\/g, "/");
+  if (raw.startsWith("//")) return null;
+
+  const segments = raw.split("/").filter((s) => s !== "" && s !== ".");
+  if (segments.some((s) => s === "..")) return null;
+  if (segments.some((s) => DENY_SEGMENTS.has(s))) return null;
+
+  // Flatten to the file name. A drive letter or leading slash is already gone with the
+  // directory part, but re-check the name itself rather than assuming that.
+  const leaf = segments[segments.length - 1];
+  if (!leaf || !isSafeName(leaf) || /^[a-zA-Z]:/.test(leaf) || isSecretFile(leaf)) return null;
+
+  for (const dir of dirs) {
+    if (typeof dir !== "string" || dir.trim() === "") continue;
+    const root = resolve(dir);
+    const candidate = resolve(root, leaf);
+    const rel = relative(root, candidate);
+    if (rel.startsWith("..") || isAbsolute(rel)) continue;
+    return candidate;
+  }
+  return null;
+}
+
+/**
+ * A path that does not collide with an existing file: `note.txt` → `note-2.txt` → `note-3.txt`.
+ * Used when overwriting is off, so a name clash costs the owner nothing instead of destroying
+ * a file that (unlike a repo edit) has no git history to recover it from.
+ */
+export function nextFreePath(target: string): string {
+  if (!existsSync(target)) return target;
+  const dir = dirname(target);
+  const base = basename(target);
+  const dot = base.lastIndexOf(".");
+  const stem = dot > 0 ? base.slice(0, dot) : base;
+  const ext = dot > 0 ? base.slice(dot) : "";
+  for (let n = 2; n < 1000; n++) {
+    const candidate = join(dir, `${stem}-${n}${ext}`);
+    if (!existsSync(candidate)) return candidate;
+  }
+  return join(dir, `${stem}-${Date.now()}${ext}`);
 }
 
 /** A single, safe path segment: no separators, no `..`, no drive letter, not a deny name. */
@@ -673,7 +755,7 @@ const runCommand: AgentTool = {
     if (!cwd) return fail(unknownRepo(args.repo, ctx));
     const timeout = ctx.config.agent?.commandTimeoutMs ?? 60000;
     try {
-      const proc = Bun.spawnSync(["sh", "-c", cmd], {
+      const proc = Bun.spawnSync(shellFor(cmd), {
         cwd,
         stdout: "pipe",
         stderr: "pipe",
@@ -726,10 +808,17 @@ const editFiles: AgentTool = {
     if (Array.isArray(args.files) && args.files.length > 0) {
       explicitFiles = [];
       for (const f of args.files) {
-        const safe = resolveSafePath(String(f), [repoRoot]);
-        if (!safe) return fail(`file not allowed or not found: ${String(f)}`);
-        explicitFiles.push(relative(repoRoot, safe).replace(/\\/g, "/"));
+        // `resolveSafePath` requires the file to EXIST — right for reading, wrong here:
+        // "add pong.html" names a file that does not exist yet, and every such request was
+        // rejected with "file not allowed or not found" (5 times in one live turn). Use the
+        // create-path resolver for containment, then keep only the ones already on disk as
+        // context for the synthesizer; a new file needs no context.
+        const safe = resolveNewRepoPath(String(f), repoRoot);
+        if (!safe) return fail(`file not allowed: ${String(f)}`);
+        if (existsSync(safe)) explicitFiles.push(relative(repoRoot, safe).replace(/\\/g, "/"));
       }
+      // All named files are new → let the synthesizer pick its own context.
+      if (explicitFiles.length === 0) explicitFiles = undefined;
     }
 
     const { runSynth } = await import("../synth/synth.js");
@@ -761,11 +850,25 @@ const editFiles: AgentTool = {
       if (!exec.committed) {
         return fail(`could not commit: ${exec.messages?.join("; ") ?? "unknown reason"}`);
       }
+      // Spell out where the files ARE and how to get them out. The model once read
+      // "committed to branch …" and told the owner to open the file "in the project
+      // folder" — where it does not exist, because the working tree is never touched.
+      // Giving it the correct sentence to say is cheaper than hoping it infers one.
+      const written = (cs.ops ?? [])
+        .map((o: { path?: string }) => o.path)
+        .filter((p: unknown): p is string => typeof p === "string");
+      const first = written[0] ?? "<file>";
       return ok(
         `committed to branch ${exec.branch} (tests: ${
           exec.testPassed === null ? "not run" : exec.testPassed ? "passed" : "FAILED"
-        }). The owner's working branch was not touched; review with ` +
-          `\`git diff ${exec.branch}\` and delete with \`git branch -D ${exec.branch}\` if unwanted.`
+        }).\n` +
+          `Files: ${written.join(", ") || "(none listed)"}\n` +
+          `IMPORTANT — these files are ONLY on that branch. They are NOT in the working ` +
+          `tree, NOT in the project folder as it currently looks, and NOT on the Desktop. ` +
+          `Tell the owner exactly this, and give them the way out:\n` +
+          `  review:  git diff main..${exec.branch}\n` +
+          `  copy out: git show ${exec.branch}:${first} > <where they want it>\n` +
+          `  discard: git branch -D ${exec.branch}`
       );
     } catch (e) {
       return fail(`apply failed: ${(e as Error).message}`);
@@ -813,6 +916,144 @@ function decideTool(kind: "approve" | "reject"): AgentTool {
   };
 }
 
+/**
+ * Contain a repo-relative path that may not exist yet.
+ *
+ * `resolveSafePath` is the read gate and insists the target is on disk; a file the agent is
+ * being asked to CREATE has no disk presence, so it needs the same containment without the
+ * existence test. Unlike `resolveOutputPath` this keeps subdirectories — a repo change
+ * genuinely lands in `src/…`. Returns null when the path is not allowed.
+ */
+export function resolveNewRepoPath(p: string, repoRoot: string): string | null {
+  if (typeof p !== "string" || p.trim() === "") return null;
+  const raw = p.trim().replace(/\\/g, "/");
+  if (isAbsolute(raw) || /^[a-zA-Z]:/.test(raw) || raw.startsWith("//")) return null;
+
+  const segments = raw.split("/").filter((s) => s !== "" && s !== ".");
+  if (segments.length === 0) return null;
+  if (segments.some((s) => s === "..")) return null;
+  if (segments.some((s) => DENY_SEGMENTS.has(s))) return null;
+  const leaf = segments[segments.length - 1]!;
+  if (!isSafeName(leaf) || isSecretFile(leaf)) return null;
+
+  const root = resolve(repoRoot);
+  const candidate = resolve(root, segments.join(sep));
+  const rel = relative(root, candidate);
+  if (rel.startsWith("..") || isAbsolute(rel)) return null;
+  return candidate;
+}
+
+/**
+ * The argv that runs `cmd` through a shell that actually exists here.
+ *
+ * `sh -c` was hardcoded, so on Windows every `run_command` died with
+ * `Executable not found in $PATH: "sh"` — and only when the daemon was started from
+ * PowerShell. Launched from Git Bash `sh` IS on PATH, which is why it worked in testing
+ * and failed for the owner: the same code, the same machine, a different parent shell.
+ * `cmd.exe` is always present on Windows, so prefer it there and keep `sh` elsewhere.
+ */
+export function shellFor(cmd: string): string[] {
+  return process.platform === "win32" ? ["cmd.exe", "/d", "/s", "/c", cmd] : ["sh", "-c", cmd];
+}
+
+/** The configured output directories, cleaned. Empty = `save_file` is unavailable. */
+export function outputDirs(config: Config): string[] {
+  return (config.agent?.fileOutput?.dirs ?? []).filter(
+    (d) => typeof d === "string" && d.trim() !== ""
+  );
+}
+
+/**
+ * Write a file somewhere the owner can actually see it — the Desktop, a scratch folder.
+ *
+ * The one agent write with **no git safety net**: `edit_files` lands on an isolated branch
+ * that `git branch -D` erases, but this is a real file on a real disk. So it is fenced on
+ * four sides, and three of the four are not owner-configurable:
+ *   • it can only write inside `agent.fileOutput.dirs` (empty ⇒ the tool refuses outright);
+ *   • the path is contained — no `..`, no absolute path, no `.git`/`.executive`, no secrets;
+ *   • executable file types are refused unless the owner turned that on;
+ *   • an existing file is renamed-around unless the owner turned overwriting on.
+ * It is a `write` tool, so it is confirmed every time, and NEVER_TRUSTABLE, so "trust this
+ * forever" can never apply to it.
+ */
+const saveFile: AgentTool = {
+  name: "save_file",
+  description:
+    "Save a file where the owner can open it (e.g. their Desktop) — use for a standalone " +
+    "deliverable like an HTML page, a note or a CSV. NOT for changing a project's code: " +
+    "that is edit_files. Fails if no output directory is configured.",
+  kind: "write",
+  inputSchema: {
+    type: "object",
+    properties: {
+      path: {
+        type: "string",
+        description:
+          "Just the file name, e.g. 'calculator.html'. It is saved into the owner's " +
+          "configured output folder — do NOT include that folder in the path, and never " +
+          "use an absolute path.",
+      },
+      content: { type: "string", description: "The complete file contents" },
+    },
+    required: ["path", "content"],
+  },
+  async run(args, ctx) {
+    const dirs = outputDirs(ctx.config);
+    if (dirs.length === 0) {
+      return fail(
+        "no output directory is configured — the owner must add one under Settings → " +
+          "File output (agent.fileOutput.dirs) before I can save files outside a repo"
+      );
+    }
+
+    const rel = String(args.path ?? "").trim();
+    const content = typeof args.content === "string" ? args.content : "";
+    if (!rel) return fail("path is required");
+
+    const target = resolveOutputPath(rel, dirs);
+    if (!target) return fail(`path not allowed: ${rel}`);
+
+    const ext = fileExt(basename(target));
+    if (EXECUTABLE_EXT.has(ext) && ctx.config.agent?.fileOutput?.allowExecutable !== true) {
+      return fail(
+        `refusing to write a .${ext} file — Windows runs that type on a double-click. ` +
+          "Ask for a non-executable format (.html/.txt/.md/.csv), or have the owner turn on " +
+          "Settings → File output → allow executable files."
+      );
+    }
+
+    const overwrite = ctx.config.agent?.fileOutput?.allowOverwrite === true;
+    const existed = existsSync(target);
+    const finalPath = overwrite ? target : nextFreePath(target);
+
+    try {
+      // Do NOT mkdir the output folder. It is configured by the owner and already exists,
+      // and creating it is not this tool's job — while `mkdirSync(recursive:true)` threw
+      // `EEXIST … mkdir 'C:\…\เดสก์ท็อป'` on the owner's real Desktop (a OneDrive-backed
+      // folder, where the recursive path walk mis-handles the reparse point). The file
+      // never got written and the model reported success anyway.
+      const dir = dirname(finalPath);
+      if (!existsSync(dir)) {
+        return fail(`output folder does not exist: ${dir}`);
+      }
+      writeFileSync(finalPath, content, "utf-8");
+    } catch (e) {
+      return fail(`could not write ${finalPath}: ${(e as Error).message}`);
+    }
+
+    const note =
+      existed && !overwrite
+        ? ` (a file of that name already existed and was left alone — saved alongside it)`
+        : existed
+          ? ` (replaced the existing file)`
+          : "";
+    return ok(
+      `saved ${content.length} characters to:\n${finalPath}${note}\n` +
+        "Tell the owner this exact path."
+    );
+  },
+};
+
 // ─── Registry ─────────────────────────────────────────────────────────────────
 
 export const READ_TOOLS: AgentTool[] = [
@@ -831,6 +1072,7 @@ export const READ_TOOLS: AgentTool[] = [
 export const WRITE_TOOLS: AgentTool[] = [
   emitEvent,
   editFiles,
+  saveFile,
   runCommand,
   decideTool("approve"),
   decideTool("reject"),
@@ -864,6 +1106,26 @@ export function previewWrite(
     }
     case "edit_files":
       return `แก้โค้ด: ${String(args.instruction)} — จะ commit ลง branch แยก ไม่แตะ branch ที่ทำงานอยู่`;
+    case "save_file": {
+      // The owner is approving a real file on a real disk — show the resolved path, and
+      // say up front when it will be refused or when their existing file is at stake.
+      const rel = String(args.path ?? "");
+      const dirs = outputDirs(config ?? ({} as Config));
+      if (dirs.length === 0) return `⛔ บันทึกไฟล์ ${rel} — ยังไม่ได้ตั้งโฟลเดอร์ปลายทาง`;
+      const target = resolveOutputPath(rel, dirs);
+      if (!target) return `⛔ บันทึกไฟล์ ${rel} — path ไม่ผ่านการตรวจ`;
+      const ext = fileExt(basename(target));
+      if (EXECUTABLE_EXT.has(ext) && config?.agent?.fileOutput?.allowExecutable !== true) {
+        return `⛔ บันทึก ${target} — .${ext} เป็นไฟล์ที่ดับเบิลคลิกแล้วรัน (ปิดอยู่)`;
+      }
+      const size = typeof args.content === "string" ? args.content.length : 0;
+      if (existsSync(target)) {
+        return config?.agent?.fileOutput?.allowOverwrite === true
+          ? `⚠️ เขียนทับไฟล์เดิม: ${target} (${size} ตัวอักษร)`
+          : `บันทึก ${size} ตัวอักษร — มีไฟล์ชื่อนี้อยู่แล้ว จะเซฟเป็น ${nextFreePath(target)} แทน`;
+      }
+      return `บันทึกไฟล์ ${size} ตัวอักษร → ${target}`;
+    }
     case "approve_proposal":
       return `อนุมัติข้อเสนอ ${String(args.id)}`;
     case "dismiss_proposal":
