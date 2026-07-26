@@ -8,11 +8,41 @@
 > agent (think-loop fix + retry resilience + message chunking + button feedback + session trust), **Phase 39
 > + 39.1** (state decay/TTL; deadline decay as an opt-in dashboard toggle), **Phase 38** (sandbox
 > `run_command`), and **Phase 36 LIVE** (Discord). **771 passing tests** + two opt-in browser e2e, all green.
-> **4 commits sit on `main` UNPUSHED** — `origin/main` is still at `46a75a1`. The agent is
+> Everything through Phase 41 is **pushed** (`origin/main` = `main`). The agent is
 > **live-confirmed working** end-to-end over Discord. **If a running bot misbehaves after a pull, RESTART
 > it — code isn't hot-reloaded.**
 >
-> **🔴 READ FIRST — the owner's `.executive/config.json` was DESTROYED during this session and rebuilt from
+> **▶️ LATEST SESSION (Phase 41, 5 commits `090d42d`→`e37ead0`, all PUSHED): "make me a file" now works.**
+> The agent writes complete, playable HTML games into a folder the owner names. Read the Phase 41 entry
+> in `CLAUDE.md` for the full account; the load-bearing facts:
+> - **The gateway kills every request at ~125 s and Qwen runs at 33–48 tok/s ⇒ ~4,000 output tokens is a
+>   PHYSICAL ceiling.** Raising `max_tokens` past that is a no-op — the response cannot come back.
+>   Streaming does not help (only two SSE chunks arrive, then the socket idles through the think).
+>   The old `BUDGET_LADDER` (16384/32768) was asking for impossibilities and is gone.
+> - **A spiral is near-deterministic per context, not a per-roll dice throw** (0/7, 0/3, 0/3 on the same
+>   transcripts; 3/3 and 4/4 on short ones). The fix is `CONTEXT_LADDER = [null,3,1]` — shrink the
+>   history, never the ceiling.
+> - **A large file cannot be generated in one call** (a Tetris page is still truncated at 6144 tokens).
+>   `save_file` has `append`; `maxToolRounds` is 20 because writing needs rounds that looking-up does not.
+> - **`run_command` had never worked for the owner** — `sh -c` does not exist on Windows, and it only
+>   "passed" in testing because that ran from Git Bash. It now uses a temp `.bat` (Bun escapes inner
+>   quotes on Windows, so `cmd /c` silently answered about the wrong path).
+> - **New `save_file` tool**: `dir` argument, per-folder approval button (📁, remembered in
+>   `agent.fileOutput.dirs`), a 🌿 branch option when the destination is inside a git repo, and four
+>   guardrails (confined dirs / no executables / no overwrite / NEVER_TRUSTABLE).
+> - **Still owner-verified only for pong.** Tetris was validated by the architect in a real Chromium but
+>   the owner had not re-tried it in Discord as of this writing. **The running bot must be RESTARTED** —
+>   all of this is source, and only `config.json` is hot-reloaded.
+> - **Known model-quality limits (not bugs to chase):** tool selection is not deterministic (one run
+>   reached for `run_command` instead of `save_file`; one claimed success with `tools: (none)`), and a
+>   hard prompt can take 100–340 s.
+> - **Incident worth remembering:** an auto-approving *test harness* (the architect's, not the product)
+>   let the agent run `git stash` + commit and sweep ~2 h of uncommitted work; recovered with
+>   `git stash pop`. The Phase-38 denylist behaved correctly — `git reset --hard` was refused; `git stash`
+>   is deliberately "ask", and the harness answered for the human. **Never auto-approve confirms in a
+>   live-test harness**, and check `git stash list` before assuming work is lost.
+>
+> **🔴 READ FIRST — the owner's `.executive/config.json` was DESTROYED during an earlier session and rebuilt from
 > evidence.** Something running inside the repo wrote a **4-key test fixture** over the real config, wiping
 > every setting (Discord `ownerId`, `agent.repoSearchRoots`, screen-OCR engine, autonomy toggles). It was
 > not the committed test suite — a canary run of the full suite left the file byte-identical — and the most
@@ -58,10 +88,9 @@
 > that touched config/fixtures: `git grep -nE "MTUz|sk-|xox[baprs]-|-----BEGIN|Bearer [A-Za-z0-9._-]{20}"
 > $(git rev-list --all)` (expect only the two `agent.test.ts` fixtures).
 >
-> **▶️ NEXT UP — the planned roadmap is EMPTY.** Phase 40 was the last item promised since Phase 1. The
-> only outstanding *chore* is the **push**: 4 commits (`066bb44` Job 1, `e4e158a` Job 2, `4af108e` the
-> `execRoot` guardrail, `976569a` the budget ladder) are on `main` and `origin/main` is still at `46a75a1`.
-> Secret-scan before pushing (command above) — none of these touched fixtures or config, but the rule stands.
+> **▶️ NEXT UP — the planned roadmap is EMPTY** (Phase 40 was the last promised item; Phase 41 came from
+> live failures, not a list). Nothing is pending. The open measurement is still **`nudges.jsonl`**
+> (sent vs answered) after Phase 36 has run a couple of weeks — that gates the `rules+llm` nudge dial.
 >
 > **✅ Phase 40 shipped AND the runtime is now RUNNING ON SQLITE** (this is a change from what the previous
 > handoff said — the flip happened at the end of the session). `bun:sqlite`, no new dependency, one

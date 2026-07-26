@@ -1295,6 +1295,71 @@ docs/scopes/           # per-phase specs (the contract handed to the implementer
   short conversation never reached the single-turn rescue; fixed + regression-tested. **The owner's bot
   must be RESTARTED** — this lives in source, only `config.json` is hot-reloaded. Files:
   `src/agent/{protocol,loop,session,types}.ts` (+ tests), `GOTCHA.md` §1.
+- **Phase 41 — DONE** (architect, this session, 5 commits `090d42d`→`e37ead0`): **"make me a
+  file" actually works.** Started from a live Discord failure ("สวัสดี" → *"gateway ตอบช้าเกินไป"*
+  3/3) and ended with the agent writing a complete, playable Tetris page into a folder the owner
+  named. Everything below was found by running the real thing, not by reading code; every fix is
+  sabotage-checked. **857 tests.**
+  **(1) Context ladder — the gateway's wall clock.** Cloudflare kills every request at **~125 s**
+  (measured 6×: 125.0–128.2) and Qwen generates at **33–48 tok/s**, so **~4,000 output tokens is
+  the physical ceiling**. The base budget was 8192 and `BUDGET_LADDER` escalated retries to
+  16384/32768 — *responses that can never come back*. **Streaming does not escape it:** with
+  `stream:true` exactly two SSE chunks arrive and the socket is then idle for the whole think.
+  The previous session's "4/4 at 32768" was a misread (those rolls simply didn't spiral). Second
+  correction: the spiral is **near-deterministic per context** (0/7 full, 0/3 at 40 items, 0/3 at
+  20) while a short context answered 3/3 and 4/4 — so the ceiling ladder was **inverted into a
+  context ladder**: `WALL_SAFE_MAX_TOKENS=3072` + `WALL_SAFE_TIMEOUT_MS=115_000` clamp what is
+  asked for, an exhausted budget raises a typed `ContextTooHeavyError`, and `CONTEXT_LADDER =
+  [null,3,1]` retries with less history via a pure `trimTranscript()` (cuts only at a `kind:"user"`
+  item, so a `tool_result` can never be orphaned). A degraded turn **says so**. *A live run caught
+  a bug in this very fix:* a redundant rung `break`ing the ladder meant a short chat never reached
+  the single-turn rescue.
+  **(2) `save_file` + three write-path bugs.** New tool (owner asked for it) with four fences:
+  confined to `agent.fileOutput.dirs`, no double-click-executable types, no overwrite (saves
+  `name-2.ext`), and `NEVER_TRUSTABLE`. Two dashboard toggles, both default off; the extension
+  LIST stays in code. Then three real bugs, **none of which the suite covered** (it passed before
+  and after): `mkdirSync(recursive:true)` threw `EEXIST` on the owner's OneDrive-backed Desktop so
+  nothing was written while the model claimed success; `run_command` hardcoded `sh -c`, which does
+  not exist on Windows — it "worked" in testing only because that ran from Git Bash while the
+  owner's daemon starts from PowerShell; and `edit_files` validated with the READ resolver, which
+  requires the file to exist, so every *create* was refused ("not allowed or not found", 5× in one
+  turn).
+  **(3) Honest failures.** A dead gateway and a slow one produced the identical "ตอบช้าเกินไป …
+  ลองใหม่" message, so the owner retried 3× over 12 minutes into a gateway returning 502 to a
+  one-word prompt. `gatewayReachable()` probes with a trivial request **after** a failure and
+  `chatErrorMessageChecked()` says "ไม่ตอบเลย … ลองใหม่ก็ไม่ช่วย". Also `matchChatCommand()`:
+  "ล้างแชท" is handled **without the LLM**, because the usual reason to clear a conversation is
+  that the gateway is unreachable. Whole-message match only.
+  **(4) Destination + per-folder approval.** `save_file` takes `dir`; a folder that is not yet
+  approved gets a **📁 อนุญาตโฟลเดอร์นี้ถาวร** button (runs it AND remembers the folder), and a
+  destination inside a git repo also gets **🌿 ลง branch แยก** — which writes the *exact bytes*
+  through the Phase-6 Executor, deliberately NOT via `edit_files` (that would regenerate the file
+  through the Synthesizer, so the owner would review something other than what they approved).
+  `PendingChoice`/`CONFIRM_DECISIONS` carry them through both front doors. **`run_command` needed a
+  second fix:** Bun escapes inner double quotes on Windows, so `if exist "C:\…\project"` reported
+  MISSING for a folder `Test-Path` confirms exists — most commands quote a path, so it was silently
+  answering about the wrong thing. Now routed through a temp `.bat` (no quoting layer), the trick
+  `src/screen/*.ts` already uses.
+  **(5) Large files must arrive in parts.** Probed directly: a Tetris page is **still truncated at
+  6144 output tokens (68 s)**, so one-shot generation is not viable here. `save_file` gains
+  `append`; an overflowing tool call (which arrives as `input: {}` and used to be run as a real
+  empty call — the "path is required ×5" the owner saw) now raises `TruncatedToolCallError`, and
+  the loop **feeds it back as a failed tool result** telling the model to chunk. `parseXmlToolCall`
+  reads the `<tool_call><function=…>` template Qwen hand-writes when it gives up on `tool_use`
+  (the owner received 9 KB of it as prose). `maxToolRounds` 8 → **20**: 8 is enough for lookups,
+  not for writing. Two result guards, because chunking invents new ways to be wrong:
+  `incompleteHtmlReason()` reports an unfinished file ("a `<script>` tag is still open" — the model
+  announced success with it open) **and** a lost/out-of-order chunk, after an assembled file began
+  with `</body>` with every closing tag balanced while the page had no `<canvas>`.
+  **Live end state:** pong.html and tetris-ai.html both land in the owner's own folder, parse, and
+  render playable games in a real Chromium. **Known model-quality limits (not code):** tool
+  selection is not deterministic (one run used `run_command` instead of `save_file`, one
+  hallucinated success with `tools: (none)`), and a hard prompt can take 100–340 s.
+  **Incident:** an auto-approving *test harness of mine* let the agent run `git stash` + commit,
+  sweeping ~2 h of uncommitted work; fully recovered via `git stash pop`. The denylist worked
+  correctly (`git reset --hard` was refused) — `git stash` is "ask", by design, and my harness
+  answered for the owner. Files: `src/agent/{protocol,loop,session,tools,types}.ts`,
+  `src/{config,index}.ts`, `src/channel/{discord,types}.ts`, `src/ui/{page,server}.ts` (+ tests).
 - **Loop complete (manual trigger):** `auto --apply` runs the whole chain in one command; the human
   reviews/merges the `executive/change-<id>` branch.
 
