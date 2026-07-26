@@ -30,9 +30,9 @@
 > - **New `save_file` tool**: `dir` argument, per-folder approval button (📁, remembered in
 >   `agent.fileOutput.dirs`), a 🌿 branch option when the destination is inside a git repo, and four
 >   guardrails (confined dirs / no executables / no overwrite / NEVER_TRUSTABLE).
-> - **Still owner-verified only for pong.** Tetris was validated by the architect in a real Chromium but
->   the owner had not re-tried it in Discord as of this writing. **The running bot must be RESTARTED** —
->   all of this is source, and only `config.json` is hot-reloaded.
+> - **Owner-verified live for BOTH pong and tetris** (tetris confirmed by the owner over Discord after
+>   restarting the bot — "มันทำได้ดีเลยว่ะ"). **A running bot must be RESTARTED after any pull** — all of
+>   this is source, and only `config.json` is hot-reloaded.
 > - **Known model-quality limits (not bugs to chase):** tool selection is not deterministic (one run
 >   reached for `run_command` instead of `save_file`; one claimed success with `tools: (none)`), and a
 >   hard prompt can take 100–340 s.
