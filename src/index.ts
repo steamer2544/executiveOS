@@ -35,7 +35,8 @@ import { runInference, writeInference } from "./infer/infer.js";
 import { inferredPath } from "./paths.js";
 import { runAdvisor, decideProposal } from "./advisor/advisor.js";
 import { runTurn, resumeTurn } from "./agent/loop.js";
-import { chatErrorMessage } from "./agent/protocol.js";
+import { chatErrorMessage, chatErrorMessageChecked } from "./agent/protocol.js";
+import { matchChatCommand, clearConversation } from "./agent/session.js";
 import type { Config } from "./config.js";
 import type { Channel, InboundMessage } from "./channel/types.js";
 import { createDiscordChannel } from "./channel/discord.js";
@@ -176,6 +177,14 @@ function makeInboundHandler(
     try {
       let turn;
       if (m.kind === "text") {
+        // Commands the runtime answers itself — no gateway round-trip. This one exists
+        // BECAUSE the gateway can be down: "ล้างแชท" is how the owner recovers a bad
+        // conversation, and routing it through the model made it time out with everything else.
+        if (matchChatCommand(m.text) === "clear") {
+          clearConversation();
+          await channel.send({ text: "ล้างแชทแล้วครับ — เริ่มใหม่ได้เลย" });
+          return;
+        }
         // Answering counts as answering the open nudge — that pairing is the whole
         // point of the log: after two weeks, sent-vs-answered says whether the rules
         // picked good moments.
@@ -192,7 +201,7 @@ function makeInboundHandler(
           : undefined,
       });
     } catch (err) {
-      await channel.send({ text: chatErrorMessage(err) });
+      await channel.send({ text: await chatErrorMessageChecked(err, cfg) });
     }
   };
 }

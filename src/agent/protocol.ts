@@ -336,6 +336,68 @@ function sleep(ms: number): Promise<void> {
  * a timeout — the gateway is sometimes slow, so just resend — from a real request error.
  * The retry above already ran, so a timeout here means BOTH attempts exceeded the deadline.
  */
+/**
+ * Is the gateway answering at all?
+ *
+ * One deliberately trivial request — 1 token, no tools, no history — so the only thing it
+ * can measure is reachability. Used ONLY after a turn has already failed, to tell "this
+ * question was too slow" apart from "the box is down". Those two produced the identical
+ * "ตอบช้าเกินไป … ลองพิมพ์มาใหม่" message, and the owner burned 12 minutes retrying into a
+ * gateway that was returning 502 to a one-word prompt.
+ *
+ * Never throws; a failure to probe IS the answer. The short deadline is the point — a
+ * healthy gateway answers this in ~1-2 s, so the diagnosis costs nothing worth measuring.
+ */
+export async function gatewayReachable(
+  opts: { baseUrl: string; apiKey: string; model: string },
+  timeoutMs = 20_000
+): Promise<boolean> {
+  try {
+    const res = await fetch(opts.baseUrl.replace(/\/+$/, "") + "/v1/messages", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "anthropic-version": "2023-06-01",
+        ...(opts.apiKey ? { Authorization: "Bearer " + opts.apiKey } : {}),
+      },
+      body: JSON.stringify({
+        model: opts.model,
+        max_tokens: 1,
+        messages: [{ role: "user", content: "." }],
+      }),
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    // Any HTTP answer other than a server error means the gateway itself is alive — a 4xx
+    // is a problem with the REQUEST, which is not what this is asking about.
+    return res.status < 500;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * `chatErrorMessage`, plus a reachability check when the failure looked like slowness.
+ *
+ * Only probes for the transient/timeout case: every other branch already names its own
+ * cause, and re-probing them would just add latency to an answer we already have.
+ */
+export async function chatErrorMessageChecked(e: unknown, config: Config): Promise<string> {
+  const base = chatErrorMessage(e);
+  if (!isTransientNetworkError(e)) return base;
+
+  const w = config.worker ?? {};
+  const alive = await gatewayReachable({
+    baseUrl: w.baseUrl ?? "",
+    apiKey: process.env[w.apiKeyEnv ?? "EXECUTIVE_WORKER_KEY"] ?? "",
+    model: w.model ?? "qwen3.6-35b-a3b",
+  });
+  if (alive) return base;
+  return (
+    "gateway ไม่ตอบเลยครับ — เช็คแล้วแม้แต่คำขอเล็กสุดก็ไม่ผ่าน " +
+    "(เครื่อง inference ของ Arm น่าจะดับอยู่) ตอนนี้ลองใหม่ก็ไม่ช่วย รอให้มันกลับมาก่อนนะครับ"
+  );
+}
+
 export function chatErrorMessage(e: unknown): string {
   const err = e as { name?: string; message?: string };
   const msg = String(err?.message ?? "");

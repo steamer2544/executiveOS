@@ -20,7 +20,7 @@ import {
 } from "./protocol.js";
 import { resolveSafePath, resolveRepo, humanDuration, findTool, previewWrite, nextFreePath, shellFor, resolveNewRepoPath, READ_TOOLS, WRITE_TOOLS, ALL_TOOLS } from "./tools.js";
 import { runTurn, resumeTurn, CONTEXT_LADDER } from "./loop.js";
-import { readConversation, buildTranscript, trimTranscript, readPending, AGENT_CONTRACT, clearConversation, readSessionTrust, appendMessage } from "./session.js";
+import { readConversation, buildTranscript, trimTranscript, readPending, AGENT_CONTRACT, clearConversation, readSessionTrust, appendMessage, matchChatCommand } from "./session.js";
 import { loadConfig, defaultConfig, trustTool, NEVER_TRUSTABLE } from "../config.js";
 import { configPath } from "../paths.js";
 
@@ -1161,5 +1161,37 @@ describe("config", () => {
     expect(c.agent!.enabled).toBe(false);
     expect(c.agent!.trustedTools).toEqual([]);
     expect(c.agent!.maxToolRounds).toBe(8);
+  });
+});
+
+// The owner's escape hatch when a conversation has gone bad. It must NOT need the model:
+// the usual reason a conversation has gone bad is that the gateway is unreachable, and
+// "ล้างแชทก่อนครับ" typed into Discord timed out along with everything else.
+describe("matchChatCommand", () => {
+  it("recognises the clear command in both languages, with or without a slash", () => {
+    for (const s of ["clear", "/clear", "Clear", "reset chat", "new chat",
+                     "ล้างแชท", "/ล้างแชท", "เคลียร์แชท", "ลบประวัติ", "เริ่มใหม่"]) {
+      expect(matchChatCommand(s)).toBe("clear");
+    }
+  });
+
+  it("sees through trailing politeness — the form the owner actually typed", () => {
+    for (const s of ["ล้างแชทก่อนครับ", "ล้างแชทหน่อยครับ", "ล้างแชทเลย", "clear please"]) {
+      expect(matchChatCommand(s)).toBe("clear");
+    }
+  });
+
+  it("never fires from inside a sentence — that would be worse than no command", () => {
+    for (const s of [
+      "อย่าเพิ่งล้างแชทนะ",
+      "ล้างแชทยังไง",
+      "ช่วยอธิบายว่าปุ่มล้างแชททำอะไร",
+      "how do I clear the chat?",
+      "เขียนเกม pong",
+      "",
+      "   ",
+    ]) {
+      expect(matchChatCommand(s)).toBeNull();
+    }
   });
 });

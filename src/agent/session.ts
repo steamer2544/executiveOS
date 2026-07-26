@@ -98,6 +98,46 @@ export function clearConversation(): string | null {
   return archived;
 }
 
+// ─── Chat commands (handled WITHOUT the LLM) ──────────────────────────────────
+
+/** Trailing politeness/softeners that change nothing about the request. */
+const TRAILING = /(ครับ|คร้าบ|ค่ะ|คะ|นะ|น่ะ|ก่อน|หน่อย|ด้วย|ที|เลย|please|pls)+$/;
+
+const CLEAR_PHRASES = new Set([
+  "clear", "clearchat", "clearhistory", "reset", "resetchat", "newchat",
+  "ล้างแชท", "ล้างchat", "ล้างประวัติ", "ล้างแชต", "ล้าง",
+  "เคลียร์แชท", "เคลียร์", "ลบแชท", "ลบประวัติ", "เริ่มใหม่",
+]);
+
+export type ChatCommand = "clear" | null;
+
+/**
+ * Recognise a command the runtime can carry out itself.
+ *
+ * Two reasons this must not go through the model. It is the owner's escape hatch when a
+ * conversation has gone bad — and the most likely reason it has gone bad is that the
+ * gateway is unreachable, which is exactly when an LLM round-trip cannot answer. (Observed:
+ * the owner typed "ล้างแชทก่อนครับ" and got a 4-minute timeout, because every Discord
+ * message went straight to `runTurn` and the dashboard held the only clear button.)
+ *
+ * Matched on the WHOLE message, never a substring: "ล้างแชท" clears, "อย่าเพิ่งล้างแชท"
+ * does not. A command that fires inside an ordinary sentence would be worse than no
+ * command at all.
+ */
+export function matchChatCommand(text: string): ChatCommand {
+  let t = (text ?? "").trim().toLowerCase();
+  if (t.startsWith("/")) t = t.slice(1).trim();
+  t = t.replace(/[\s​.!?。ๆฯ]+/g, "");
+  // Strip softeners repeatedly: "ล้างแชทก่อนครับ" → "ล้างแชทก่อน" → "ล้างแชท".
+  for (let i = 0; i < 4; i++) {
+    const next = t.replace(TRAILING, "");
+    if (next === t) break;
+    t = next;
+  }
+  if (t === "") return null;
+  return CLEAR_PHRASES.has(t) ? "clear" : null;
+}
+
 // ─── Session trust (Phase: Discord UX) ─────────────────────────────────────────
 //
 // The owner can tap "ไว้ใจทั้งแชทนี้" to stop being asked about a tool for the REST of the

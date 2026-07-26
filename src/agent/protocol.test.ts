@@ -13,6 +13,8 @@ import {
   WALL_SAFE_MAX_TOKENS,
   GATEWAY_WALL_MS,
   effectiveTimeoutMs,
+  gatewayReachable,
+  chatErrorMessageChecked,
 } from "./protocol.js";
 import type { TranscriptItem } from "./types.js";
 
@@ -264,5 +266,62 @@ describe("AnthropicChatBackend.step — retry once on a transient failure", () =
       /aborted/,
     );
     expect(calls).toBe(2);
+  });
+});
+
+// A dead gateway and a slow question produced the IDENTICAL "ตอบช้าเกินไป … ลองใหม่"
+// message, so the owner retried three times over 12 minutes into a gateway that was
+// answering 502 to a one-word prompt. Phase 29.2's rule, in the chat path this time.
+describe("gatewayReachable / chatErrorMessageChecked", () => {
+  const CFG = { worker: { baseUrl: "https://gw.test", model: "m", apiKeyEnv: "NOPE" } } as never;
+  const timeout = () => {
+    const e = new Error("The operation was aborted.");
+    (e as { name: string }).name = "AbortError";
+    return e;
+  };
+
+  it("treats a 5xx as unreachable and a 4xx as reachable (the request is the problem, not the box)", async () => {
+    globalThis.fetch = (async () => errResponse(502, "bad gateway")) as unknown as typeof fetch;
+    expect(await gatewayReachable({ baseUrl: "https://gw.test", apiKey: "", model: "m" })).toBe(false);
+    globalThis.fetch = (async () => errResponse(401, "unauthorized")) as unknown as typeof fetch;
+    expect(await gatewayReachable({ baseUrl: "https://gw.test", apiKey: "", model: "m" })).toBe(true);
+  });
+
+  it("never throws — a failed probe IS the answer", async () => {
+    globalThis.fetch = (async () => { throw new Error("fetch failed"); }) as unknown as typeof fetch;
+    expect(await gatewayReachable({ baseUrl: "https://gw.test", apiKey: "", model: "m" })).toBe(false);
+  });
+
+  it("probes with a trivial request — no tools, no history, 1 token", async () => {
+    let seen: Record<string, unknown> = {};
+    globalThis.fetch = (async (_u: string, init: { body: string }) => {
+      seen = JSON.parse(init.body);
+      return okResponse("ok");
+    }) as unknown as typeof fetch;
+    await gatewayReachable({ baseUrl: "https://gw.test", apiKey: "", model: "m" });
+    expect(seen.max_tokens).toBe(1);
+    expect(seen.tools).toBeUndefined();
+    expect((seen.messages as unknown[]).length).toBe(1);
+  });
+
+  it("says the gateway is DOWN when the probe also fails — and stops inviting a retry", async () => {
+    globalThis.fetch = (async () => errResponse(502, "bad gateway")) as unknown as typeof fetch;
+    const msg = await chatErrorMessageChecked(timeout(), CFG);
+    expect(msg).toContain("ไม่ตอบเลย");
+    expect(msg).not.toContain("ลองพิมพ์มาใหม่อีกทีได้เลย");
+  });
+
+  it("keeps the ordinary slow-gateway message when the probe succeeds", async () => {
+    globalThis.fetch = (async () => okResponse("alive")) as unknown as typeof fetch;
+    const msg = await chatErrorMessageChecked(timeout(), CFG);
+    expect(msg).toContain("ตอบช้าเกินไป");
+  });
+
+  it("does not probe for a failure that already names its own cause", async () => {
+    let calls = 0;
+    globalThis.fetch = (async () => { calls++; return okResponse("x"); }) as unknown as typeof fetch;
+    const msg = await chatErrorMessageChecked(new Error("agent HTTP 400: bad tools"), CFG);
+    expect(msg).toContain("gateway ปฏิเสธ");
+    expect(calls).toBe(0);
   });
 });
