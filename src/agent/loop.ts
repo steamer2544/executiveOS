@@ -16,11 +16,19 @@ import type {
   ChatBackend,
   ConfirmDecision,
   PendingWrite,
+  PendingChoice,
   ToolContext,
 } from "./types.js";
 import type { Config } from "../config.js";
 
-import { ALL_TOOLS, agentRoots, findTool, previewWrite } from "./tools.js";
+import {
+  ALL_TOOLS,
+  agentRoots,
+  findTool,
+  previewWrite,
+  describeSaveTarget,
+  saveFileOnBranch,
+} from "./tools.js";
 import {
   createChatBackend,
   isToolsUnsupported,
@@ -39,7 +47,14 @@ import {
   addSessionTrust,
   trimTranscript,
 } from "./session.js";
-import { llmMaxTokens, llmTimeoutMs, trustTool, NEVER_TRUSTABLE } from "../config.js";
+import {
+  llmMaxTokens,
+  llmTimeoutMs,
+  trustTool,
+  loadConfig,
+  addFileOutputDir,
+  NEVER_TRUSTABLE,
+} from "../config.js";
 
 const DEFAULT_MAX_ROUNDS = 8;
 const DEFAULT_HISTORY_TURNS = 20;
@@ -62,6 +77,27 @@ function toolsFor(opts: TurnOptions): AgentTool[] {
 
 function ctxFor(config: Config): ToolContext {
   return { config, roots: agentRoots(config) };
+}
+
+/**
+ * Which situation-specific buttons this write deserves.
+ *
+ * Kept next to the pending it decorates rather than inside the tool, because it is a
+ * question about the CONFIRM UI, not about the write: the tool itself only ever runs
+ * against an already-approved folder.
+ */
+function extraChoicesFor(
+  name: string,
+  args: Record<string, unknown>,
+  config: Config
+): PendingChoice[] {
+  if (name !== "save_file") return [];
+  const t = describeSaveTarget(args, config);
+  if (!t.path || !t.dir) return [];
+  const out: PendingChoice[] = [];
+  if (!t.approved) out.push("allow_dir");
+  if (t.repoRoot) out.push("branch");
+  return out;
 }
 
 function isTrusted(name: string, config: Config): boolean {
@@ -225,6 +261,27 @@ export async function resumeTurn(
       // Trust this tool for the rest of the conversation only (resets on clear). Covers the
       // never-persistently-trustable tools; the denylist still guards run_command.
       addSessionTrust(pending.toolName);
+    } else if (decision === "allow_dir") {
+      // Approve the DESTINATION FOLDER, not the tool: the next save into it needs no
+      // question, while every save still shows its full path and every other folder is
+      // still asked about once. Persisted, so it survives a restart and shows up in the
+      // dashboard's File output list where the owner can take it back.
+      const t = describeSaveTarget(pending.args, config);
+      if (t.dir) {
+        addFileOutputDir(t.dir);
+        config = loadConfig();
+      }
+    } else if (decision === "branch") {
+      // Same bytes, isolated branch. Runs the executor path directly rather than the tool,
+      // and records it under the tool's name so the transcript reads as one action.
+      const r = await saveFileOnBranch(pending.args, ctxFor(config));
+      appendMessage({
+        role: "tool", text: r.content, toolName: pending.toolName,
+        toolArgs: pending.args, toolOk: r.ok,
+      });
+      return driveLoop({ ...opts, config }, [
+        { name: pending.toolName, ok: r.ok, args: pending.args },
+      ]);
     }
     const tool = toolsFor(opts).find((t) => t.name === pending.toolName);
     if (!tool) {
@@ -284,6 +341,7 @@ async function driveLoop(opts: TurnOptions, already: AgentTurn["toolCalls"]): Pr
           args: call.args,
           preview: previewWrite(tool.name, call.args, config),
           trustable: !NEVER_TRUSTABLE.has(tool.name),
+          extraChoices: extraChoicesFor(tool.name, call.args, config),
         };
         writePending(pending);
         if (s.text.trim()) appendMessage({ role: "assistant", text: s.text.trim() });

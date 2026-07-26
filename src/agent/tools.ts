@@ -7,8 +7,12 @@
 // Path safety lives here too, because every filesystem-touching tool must go through
 // the same gate. See resolveSafePath().
 
-import { existsSync, readFileSync, statSync, readdirSync, writeFileSync, mkdirSync } from "node:fs";
+import {
+  existsSync, readFileSync, statSync, readdirSync, writeFileSync, mkdirSync,
+  mkdtempSync, rmSync,
+} from "node:fs";
 import { resolve, relative, isAbsolute, sep, join, extname, dirname, basename } from "node:path";
+import { tmpdir } from "node:os";
 
 import type { AgentTool, ToolContext, ToolResult } from "./types.js";
 import type { Config } from "../config.js";
@@ -754,8 +758,9 @@ const runCommand: AgentTool = {
     const cwd = resolveRepo(args.repo, ctx);
     if (!cwd) return fail(unknownRepo(args.repo, ctx));
     const timeout = ctx.config.agent?.commandTimeoutMs ?? 60000;
+    const argv = shellFor(cmd);
     try {
-      const proc = Bun.spawnSync(shellFor(cmd), {
+      const proc = Bun.spawnSync(argv, {
         cwd,
         stdout: "pipe",
         stderr: "pipe",
@@ -772,6 +777,8 @@ const runCommand: AgentTool = {
       };
     } catch (e) {
       return fail(`command failed to start: ${(e as Error).message}`);
+    } finally {
+      cleanupShell(argv);
     }
   },
 };
@@ -950,17 +957,146 @@ export function resolveNewRepoPath(p: string, repoRoot: string): string | null {
  * `Executable not found in $PATH: "sh"` — and only when the daemon was started from
  * PowerShell. Launched from Git Bash `sh` IS on PATH, which is why it worked in testing
  * and failed for the owner: the same code, the same machine, a different parent shell.
- * `cmd.exe` is always present on Windows, so prefer it there and keep `sh` elsewhere.
+ *
+ * On Windows the command goes through a temp `.bat` rather than `cmd.exe /c <cmd>`,
+ * because Bun escapes the inner double quotes when it builds the Windows command line, so
+ * cmd receives `\"C:\path\"` and treats the quote as part of the name. Measured: `if exist
+ * "C:\Users\...\project"` reported MISSING for a folder `Test-Path` confirms exists, while
+ * the unquoted form found it — i.e. every command with a quoted path (which is most of
+ * them) was silently answering about the wrong thing. A file has no quoting layer at all.
+ * `src/screen/*.ts` reaches for the same trick with PowerShell, for the same reason.
  */
 export function shellFor(cmd: string): string[] {
-  return process.platform === "win32" ? ["cmd.exe", "/d", "/s", "/c", cmd] : ["sh", "-c", cmd];
+  if (process.platform !== "win32") return ["sh", "-c", cmd];
+  const dir = mkdtempSync(join(tmpdir(), "executive-cmd-"));
+  const bat = join(dir, "run.bat");
+  // CRLF and `@echo off` so the command's own output is all the caller sees.
+  writeFileSync(bat, "@echo off\r\n" + cmd + "\r\n", "utf-8");
+  return ["cmd.exe", "/d", "/c", bat];
 }
 
-/** The configured output directories, cleaned. Empty = `save_file` is unavailable. */
+/** Remove the temp script `shellFor` created, if it made one. */
+export function cleanupShell(argv: string[]): void {
+  if (process.platform !== "win32") return;
+  const bat = argv[argv.length - 1];
+  if (!bat || !bat.endsWith("run.bat")) return;
+  try {
+    rmSync(dirname(bat), { recursive: true, force: true });
+  } catch {
+    // A leftover temp file is harmless; never fail a command over cleanup.
+  }
+}
+
+/** The configured output directories, cleaned. */
 export function outputDirs(config: Config): string[] {
   return (config.agent?.fileOutput?.dirs ?? []).filter(
     (d) => typeof d === "string" && d.trim() !== ""
   );
+}
+
+/** Is `dir` inside (or equal to) one of the already-approved output folders? */
+export function isApprovedDir(dir: string, config: Config): boolean {
+  const target = resolve(dir);
+  return outputDirs(config).some((d) => {
+    const rel = relative(resolve(d), target);
+    return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+  });
+}
+
+/** Walk up from `dir` to find the git repo containing it, or null. */
+export function gitRepoOf(dir: string): string | null {
+  let cur = resolve(dir);
+  for (let i = 0; i < 40; i++) {
+    if (existsSync(join(cur, ".git"))) return cur;
+    const up = dirname(cur);
+    if (up === cur) return null;
+    cur = up;
+  }
+  return null;
+}
+
+/**
+ * Everything the confirm chip, the button set and `run()` need to agree on about one
+ * `save_file` call. Computed once, in one place, so the owner cannot be shown a path or a
+ * choice that differs from what actually happens.
+ */
+export interface SaveTarget {
+  /** Absolute file path that would be written (before the overwrite rule is applied). */
+  path: string | null;
+  /** Absolute folder it lands in. */
+  dir: string | null;
+  /** Why `path` is null. */
+  error?: string;
+  /** The folder is already in fileOutput.dirs — no permission question. */
+  approved: boolean;
+  /** Repo root when the folder sits inside a git working tree. */
+  repoRoot: string | null;
+  /** A file of that name is already there. */
+  exists: boolean;
+  /** Windows would execute this file type on a double-click. */
+  executable: boolean;
+}
+
+/**
+ * Resolve a `save_file` call to a concrete destination.
+ *
+ * `dir` (absolute) is how the owner's chosen folder reaches the tool at all — without it
+ * the model had no way to express "put it in C:\...\project", so it called save_file with
+ * no arguments and the owner got "path ไม่ผ่านการตรวจ" for a folder that was never
+ * actually rejected. The FILE NAME is still flattened (the model keeps prefixing folders);
+ * the FOLDER now comes from an explicit argument, which is the only part a human reads and
+ * approves on the confirm chip.
+ */
+export function describeSaveTarget(
+  args: Record<string, unknown>,
+  config: Config
+): SaveTarget {
+  const base: SaveTarget = {
+    path: null, dir: null, approved: false, repoRoot: null, exists: false, executable: false,
+  };
+
+  const nameRaw = String(args.path ?? "").trim();
+  if (!nameRaw) return { ...base, error: "path is required" };
+  // Flatten to the file name — see resolveOutputPath for why a directory component here
+  // is always the model restating the destination.
+  const segments = nameRaw.replace(/\\/g, "/").split("/").filter((s) => s !== "" && s !== ".");
+  const name = segments[segments.length - 1] ?? "";
+  if (!name || !isSafeName(name) || /^[a-zA-Z]:/.test(name) || isSecretFile(name)) {
+    return { ...base, error: `file name not allowed: ${nameRaw}` };
+  }
+
+  const dirRaw = typeof args.dir === "string" ? args.dir.trim() : "";
+  let dir: string;
+  if (dirRaw) {
+    if (!isAbsolute(dirRaw) && !/^[a-zA-Z]:[\\/]/.test(dirRaw)) {
+      return { ...base, error: `dir must be an absolute path: ${dirRaw}` };
+    }
+    dir = resolve(dirRaw);
+  } else {
+    const first = outputDirs(config)[0];
+    if (!first) {
+      return {
+        ...base,
+        error:
+          "no destination — pass `dir` with the absolute folder the owner named, or have " +
+          "them add one under Settings → File output",
+      };
+    }
+    dir = resolve(first);
+  }
+  if (dir.split(sep).some((s) => DENY_SEGMENTS.has(s))) {
+    return { ...base, error: `folder not allowed: ${dir}` };
+  }
+
+  const path = join(dir, name);
+  return {
+    path,
+    dir,
+    approved: isApprovedDir(dir, config),
+    repoRoot: gitRepoOf(dir),
+    exists: existsSync(path),
+    executable: EXECUTABLE_EXT.has(fileExt(name)),
+  };
 }
 
 /**
@@ -979,80 +1115,125 @@ export function outputDirs(config: Config): string[] {
 const saveFile: AgentTool = {
   name: "save_file",
   description:
-    "Save a file where the owner can open it (e.g. their Desktop) — use for a standalone " +
-    "deliverable like an HTML page, a note or a CSV. NOT for changing a project's code: " +
-    "that is edit_files. Fails if no output directory is configured.",
+    "Save a finished file where the owner can open it — their Desktop, a project folder, " +
+    "anywhere they name. Use for a standalone deliverable (an HTML page, a note, a CSV). " +
+    "To change a project's existing code, use edit_files instead.",
   kind: "write",
   inputSchema: {
     type: "object",
     properties: {
       path: {
         type: "string",
-        description:
-          "Just the file name, e.g. 'calculator.html'. It is saved into the owner's " +
-          "configured output folder — do NOT include that folder in the path, and never " +
-          "use an absolute path.",
+        description: "Just the file name, e.g. 'pong.html'. Put the folder in `dir`, not here.",
       },
       content: { type: "string", description: "The complete file contents" },
+      dir: {
+        type: "string",
+        description:
+          "Absolute folder to save into, e.g. 'C:/Users/me/Projects/game'. Pass this " +
+          "whenever the owner names a location. Omit it only when they did not say where, " +
+          "and it goes to their default folder.",
+      },
     },
     required: ["path", "content"],
   },
   async run(args, ctx) {
-    const dirs = outputDirs(ctx.config);
-    if (dirs.length === 0) {
+    const t = describeSaveTarget(args, ctx.config);
+    if (!t.path || !t.dir) return fail(t.error ?? "no destination");
+
+    // The folder must be approved. The confirm flow is what approves it (the owner taps
+    // "อนุญาตโฟลเดอร์นี้ถาวร", which adds it to fileOutput.dirs before the tool runs), so
+    // reaching run() unapproved means something bypassed that gate.
+    if (!t.approved) {
       return fail(
-        "no output directory is configured — the owner must add one under Settings → " +
-          "File output (agent.fileOutput.dirs) before I can save files outside a repo"
+        `folder not approved yet: ${t.dir} — the owner has to allow it once (it is then ` +
+          "remembered under Settings → File output)"
       );
     }
 
-    const rel = String(args.path ?? "").trim();
-    const content = typeof args.content === "string" ? args.content : "";
-    if (!rel) return fail("path is required");
-
-    const target = resolveOutputPath(rel, dirs);
-    if (!target) return fail(`path not allowed: ${rel}`);
-
-    const ext = fileExt(basename(target));
-    if (EXECUTABLE_EXT.has(ext) && ctx.config.agent?.fileOutput?.allowExecutable !== true) {
+    if (t.executable && ctx.config.agent?.fileOutput?.allowExecutable !== true) {
       return fail(
-        `refusing to write a .${ext} file — Windows runs that type on a double-click. ` +
-          "Ask for a non-executable format (.html/.txt/.md/.csv), or have the owner turn on " +
-          "Settings → File output → allow executable files."
+        `refusing to write a .${fileExt(basename(t.path))} file — Windows runs that type on ` +
+          "a double-click. Ask for a non-executable format (.html/.txt/.md/.csv), or have " +
+          "the owner turn on Settings → File output → allow executable files."
       );
     }
+
+    if (!existsSync(t.dir)) return fail(`output folder does not exist: ${t.dir}`);
 
     const overwrite = ctx.config.agent?.fileOutput?.allowOverwrite === true;
-    const existed = existsSync(target);
-    const finalPath = overwrite ? target : nextFreePath(target);
-
+    const finalPath = overwrite ? t.path : nextFreePath(t.path);
+    const content = typeof args.content === "string" ? args.content : "";
     try {
-      // Do NOT mkdir the output folder. It is configured by the owner and already exists,
-      // and creating it is not this tool's job — while `mkdirSync(recursive:true)` threw
-      // `EEXIST … mkdir 'C:\…\เดสก์ท็อป'` on the owner's real Desktop (a OneDrive-backed
-      // folder, where the recursive path walk mis-handles the reparse point). The file
-      // never got written and the model reported success anyway.
-      const dir = dirname(finalPath);
-      if (!existsSync(dir)) {
-        return fail(`output folder does not exist: ${dir}`);
-      }
       writeFileSync(finalPath, content, "utf-8");
     } catch (e) {
       return fail(`could not write ${finalPath}: ${(e as Error).message}`);
     }
 
     const note =
-      existed && !overwrite
-        ? ` (a file of that name already existed and was left alone — saved alongside it)`
-        : existed
-          ? ` (replaced the existing file)`
+      t.exists && !overwrite
+        ? " (a file of that name already existed and was left alone — saved alongside it)"
+        : t.exists
+          ? " (replaced the existing file)"
           : "";
     return ok(
-      `saved ${content.length} characters to:\n${finalPath}${note}\n` +
+      `saved ${content.length} characters to:
+${finalPath}${note}
+` +
         "Tell the owner this exact path."
     );
   },
 };
+
+/**
+ * Write the same file onto an isolated `executive/change-*` branch instead of the working
+ * tree — the second button the owner gets when the destination is inside a git repo.
+ *
+ * Deliberately NOT routed through `edit_files`: that goes via the Synthesizer, which would
+ * ask the LLM to REGENERATE the file, so the owner would review something other than what
+ * they just approved. This hands the exact bytes to the Phase 6 Executor as a one-op
+ * ChangeSet, which is deterministic and already owns the branch/commit/return-to-HEAD rules.
+ */
+export async function saveFileOnBranch(
+  args: Record<string, unknown>,
+  ctx: ToolContext
+): Promise<ToolResult> {
+  const t = describeSaveTarget(args, ctx.config);
+  if (!t.path || !t.dir) return fail(t.error ?? "no destination");
+  if (!t.repoRoot) return fail(`${t.dir} is not inside a git repo — nothing to branch from`);
+
+  const rel = relative(t.repoRoot, t.path).split(sep).join("/");
+  const { applyChangeSet } = await import("../executor/executor.js");
+  const id = "save-" + basename(t.path).replace(/[^a-zA-Z0-9._-]/g, "-");
+  try {
+    const report = applyChangeSet(
+      {
+        id,
+        title: `Add ${rel}`,
+        ops: [{ op: t.exists ? "write" : "create", path: rel, content: String(args.content ?? "") }],
+        test: null,
+        commitMessage: `Add ${rel}`,
+      },
+      { apply: true, repoRoot: t.repoRoot, config: ctx.config }
+    );
+    if (!report.committed) {
+      return fail(`could not commit: ${report.messages?.join("; ") ?? "unknown reason"}`);
+    }
+    return ok(
+      `committed ${rel} to branch ${report.branch} in ${t.repoRoot}.
+` +
+        `The working tree was NOT touched. Tell the owner exactly this, and how to get it:
+` +
+        `  review:   git diff ${report.branch}
+` +
+        `  copy out: git show ${report.branch}:${rel} > <where they want it>
+` +
+        `  discard:  git branch -D ${report.branch}`
+    );
+  } catch (e) {
+    return fail(`branch write failed: ${(e as Error).message}`);
+  }
+}
 
 // ─── Registry ─────────────────────────────────────────────────────────────────
 
@@ -1107,24 +1288,25 @@ export function previewWrite(
     case "edit_files":
       return `แก้โค้ด: ${String(args.instruction)} — จะ commit ลง branch แยก ไม่แตะ branch ที่ทำงานอยู่`;
     case "save_file": {
-      // The owner is approving a real file on a real disk — show the resolved path, and
-      // say up front when it will be refused or when their existing file is at stake.
-      const rel = String(args.path ?? "");
-      const dirs = outputDirs(config ?? ({} as Config));
-      if (dirs.length === 0) return `⛔ บันทึกไฟล์ ${rel} — ยังไม่ได้ตั้งโฟลเดอร์ปลายทาง`;
-      const target = resolveOutputPath(rel, dirs);
-      if (!target) return `⛔ บันทึกไฟล์ ${rel} — path ไม่ผ่านการตรวจ`;
-      const ext = fileExt(basename(target));
-      if (EXECUTABLE_EXT.has(ext) && config?.agent?.fileOutput?.allowExecutable !== true) {
-        return `⛔ บันทึก ${target} — .${ext} เป็นไฟล์ที่ดับเบิลคลิกแล้วรัน (ปิดอยู่)`;
-      }
+      // The owner is approving a real file at a real path. Show the resolved destination,
+      // and name up front anything that changes what the buttons mean.
+      const t = describeSaveTarget(args, config ?? ({} as Config));
+      if (!t.path || !t.dir) return `⛔ บันทึกไฟล์ — ${t.error ?? "ปลายทางไม่ถูกต้อง"}`;
       const size = typeof args.content === "string" ? args.content.length : 0;
-      if (existsSync(target)) {
-        return config?.agent?.fileOutput?.allowOverwrite === true
-          ? `⚠️ เขียนทับไฟล์เดิม: ${target} (${size} ตัวอักษร)`
-          : `บันทึก ${size} ตัวอักษร — มีไฟล์ชื่อนี้อยู่แล้ว จะเซฟเป็น ${nextFreePath(target)} แทน`;
+      if (t.executable && config?.agent?.fileOutput?.allowExecutable !== true) {
+        return `⛔ บันทึก ${t.path} — .${fileExt(basename(t.path))} เป็นไฟล์ที่ดับเบิลคลิกแล้วรัน (ปิดอยู่)`;
       }
-      return `บันทึกไฟล์ ${size} ตัวอักษร → ${target}`;
+      const lines = [`บันทึก ${size} ตัวอักษร → ${t.path}`];
+      if (!t.approved) lines.push(`📁 โฟลเดอร์นี้ยังไม่เคยอนุญาต: ${t.dir}`);
+      if (t.repoRoot) lines.push(`🌿 อยู่ใน git repo (${basename(t.repoRoot)}) — เลือกได้ว่าจะเขียนตรงหรือลง branch แยก`);
+      if (t.exists) {
+        lines.push(
+          config?.agent?.fileOutput?.allowOverwrite === true
+            ? "⚠️ มีไฟล์ชื่อนี้อยู่แล้ว — จะเขียนทับ"
+            : `มีไฟล์ชื่อนี้อยู่แล้ว — จะเซฟเป็น ${basename(nextFreePath(t.path))} แทน`
+        );
+      }
+      return lines.join("\n");
     }
     case "approve_proposal":
       return `อนุมัติข้อเสนอ ${String(args.id)}`;

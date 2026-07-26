@@ -20,6 +20,7 @@ import { chatErrorMessageChecked } from "../agent/protocol.js";
 import { markNudgeAnswered } from "../proactive/proactive.js";
 import { readConversation, readPending, clearConversation, clearPending } from "../agent/session.js";
 import type { ConfirmDecision } from "../agent/types.js";
+import { CONFIRM_DECISIONS } from "../agent/types.js";
 import { renderPage } from "./page.js";
 
 /** Live "is a screen capture in flight" flag, set by the periodic screen-infer trigger in
@@ -369,9 +370,9 @@ export function startUiServer(opts: UiServerOptions) {
           try {
             const body = (await req.json()) as { pendingId?: string; decision?: ConfirmDecision };
             const d = body.decision;
-            if (!body.pendingId || (d !== "run" && d !== "trust" && d !== "trust_session" && d !== "no")) {
+            if (!body.pendingId || !d || !CONFIRM_DECISIONS.includes(d)) {
               return Response.json(
-                { ok: false, error: "need { pendingId, decision: run|trust|trust_session|no }" },
+                { ok: false, error: "need { pendingId, decision: " + CONFIRM_DECISIONS.join("|") + " }" },
                 { status: 400 },
               );
             }

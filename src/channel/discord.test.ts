@@ -688,3 +688,58 @@ describe("confirm button: session vs persistent trust", () => {
     expect(received).toEqual([{ kind: "confirm", pendingId: "p1", decision: "trust_session" }]);
   });
 });
+
+// The owner names a folder, or the destination turns out to be inside a git repo — both
+// need a button that the fixed run/trust/no set cannot express.
+describe("confirm buttons: extra choices", () => {
+  const token = "bot-token-test";
+  const ownerId = "owner-1";
+
+  async function componentsFor(extraChoices: Array<"allow_dir" | "branch">) {
+    const fakeFetch = new FakeFetch();
+    const ch = createDiscordChannel({
+      token, ownerId,
+      wsFactory: makeWsFactory(new FakeWebSocket("wss://gateway.discord.gg/?v=10&encoding=json")),
+      fetchImpl: fakeFetch.mock as unknown as typeof fetch,
+    });
+    await ch.send({ text: "บันทึกไฟล์", confirm: { pendingId: "p9", trustable: false, extraChoices } });
+    const msg = fakeFetch.calls.find((c) => c.url.includes("/messages") && c.method === "POST");
+    return JSON.parse(msg!.body!).components[0].components as Array<{ custom_id: string; label: string }>;
+  }
+
+  it("renders a button per extra choice, with cancel still last", async () => {
+    const btns = await componentsFor(["allow_dir", "branch"]);
+    const ids = btns.map((b) => b.custom_id);
+    expect(ids).toContain("confirm:p9:allow_dir");
+    expect(ids).toContain("confirm:p9:branch");
+    expect(ids[ids.length - 1]).toBe("confirm:p9:no");
+  });
+
+  it("renders none when there are none — an ordinary write is unchanged", async () => {
+    const ids = (await componentsFor([])).map((b) => b.custom_id);
+    expect(ids).toEqual(["confirm:p9:run", "confirm:p9:trust_session", "confirm:p9:no"]);
+  });
+
+  it("parses the new buttons, and still refuses an invented decision", async () => {
+    const fakeWs = new FakeWebSocket("wss://gateway.discord.gg/?v=10&encoding=json");
+    const fakeFetch = new FakeFetch();
+    const ch = createDiscordChannel({
+      token, ownerId, wsFactory: makeWsFactory(fakeWs),
+      fetchImpl: fakeFetch.mock as unknown as typeof fetch,
+    });
+    const received: InboundMessage[] = [];
+    ch.onInbound((m) => { received.push(m); return Promise.resolve(); });
+    await ch.start();
+    fakeWs.emit({ op: 10, d: { heartbeat_interval: 500 } });
+
+    for (const id of ["confirm:p9:allow_dir", "confirm:p9:branch", "confirm:p9:rm_rf"]) {
+      fakeWs.emit({
+        op: 0, t: "INTERACTION_CREATE",
+        d: { id: "i1", token: "tok", member: { user: { id: ownerId } }, data: { custom_id: id } },
+      });
+    }
+    await Bun.sleep(20);
+    const decisions = received.filter((m) => m.kind === "confirm").map((m) => (m as { decision: string }).decision);
+    expect(decisions).toEqual(["allow_dir", "branch"]); // the invented one is dropped
+  });
+});

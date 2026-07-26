@@ -884,10 +884,17 @@ function renderChat(messages, pending) {
     const trustBtn = (pending.trustable === false)
       ? '<button class="ghost" onclick="confirmChat(\\'' + pending.id + '\\',\\'trust_session\\')">ไว้ใจทั้งแชทนี้</button>'
       : '<button class="ghost" onclick="confirmChat(\\'' + pending.id + '\\',\\'trust\\')">ไว้ใจ ' + esc(pending.toolName) + ' ตลอด</button>';
+    // Situation-specific buttons: approve the destination folder once and for all, or
+    // divert the write onto an isolated branch because it lands inside a git repo.
+    const extra = (pending.extraChoices || []).map(function (c) {
+      const label = c === "allow_dir" ? "📁 อนุญาตโฟลเดอร์นี้ถาวร" : "🌿 ลง branch แยก";
+      return '<button class="ghost" onclick="confirmChat(\\'' + pending.id + '\\',\\'' + c + '\\')">' + label + '</button>';
+    }).join("");
     box.innerHTML = '<div class="prop" style="border:1px solid var(--line);border-radius:10px;padding:10px;margin-bottom:10px">' +
-      '<div><b>ขออนุญาตทำ:</b> ' + esc(pending.preview) + '</div>' +
-      '<div class="acts" style="margin-top:8px">' +
+      '<div><b>ขออนุญาตทำ:</b> ' + esc(pending.preview).split("\\n").join("<br>") + '</div>' +
+      '<div class="acts" style="margin-top:8px;flex-wrap:wrap">' +
       '<button class="btn" onclick="confirmChat(\\'' + pending.id + '\\',\\'run\\')">ทำเลย</button>' +
+      extra +
       trustBtn +
       '<button class="ghost" onclick="confirmChat(\\'' + pending.id + '\\',\\'no\\')">ไม่</button>' +
       '</div></div>';

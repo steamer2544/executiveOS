@@ -1,3 +1,4 @@
+import type { ConfirmDecision, PendingChoice } from "../agent/types.js";
 // The outward channel the runtime speaks through (Phase 36).
 //
 // Everything the system knows has lived behind a page the owner has to remember to
@@ -20,13 +21,15 @@ export interface OutboundMessage {
     pendingId: string;
     /** Phase 38: false → the adapter omits the "trust forever" button (run_command / edit_files). */
     trustable?: boolean;
+    /** Situation-specific extra buttons (approve this folder / write to a branch). */
+    extraChoices?: PendingChoice[];
   };
 }
 
 /** What comes back from the owner. Anything from anyone else must never reach here. */
 export type InboundMessage =
   | { kind: "text"; text: string }
-  | { kind: "confirm"; pendingId: string; decision: "run" | "trust" | "trust_session" | "no" };
+  | { kind: "confirm"; pendingId: string; decision: ConfirmDecision };
 
 export interface Channel {
   name: string;

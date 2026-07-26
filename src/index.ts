@@ -197,7 +197,11 @@ function makeInboundHandler(
       await channel.send({
         text,
         confirm: turn.pending
-          ? { pendingId: turn.pending.id, trustable: turn.pending.trustable !== false }
+          ? {
+              pendingId: turn.pending.id,
+              trustable: turn.pending.trustable !== false,
+              extraChoices: turn.pending.extraChoices ?? [],
+            }
           : undefined,
       });
     } catch (err) {

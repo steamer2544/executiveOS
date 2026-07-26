@@ -84,12 +84,29 @@ export interface PendingWrite {
    *  Those get a **session**-trust button ("ไว้ใจทั้งแชทนี้") instead of the persistent
    *  "ไว้ใจตลอด"; trustable (absent/true) tools keep the persistent one. */
   trustable?: boolean;
+  /**
+   * Extra, situation-specific buttons beyond run/trust/no.
+   *
+   * `allow_dir` — the destination folder is not approved yet: run this once AND remember
+   *   the folder (added to `agent.fileOutput.dirs`), so the owner is asked once per folder
+   *   instead of once per file.
+   * `branch`    — the destination is inside a git repo: write the same bytes onto an
+   *   isolated `executive/change-*` branch instead of the working tree.
+   */
+  extraChoices?: PendingChoice[];
 }
+
+export type PendingChoice = "allow_dir" | "branch";
 
 /** "run" = do it once. "trust" = persist to config.agent.trustedTools (persistent, only for
  *  trustable tools). "trust_session" = trust for the current conversation only (used for the
  *  never-persistent-trustable tools; resets on clear). "no" = decline. */
-export type ConfirmDecision = "run" | "trust" | "trust_session" | "no";
+export type ConfirmDecision = "run" | "trust" | "trust_session" | "no" | PendingChoice;
+
+/** Every decision the confirm UI may send — the validation list for both front doors. */
+export const CONFIRM_DECISIONS: readonly ConfirmDecision[] = [
+  "run", "trust", "trust_session", "no", "allow_dir", "branch",
+];
 
 // ─── Turn result ──────────────────────────────────────────────────────────────
 

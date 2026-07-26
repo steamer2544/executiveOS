@@ -736,6 +736,27 @@ export function updateFileOutputConfig(patch: Record<string, unknown>): FileOutp
   return readFileOutputConfig(config);
 }
 
+/**
+ * Remember a folder the owner just approved on a confirm chip, so they are asked once per
+ * folder instead of once per file. Idempotent; refuses a relative path like the bulk
+ * update does. Returns the resulting list.
+ */
+export function addFileOutputDir(dir: string): FileOutputState {
+  const clean = typeof dir === "string" ? dir.trim() : "";
+  if (!clean || !isAbsolutePath(clean)) return readFileOutputConfig();
+  const config = loadConfig();
+  if (!config.agent) config.agent = {};
+  if (!config.agent.fileOutput) config.agent.fileOutput = {};
+  const dirs = config.agent.fileOutput.dirs ?? [];
+  if (!dirs.some((d) => d.trim() === clean)) config.agent.fileOutput.dirs = [...dirs, clean];
+
+  const raw = JSON.stringify(config, null, 2) + "\n";
+  const tmp = configPath() + ".tmp";
+  writeFileSync(tmp, raw);
+  renameOverwrite(tmp, configPath());
+  return readFileOutputConfig(config);
+}
+
 /** Absolute on either platform: `/x`, `C:\x` or `C:/x`. Kept local so config.ts stays
  *  dependency-free of node:path's platform-specific `isAbsolute`. */
 function isAbsolutePath(p: string): boolean {

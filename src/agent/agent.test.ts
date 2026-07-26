@@ -18,10 +18,10 @@ import {
   isToolsUnsupported,
   ContextTooHeavyError,
 } from "./protocol.js";
-import { resolveSafePath, resolveRepo, humanDuration, findTool, previewWrite, nextFreePath, shellFor, resolveNewRepoPath, READ_TOOLS, WRITE_TOOLS, ALL_TOOLS } from "./tools.js";
+import { resolveSafePath, resolveRepo, humanDuration, findTool, previewWrite, nextFreePath, shellFor, cleanupShell, resolveNewRepoPath, describeSaveTarget, isApprovedDir, gitRepoOf, READ_TOOLS, WRITE_TOOLS, ALL_TOOLS } from "./tools.js";
 import { runTurn, resumeTurn, CONTEXT_LADDER } from "./loop.js";
 import { readConversation, buildTranscript, trimTranscript, readPending, AGENT_CONTRACT, clearConversation, readSessionTrust, appendMessage, matchChatCommand } from "./session.js";
-import { loadConfig, defaultConfig, trustTool, NEVER_TRUSTABLE } from "../config.js";
+import { loadConfig, defaultConfig, trustTool, readFileOutputConfig, NEVER_TRUSTABLE } from "../config.js";
 import { configPath } from "../paths.js";
 
 const DIR = "/tmp/executive-test-agent-" + randomUUID();
@@ -526,6 +526,85 @@ describe("runTurn", () => {
     });
   });
 
+  // The two situation-specific buttons, end to end through the real loop.
+  describe("save_file confirm choices", () => {
+    const OUT = DIR + "/choice";
+    const REPO = DIR + "/choicerepo";
+
+    function saveCall(dir: string) {
+      return callStep("save_file", { path: "note.txt", content: "hello", dir });
+    }
+
+    beforeEach(() => {
+      mkdirSync(OUT, { recursive: true });
+      mkdirSync(REPO, { recursive: true });
+    });
+    afterEach(() => {
+      try { rmSync(OUT, { recursive: true, force: true }); } catch {}
+      try { rmSync(REPO, { recursive: true, force: true }); } catch {}
+    });
+
+    it("offers 'allow this folder' for a folder that has never been approved", async () => {
+      const backend = mockBackend([saveCall(OUT), textStep("done")]);
+      const turn = await runTurn("save it", { config: loadConfig(), backend });
+      expect(turn.pending?.toolName).toBe("save_file");
+      expect(turn.pending?.extraChoices).toContain("allow_dir");
+      expect(turn.pending?.extraChoices).not.toContain("branch");
+    });
+
+    it("allow_dir remembers the folder, then the write goes through", async () => {
+      const backend = mockBackend([saveCall(OUT), textStep("done")]);
+      const turn = await runTurn("save it", { config: loadConfig(), backend });
+      await resumeTurn(turn.pending!.id, "allow_dir", { config: loadConfig(), backend });
+
+      expect(readFileSync(join(OUT, "note.txt"), "utf-8")).toBe("hello");
+      // …and it is remembered, so the next save into the same folder needs no question.
+      expect(readFileOutputConfig(loadConfig()).dirs).toContain(resolve(OUT));
+      const again = await runTurn("again", {
+        config: loadConfig(),
+        backend: mockBackend([saveCall(OUT), textStep("done")]),
+      });
+      expect(again.pending?.extraChoices ?? []).not.toContain("allow_dir");
+    });
+
+    it("plain 'run' on an unapproved folder writes nothing and does NOT remember it", async () => {
+      const backend = mockBackend([saveCall(OUT), textStep("done")]);
+      const turn = await runTurn("save it", { config: loadConfig(), backend });
+      await resumeTurn(turn.pending!.id, "run", { config: loadConfig(), backend });
+
+      expect(existsSync(join(OUT, "note.txt"))).toBe(false);
+      expect(readFileOutputConfig(loadConfig()).dirs).not.toContain(resolve(OUT));
+    });
+
+    it("offers the branch choice when the destination is inside a git repo", async () => {
+      mkdirSync(join(REPO, ".git"), { recursive: true });
+      const backend = mockBackend([saveCall(REPO), textStep("done")]);
+      const turn = await runTurn("save it", { config: loadConfig(), backend });
+      expect(turn.pending?.extraChoices).toContain("branch");
+    });
+
+    it("the branch choice writes the EXACT bytes, never a regenerated file", async () => {
+      // It must not go through the Synthesizer: that would ask the LLM to rewrite the file,
+      // so the owner would review something other than what they approved.
+      const repo = makeGitRepo(DIR + "/realrepo");
+      const backend = mockBackend([
+        callStep("save_file", { path: "note.txt", content: "EXACT-BYTES", dir: repo }),
+        textStep("done"),
+      ]);
+      const turn = await runTurn("save it", { config: loadConfig(), backend });
+      expect(turn.pending?.extraChoices).toContain("branch");
+      await resumeTurn(turn.pending!.id, "branch", { config: loadConfig(), backend });
+
+      const branches = gitOut(repo, ["branch", "--list", "executive/change-*"]);
+      expect(branches).toContain("executive/change-");
+      const onBranch = gitOut(repo, ["show", branches.trim().replace(/^\*?\s*/, "") + ":note.txt"]);
+      expect(onBranch.trim()).toBe("EXACT-BYTES");
+      // The working tree is untouched — that is the whole point of the choice.
+      expect(existsSync(join(repo, "note.txt"))).toBe(false);
+      expect(gitOut(repo, ["status", "--porcelain"]).trim()).toBe("");
+    });
+  });
+
   it("feeds the tool result back before the next model call", async () => {
     const backend = mockBackend([callStep("get_state"), textStep("done")]);
     await runTurn("hi", { config: loadConfig(), backend, tools: FAKE_TOOLS });
@@ -953,10 +1032,10 @@ describe("save_file", () => {
     expect(NEVER_TRUSTABLE.has("save_file")).toBe(true);
   });
 
-  it("does nothing when no output directory is configured", async () => {
+  it("says where to put it when nothing is configured and no dir was named", async () => {
     const r = await tool.run({ path: "a.txt", content: "hi" }, ctxWith({ dirs: [] }));
     expect(r.ok).toBe(false);
-    expect(r.content).toContain("no output directory");
+    expect(r.content).toContain("no destination");
   });
 
   it("writes the file and reports the exact path", async () => {
@@ -966,10 +1045,13 @@ describe("save_file", () => {
     expect(r.content).toContain(join(OUT, "note.txt"));
   });
 
-  it("refuses to escape the output directory", async () => {
-    for (const p of ["../escaped.txt", "../../escaped.txt", "a/../../escaped.txt", "//host/share/x"]) {
+  it("a traversal in the FILE NAME cannot escape — it is flattened, not honoured", async () => {
+    // The name is only ever a name (the folder comes from `dir`), so "../x" writes x HERE.
+    for (const p of ["../escaped.txt", "../../escaped.txt", "a/../../escaped.txt"]) {
       const r = await tool.run({ path: p, content: "x" }, ctxWith({ dirs: [OUT] }));
-      expect(r.ok).toBe(false);
+      expect(r.ok).toBe(true);
+      expect(existsSync(join(OUT, "escaped.txt"))).toBe(true);
+      rmSync(join(OUT, "escaped.txt"), { force: true });
     }
     expect(existsSync(resolve(OUT, "../escaped.txt"))).toBe(false);
     expect(existsSync(resolve(OUT, "../../escaped.txt"))).toBe(false);
@@ -1091,14 +1173,41 @@ describe("live-found regressions", () => {
 
   it("run_command picks a shell that exists on this platform", () => {
     const argv = shellFor("echo hi");
-    expect(argv[argv.length - 1]).toBe("echo hi");
     expect(argv[0]).toBe(process.platform === "win32" ? "cmd.exe" : "sh");
+    cleanupShell(argv);
   });
 
   it("run_command actually runs — the live failure was 'sh not found in $PATH'", () => {
-    const proc = Bun.spawnSync(shellFor("echo pong"), { stdout: "pipe", stderr: "pipe" });
+    const argv = shellFor("echo pong");
+    const proc = Bun.spawnSync(argv, { stdout: "pipe", stderr: "pipe" });
+    cleanupShell(argv);
     expect(proc.exitCode).toBe(0);
     expect(new TextDecoder().decode(proc.stdout)).toContain("pong");
+  });
+
+  it("a QUOTED path survives the shell — Windows argv escaping used to eat the quotes", () => {
+    // Measured: `if exist "C:\Users\...\project"` reported MISSING for a folder that
+    // exists, because Bun escaped the inner quotes into the path. Most real commands quote
+    // a path, so this silently answered about the wrong thing rather than erroring.
+    const probe = join(DIR, "quoted dir");
+    mkdirSync(probe, { recursive: true });
+    const win = process.platform === "win32";
+    const p = win ? probe.split("/").join("\\") : probe;
+    const cmd = win
+      ? `if exist "${p}" (echo FOUND) else (echo MISSING)`
+      : `if [ -d "${p}" ]; then echo FOUND; else echo MISSING; fi`;
+    const argv = shellFor(cmd);
+    const proc = Bun.spawnSync(argv, { stdout: "pipe", stderr: "pipe" });
+    cleanupShell(argv);
+    expect(new TextDecoder().decode(proc.stdout).trim()).toBe("FOUND");
+  });
+
+  it("cleans up its temp script instead of littering", () => {
+    const argv = shellFor("echo hi");
+    const last = argv[argv.length - 1]!;
+    Bun.spawnSync(argv, { stdout: "pipe", stderr: "pipe" });
+    cleanupShell(argv);
+    if (process.platform === "win32") expect(existsSync(last)).toBe(false);
   });
 
   it("resolveNewRepoPath accepts a file that does not exist yet", () => {
@@ -1116,6 +1225,94 @@ describe("live-found regressions", () => {
     for (const p of ["../out.txt", "/etc/passwd", "C:/Windows/x", ".git/config", ".env", "a/../../x"]) {
       expect(resolveNewRepoPath(p, OUT)).toBeNull();
     }
+  });
+});
+
+// The owner names a folder ("เอาไว้ที่ C:\...\project") and it must reach the tool.
+// Before this, save_file took only a file name, so the model had no way to express a
+// destination at all: it called the tool with NO arguments and the owner was told
+// "path ไม่ผ่านการตรวจ" about a folder that had never been rejected.
+describe("save_file destination + approval", () => {
+  const HOME = DIR + "/dest";
+  const APPROVED = HOME + "/approved";
+  const FRESH = HOME + "/fresh";
+  const REPO = HOME + "/repo";
+  const tool = findTool("save_file")!;
+  function ctxWith(fileOutput: Record<string, unknown>): ToolContext {
+    const config = { ...defaultConfig(), agent: { ...defaultConfig().agent, fileOutput } } as Config;
+    return { config, roots: [] };
+  }
+  beforeEach(() => {
+    mkdirSync(APPROVED, { recursive: true });
+    mkdirSync(FRESH, { recursive: true });
+    mkdirSync(REPO + "/.git", { recursive: true });
+    mkdirSync(REPO + "/sub", { recursive: true });
+  });
+  afterEach(() => { try { rmSync(HOME, { recursive: true, force: true }); } catch {} });
+
+  it("writes into an explicitly named folder once it is approved", async () => {
+    const r = await tool.run(
+      { path: "pong.html", content: "<h1>pong</h1>", dir: FRESH },
+      ctxWith({ dirs: [APPROVED, FRESH] })
+    );
+    expect(r.ok).toBe(true);
+    expect(readFileSync(join(FRESH, "pong.html"), "utf-8")).toBe("<h1>pong</h1>");
+  });
+
+  it("refuses a folder the owner has not approved — and writes nothing", async () => {
+    const r = await tool.run(
+      { path: "pong.html", content: "x", dir: FRESH },
+      ctxWith({ dirs: [APPROVED] })
+    );
+    expect(r.ok).toBe(false);
+    expect(r.content).toContain("not approved");
+    expect(existsSync(join(FRESH, "pong.html"))).toBe(false);
+  });
+
+  it("approving a folder covers its subfolders, not the whole disk", () => {
+    const cfg = ctxWith({ dirs: [APPROVED] }).config;
+    expect(isApprovedDir(APPROVED, cfg)).toBe(true);
+    expect(isApprovedDir(join(APPROVED, "deep", "deeper"), cfg)).toBe(true);
+    expect(isApprovedDir(FRESH, cfg)).toBe(false);
+    expect(isApprovedDir(resolve(APPROVED, ".."), cfg)).toBe(false);
+  });
+
+  it("requires dir to be absolute — a relative one would follow the daemon's cwd", () => {
+    const t = describeSaveTarget({ path: "a.txt", dir: "some/folder" }, ctxWith({ dirs: [APPROVED] }).config);
+    expect(t.path).toBeNull();
+    expect(t.error).toContain("absolute");
+  });
+
+  it("still refuses a deny-listed folder even if the owner names it", () => {
+    const cfg = ctxWith({ dirs: [APPROVED] }).config;
+    expect(describeSaveTarget({ path: "a.txt", dir: join(APPROVED, ".git") }, cfg).path).toBeNull();
+    expect(describeSaveTarget({ path: "a.txt", dir: join(APPROVED, ".ssh") }, cfg).path).toBeNull();
+  });
+
+  it("falls back to the first configured folder when no dir is named", () => {
+    const t = describeSaveTarget({ path: "a.txt" }, ctxWith({ dirs: [APPROVED, FRESH] }).config);
+    expect(t.dir).toBe(resolve(APPROVED));
+  });
+
+  it("notices a git repo, from the folder or a subfolder", () => {
+    expect(gitRepoOf(REPO)).toBe(resolve(REPO));
+    expect(gitRepoOf(join(REPO, "sub"))).toBe(resolve(REPO));
+    expect(gitRepoOf(APPROVED)).toBeNull();
+  });
+
+  it("the preview names the unapproved folder and the repo, so the buttons make sense", () => {
+    const cfg = ctxWith({ dirs: [APPROVED] }).config;
+    const p = previewWrite("save_file", { path: "a.html", content: "x", dir: join(REPO, "sub") }, cfg);
+    expect(p).toContain(join(REPO, "sub", "a.html"));
+    expect(p).toContain("ยังไม่เคยอนุญาต");
+    expect(p).toContain("git repo");
+  });
+
+  it("the preview stays quiet about both when the folder is approved and not a repo", () => {
+    const cfg = ctxWith({ dirs: [APPROVED] }).config;
+    const p = previewWrite("save_file", { path: "a.html", content: "x", dir: APPROVED }, cfg);
+    expect(p).not.toContain("ยังไม่เคยอนุญาต");
+    expect(p).not.toContain("git repo");
   });
 });
 
@@ -1195,3 +1392,22 @@ describe("matchChatCommand", () => {
     }
   });
 });
+
+/** A real git repo with one commit — the branch choice needs a HEAD to branch from. */
+function makeGitRepo(dir: string): string {
+  rmSync(dir, { recursive: true, force: true });
+  mkdirSync(dir, { recursive: true });
+  const run = (args: string[]) => Bun.spawnSync(["git", ...args], { cwd: dir, stdout: "pipe", stderr: "pipe" });
+  run(["init", "-b", "main"]);
+  run(["config", "user.email", "t@t.t"]);
+  run(["config", "user.name", "t"]);
+  writeFileSync(join(dir, "README.md"), "seed\n");
+  run(["add", "-A"]);
+  run(["commit", "-m", "seed"]);
+  return dir;
+}
+
+function gitOut(dir: string, args: string[]): string {
+  const p = Bun.spawnSync(["git", ...args], { cwd: dir, stdout: "pipe", stderr: "pipe" });
+  return new TextDecoder().decode(p.stdout);
+}

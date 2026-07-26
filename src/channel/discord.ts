@@ -7,6 +7,7 @@
 // The bot token is read from process.env only — never a literal, never logged.
 
 import type { Channel, InboundMessage, OutboundMessage, WebSocketLike } from "./types.js";
+import type { ConfirmDecision, PendingChoice } from "../agent/types.js";
 
 // ── types ────────────────────────────────────────────────────────────────────
 
@@ -164,17 +165,23 @@ export function createDiscordChannel(opts: DiscordChannelOptions): Channel {
   }
 
   /** The status line stamped onto a confirm message once the owner taps a button. */
-  function decisionStamp(decision: "run" | "trust" | "trust_session" | "no"): string {
+  function decisionStamp(decision: ConfirmDecision): string {
     if (decision === "no") return "❌ ยกเลิกแล้ว";
     if (decision === "trust") return "🤝 ไว้ใจ tool นี้ตลอด — กำลังทำ…";
     if (decision === "trust_session") return "🤝 ไว้ใจทั้งแชทนี้ — กำลังทำ…";
+    if (decision === "allow_dir") return "📁 อนุญาตโฟลเดอร์นี้ถาวร — กำลังทำ…";
+    if (decision === "branch") return "🌿 ลง branch แยก — กำลังทำ…";
     return "✅ ทำเลย — กำลังทำ…";
   }
 
   // ── button components ────────────────────────────────────────────────────
 
   /** Build the Discord components array for a confirm message. */
-  function buildConfirmComponents(pendingId: string, trustable = true): unknown {
+  function buildConfirmComponents(
+    pendingId: string,
+    trustable = true,
+    extraChoices: PendingChoice[] = []
+  ): unknown {
     const components: unknown[] = [
       {
         type: 2, // Button
@@ -190,6 +197,14 @@ export function createDiscordChannel(opts: DiscordChannelOptions): Channel {
         ? { type: 2, style: 2, label: "ไว้ใจ tool นี้ตลอด", custom_id: `confirm:${pendingId}:trust` }
         : { type: 2, style: 2, label: "ไว้ใจทั้งแชทนี้", custom_id: `confirm:${pendingId}:trust_session` }
     );
+    // Situation-specific choices, before the cancel button so "ไม่" stays last.
+    for (const c of extraChoices) {
+      components.push(
+        c === "allow_dir"
+          ? { type: 2, style: 3, label: "อนุญาตโฟลเดอร์นี้ถาวร", custom_id: `confirm:${pendingId}:allow_dir` }
+          : { type: 2, style: 2, label: "ลง branch แยก", custom_id: `confirm:${pendingId}:branch` }
+      );
+    }
     components.push({
       type: 2,
       style: 4, // Danger
@@ -275,11 +290,11 @@ export function createDiscordChannel(opts: DiscordChannelOptions): Channel {
     if (!handler) return;
     if (!d.data?.custom_id) return;
 
-    const match = d.data.custom_id.match(/^confirm:(.+):(run|trust|trust_session|no)$/);
+    const match = d.data.custom_id.match(/^confirm:(.+):(run|trust|trust_session|allow_dir|branch|no)$/);
     if (!match) return;
 
     const pendingId = match[1]!;
-    const decision = match[2] as "run" | "trust" | "trust_session" | "no";
+    const decision = match[2] as ConfirmDecision;
 
     // Update the confirm message in place (strip buttons + stamp the choice) before
     // calling the handler — this IS the interaction ack, within the 3-second deadline.
@@ -375,7 +390,11 @@ export function createDiscordChannel(opts: DiscordChannelOptions): Channel {
       if (msg.confirm) {
         return sendDiscordMessage(
           msg.text,
-          buildConfirmComponents(msg.confirm.pendingId, msg.confirm.trustable !== false)
+          buildConfirmComponents(
+            msg.confirm.pendingId,
+            msg.confirm.trustable !== false,
+            msg.confirm.extraChoices ?? []
+          )
         );
       }
       return sendDiscordMessage(msg.text);
