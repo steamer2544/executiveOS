@@ -3,12 +3,30 @@
 > **Purpose:** a single doc to resume this project cold if context/memory is lost. Pairs with
 > `CLAUDE.md` (the authoritative phase-by-phase log), `GOTCHA.md` (traps & non-obvious failure modes —
 > read before touching PowerShell/state/tests/LLM), and `README.md` (user-facing overview).
-> Last updated after a **live-hardening session on the Discord agent** (think-loop fix + retry resilience +
-> message chunking + button feedback + session trust) on top of **Phase 39 + 39.1** (state decay/TTL;
-> deadline decay as an opt-in dashboard toggle), **Phase 38** (sandbox `run_command`), and **Phase 36 LIVE**
-> (Discord). Everything is pushed to `origin/main` (latest `5658a47`). **736 passing tests** + one opt-in
-> browser e2e, all green. The agent is **live-confirmed working** end-to-end over Discord (owner analyzed
-> opm-be + opm-fe). **If a running bot misbehaves after a pull, RESTART it — code isn't hot-reloaded.**
+> Last updated after the **Phase 40 session** (SQLite event storage + the live flip to it, a destroyed-config
+> incident + guardrail, and an agent budget-ladder fix), on top of a live-hardening session on the Discord
+> agent (think-loop fix + retry resilience + message chunking + button feedback + session trust), **Phase 39
+> + 39.1** (state decay/TTL; deadline decay as an opt-in dashboard toggle), **Phase 38** (sandbox
+> `run_command`), and **Phase 36 LIVE** (Discord). **771 passing tests** + two opt-in browser e2e, all green.
+> **4 commits sit on `main` UNPUSHED** — `origin/main` is still at `46a75a1`. The agent is
+> **live-confirmed working** end-to-end over Discord. **If a running bot misbehaves after a pull, RESTART
+> it — code isn't hot-reloaded.**
+>
+> **🔴 READ FIRST — the owner's `.executive/config.json` was DESTROYED during this session and rebuilt from
+> evidence.** Something running inside the repo wrote a **4-key test fixture** over the real config, wiping
+> every setting (Discord `ownerId`, `agent.repoSearchRoots`, screen-OCR engine, autonomy toggles). It was
+> not the committed test suite — a canary run of the full suite left the file byte-identical — and the most
+> likely culprit is a throwaway/intermediate test written by a delegated `claude-9arm` run that resolved
+> `execRoot()` while `EXECUTIVE_HOME` was unset. It is **not recoverable** (gitignored, no copy on disk, no
+> trace in any log). The current config was **reconstructed from artifacts that could only exist if a
+> setting had been on** (e.g. `screen-inferred.json` written at 14:19 ⇒ `screen.ocr.enabled`), plus the
+> `ownerId` the owner re-supplied. **Blocks NOT reconstructed** (they were left at defaults — turn them
+> back on if they were yours): `capture`, `transcribe` beyond `webspeech`, and any `watch.repos` multi-repo
+> list. `.env` was never touched. **Guardrail added (`4af108e`):** `execRoot()` now **throws** under
+> `NODE_ENV=test` when `EXECUTIVE_HOME` is unset, so this mistake is a red test instead of silent data
+> loss. It immediately caught two pre-existing offenders — `planner.test.ts` (ceremony call) and
+> `ocr.test.ts` (had been writing scratch `.ps1` files into the owner's live `.executive/tmp` on every
+> run). **There is still no backup of `.executive/config.json` anywhere; consider adding one.**
 >
 > **✅ Phase 36 is LIVE.** The owner supplied a bot token + `ownerId`, ran `ui`, and the bot **DM-answered
 > from real state** (asked "ตอนนี้ผมทำอะไรอยู่" → correct project/task/branch/file). What remains is the
@@ -40,26 +58,53 @@
 > that touched config/fixtures: `git grep -nE "MTUz|sk-|xox[baprs]-|-----BEGIN|Bearer [A-Za-z0-9._-]{20}"
 > $(git rev-list --all)` (expect only the two `agent.test.ts` fixtures).
 >
-> **▶️ NEXT UP — Phase 40 (SQLite storage) is DONE, so the planned roadmap is now empty.** Everything
-> through Phase 40 is committed on `main` but **NOT yet pushed** (`origin/main` is still at `46a75a1`).
+> **▶️ NEXT UP — the planned roadmap is EMPTY.** Phase 40 was the last item promised since Phase 1. The
+> only outstanding *chore* is the **push**: 4 commits (`066bb44` Job 1, `e4e158a` Job 2, `4af108e` the
+> `execRoot` guardrail, `976569a` the budget ladder) are on `main` and `origin/main` is still at `46a75a1`.
+> Secret-scan before pushing (command above) — none of these touched fixtures or config, but the rule stands.
 >
-> **Phase 40 shipped SQLite behind a config gate** — `bun:sqlite`, no new dependency, one `events` table
-> with `seq INTEGER PRIMARY KEY`. `append`/`read`/`tail` kept their exact signatures so **no caller
-> changed**; `seq` allocation deliberately stayed in `seq.ts`/`meta.json` for both backends, so flipping
-> the backend back and forth is coherent. **The default is still `"jsonl"` and the owner's live runtime is
-> still on it** — an `events.db` with 7,004 migrated rows is sitting ready in `.executive/`.
+> **✅ Phase 40 shipped AND the runtime is now RUNNING ON SQLITE** (this is a change from what the previous
+> handoff said — the flip happened at the end of the session). `bun:sqlite`, no new dependency, one
+> `events` table with `seq INTEGER PRIMARY KEY` (unique, indexed, never renumbered on delete, so `compact`
+> keeps its guarantee). `append`/`read`/`tail` kept their exact signatures so **no caller changed**;
+> `readSync`/`tailSync` were *added* for the synchronous State Builder. **`seq` allocation deliberately did
+> NOT move** — `seq.ts`/`meta.json` stay authoritative for both backends, which is what makes flipping back
+> and forth coherent.
 >
-> **To actually switch (owner's call, ~1 minute):** stop `ui`, run `bun run src/index.ts migrate-events
-> --apply` (idempotent — it catches up whatever the daemon appended since), set `"storage": { "backend":
-> "sqlite" }` in `.executive/config.json`, restart `ui`. To go back, set it to `"jsonl"` again — the JSONL
-> files were never touched, but any event appended *while* on sqlite lives only in the db, so don't
-> ping-pong with a live daemon. Verify with `tail 3` after the flip.
+> **Live state after the flip:** `config.storage.backend = "sqlite"`; `events.db` holds **7,040 rows,
+> seq 1→7512** (the gaps are old `compact` deletions, correctly preserved); the five `.jsonl` files are
+> **frozen and md5-identical to pre-switch** — they are the backup, and nothing writes to them any more.
+> Verified live after the flip: `tail`, `build-state`, `report`, `emit`, and a real `ui` run (which printed
+> `Discord: connected` and a digest tick) all work from the database alone.
 >
-> **The next thing is no longer on a roadmap — it should come from measurement.** The two candidates that
-> were already waiting are §6's Candidate A (surface `State.patterns` in the digest/dashboard) and
-> Candidate B (derive the Tesseract OCR language from the window title). The bigger unfinished business is
-> still **reading `nudges.jsonl`** (sent vs answered per source) after Phase 36 has run a couple of weeks —
-> that measurement gates the `rules+llm` nudge dial.
+> **To roll back to JSONL:** set `"storage": { "backend": "jsonl" }` and restart. **Caveat that matters:**
+> every event appended *since* the flip lives **only** in `events.db`, so a rollback silently loses them
+> unless you export first. There is no db→jsonl exporter — `migrate-events` is one-way. Don't ping-pong.
+>
+> **The next thing should come from measurement, not a list.** The two cheap candidates already waiting are
+> §6's Candidate A (surface `State.patterns` in the digest/dashboard) and Candidate B (derive the Tesseract
+> OCR language from the window title). The bigger unfinished business is still **reading `nudges.jsonl`**
+> (sent vs answered per source) after Phase 36 has run a couple of weeks — that measurement gates the
+> `rules+llm` nudge dial.
+>
+> **Agent budget ladder (this session, `/debug-mantra`) — a SECOND, different `max_tokens` failure.** The
+> bot answered *"เป็นยังไงบ้าง"* correctly from real state, then failed *"คุณสร้างโปรแกรมเครื่องคิดเลข
+> ง่ายๆ ไว้บนเดสทอปผมได้ไหม"* with *"used its entire token budget thinking"*. **This is NOT the
+> temperature-0 think-loop below** — that was a true non-terminating loop where 40k did not help; here the
+> thinking terminates, it just needs more room than the 8192 floor. **Both are true; don't use one to
+> dismiss the other.** Measured by looping the identical prompt with the conversation reset each run:
+> **1/8 answered at 8192, 4/4 at 32768**, and a `[DBG]` probe showed every failing run burning
+> `output_tokens` **exactly 8192 on all four attempts** — which disproves the old code's premise that
+> "each roll is independent … re-sampling 3× drives 25% → 0.4%". Four fresh rolls, four identical
+> exhaustions. (The ~25% was measured on a *meta-question*: **the loop rate is prompt-dependent** — this
+> class of open-ended agentic ask is ~93% per call. Never generalise one prompt's rate.) Calls that DO
+> answer cost only **937–2,775** output tokens, so a flat 32768 would tax every normal turn. Fix:
+> **`BUDGET_LADDER = [1,2,4,4]`** — the payload is rebuilt per attempt so a retry *raises the ceiling*
+> instead of re-rolling at the same one, capped at 4× so a genuine loop still ends the turn.
+> **Live-verified 6/6** at the owner's own config vs 1/8 before. **Known cost: the hard prompt takes
+> ~190–290 s** (it fails at 8192 first, then succeeds a rung up). If that becomes the complaint, the lever
+> is the **21,493 input tokens** (system prompt + 15 tool schemas + 20 history turns), NOT the ceiling.
+> See CLAUDE.md "Agent budget ladder" + GOTCHA §1.
 >
 > **Agent chat resilience (this session, `/debug-mantra`):** the Discord bot answered "สวัสดี" with
 > **"ขอโทษครับ พัง: The operation was aborted."** — diagnosed live as a **transient gateway latency spike
@@ -183,10 +228,10 @@ Main loop: **Observe → Understand → Predict → Act → Observe again.**
 
 ---
 
-## 2. Current status — DONE through Phase 33.1
+## 2. Current status — DONE through Phase 40 (the planned roadmap is complete)
 
 The full loop works and is validated (including **live against the real LLM gateway**). Phases (see
-`CLAUDE.md` for the detailed entry on each):
+`CLAUDE.md` for the detailed entry on each — it is the authoritative log; this table is a map):
 
 | # | Phase | What it added |
 |---|-------|---------------|
@@ -235,12 +280,20 @@ The full loop works and is validated (including **live against the real LLM gate
 | 34.1 | **Runtime robustness** | three defects found by *reading the `ui` console*: `nextSeq`'s temp+rename lost an event to a transient Windows `EPERM` (AV/indexer holds `meta.json` for ms) → `renameOverwrite()` retries only `EPERM`/`EBUSY`/`EACCES`; `Bun.serve`'s 10s default `idleTimeout` was shorter than `/api/state` on a real log → 120s; and an executor test used `test: "true"`, which **is not a command in `cmd.exe`** → `exit 0` |
 | 35 | **Jarvis layer — chat with hands** | `src/agent/`: a conversational front door that answers from real state (9 read tools) and **acts** (5 write tools) — every write parks for a one-tap confirm, and "ไว้ใจ tool นี้ตลอด" persists to `config.agent.trustedTools` (removes the prompt, never a guardrail). Two tool-call protocols (`native` + a `json` fenced fallback, `auto` downgrades on a 4xx naming `tools`) because gateway support is **unmeasured — every probe hit a 524 outage**. `edit_files` reuses Synth→Executor so code lands on `executive/change-*`. Chat panel + voice in/out, `/api/chat*`, `chat` CLI. Live-validated against a stub speaking the real Anthropic shape |
 | 34.2 | **Atomic-write hardening** | review of 34.1 found the retry helper fixed **1 of 17** temp+rename sites (the per-tick `writeState`/`writePlan`/`writeDigest` are more exposed than `meta.json`) and that its 3 tests **all passed against plain `renameSync`**. `renameOverwrite` moved to `src/fs-atomic.ts` with an injectable `RenameIo` seam + real retry coverage; every atomic write routed through it; `idleTimeout` derived from `llmTimeoutMs` instead of a hardcoded 120 s that **equalled** the LLM client timeout; the 81 MB model download made non-blocking (polls the existing `/api/transcribe/status`) |
+| 36 | **Proactive nudges over Discord** | the system speaks FIRST: a pure `decideNudge` rule engine (first-tick guard → nothing-new → quiet hours → min-gap → daily budget → 24h repeat-suppression, ≤1 nudge/tick) + a hand-rolled Discord adapter (zero deps, WebSocket gateway + REST, `ownerId` as an **authentication boundary**). A Discord reply enters the SAME `runTurn`/`conversation.jsonl` as the dashboard. `nudges.jsonl` is the evidence log that gates the deferred `rules+llm` dial. **LIVE-confirmed** |
+| 37 | **Any-repo reach + chat markdown + secrets gate** | `resolveRepo` discovers a repo by basename under `config.agent.repoSearchRoots` (unknown name → **`null`**, replacing a silent fallback that answered about the wrong repo); `list_repos` tool; `repo` arg on `read_file`/`grep`. Chat renders markdown and no longer yanks the scroll. **Secrets gate**: `.env`/keys/`.ssh` rejected by the shared path gate (found by /scrutinize after discovery widened `read_file` to 16 repos) |
+| 38 | **Sandbox `run_command`** | pure `classifyCommand` → deny/allow/ask, with a **denylist in code, not config** (rm -rf, curl\|sh, sudo, git push --force, …) that `run_command.run()` hard-refuses **even after the owner confirmed**; `NEVER_TRUSTABLE = {run_command, edit_files}` makes standing trust inert in both directions (a hand-edited config.json cannot arm it) |
+| — | **Discord UX + session trust** | long replies chunked to ≤2000 chars (were truncated mid-word); a tapped confirm button now edits its message in place (`type: 7`) instead of a silent `type: 6` ack; **"ไว้ใจทั้งแชทนี้"** = session-scoped trust that resets on clear, so the NEVER_TRUSTABLE tools stay un-trustable *persistently* while an inspection session stops nagging. The denylist still refuses destructive commands even when session-trusted |
+| 39 (+39.1) | **State decay / TTL** | only **manually-asserted** signals age out (auto-sensed ones are refreshed by watchers, so they never decay): `BLOCKED_TTL_MS` 24 h, `MANUAL_TASK_TTL_MS` 72 h → falls back to branch/repo inference. Decay only ever *removes* a stale assertion; unparseable `ts` → keep. 39.1: deadline decay is **opt-in + default off** (a deadline is a commitment, not transient state — /scrutinize caught that auto-retiring it reverses Phase 32's nag) |
+| 40 | **SQLite event storage** | `EventBackend` interface + `jsonl`/`sqlite` implementations behind an unchanged `append`/`read`/`tail`; `bun:sqlite`, no new dependency; `seq INTEGER PRIMARY KEY` so seq is the rowid (never renumbered on delete). `seq` allocation deliberately stayed in `seq.ts`/`meta.json` for both backends. `migrate-events [--apply]` is dry-run by default, never touches the `.jsonl` files, and reports a seq-with-different-id as a **conflict** instead of skipping it silently. **The live runtime now runs on sqlite** |
+| — | **Agent budget ladder** | a *second* `max_tokens` failure, distinct from the think-loop: measured **1/8 answered at 8192 vs 4/4 at 32768**, with every failing attempt burning exactly 8192 — so re-sampling at the same ceiling was provably useless. `BUDGET_LADDER = [1,2,4,4]` raises the ceiling per retry instead. Live 6/6 |
 
-**Test count:** 527 passing, 100% offline (mock backends). Several phases **validated live** against the
-9arm Qwen gateway (`work`, `synth`, `infer`, `propose`); Phase-25 vendor download + browser-wasm e2e run
-live too. **Screen-sensing is fully live** (real capture → real OCR → real suggestions, both engines
-compared on the same image), and the **Advisor is live-validated end to end** (Phase 33.1). **Not live:**
-the Layer 3 vision call — it is **403 at the gateway**, not a code problem (§6).
+**Test count:** 771 passing, 100% offline (mock backends). Several phases **validated live** against the
+9arm Qwen gateway (`work`, `synth`, `infer`, `propose`, the agent); Phase-25 vendor download + browser-wasm
+e2e run live too. **Screen-sensing is fully live** (real capture → real OCR → real suggestions, both engines
+compared on the same image), the **Advisor is live-validated end to end** (Phase 33.1), **Discord is live**
+(Phase 36), and **SQLite is the live backend** (Phase 40). **Not live:** the Layer 3 vision call — it is
+**403 at the gateway**, not a code problem (§6).
 
 **Where the system stands qualitatively (measured 2026-07-23, before Phase 33):** sensing was far ahead
 of reasoning — State was accurate and near-fully auto-sensed (Layer 2 OCR summarised the owner's live
@@ -256,12 +309,14 @@ change gets too big to review"* and it reaches the "Needs you" queue.
 ```bash
 bun install
 bun run typecheck          # tsc --noEmit (strict) — must stay green
-bun test                   # 527 tests, offline
+bun test                   # 771 tests, offline
 bun run test:e2e           # OPT-IN browser-wasm e2e (real Chromium via Playwright; runs under node, auto-skips
                            #   if playwright/model aren't set up — see test/e2e/README.md)
+bun run test:e2e:chat      # OPT-IN chat-UI e2e (markdown render + no-yank scroll; no gateway/token needed)
 
 bun run src/index.ts init  # create .executive/ (also adds .executive/ to .gitignore in a repo)
 bun run src/index.ts ui    # dashboard at localhost:4317 (+ watches git/files); the main entry point now
+bun run src/index.ts migrate-events [--apply]   # JSONL logs → .executive/events.db (dry-run without --apply)
 ```
 
 **Daily use is `ui` alone.** It runs the watchers, rebuilds state + plan + digest + the durable
@@ -455,9 +510,17 @@ Transcription now has **three working backends** (Phase 25); pick one in the das
 - **Web Speech** (`webspeech`, default) — no setup, browser recognizer, one language at a time.
 
 ### Deliberately deferred (need an owner decision or real pain)
-- **External delivery** (email/Slack/push of the digest & approvals) — outward-facing; needs a channel
-  choice + explicit approval. `notifications.jsonl` is the local substrate it will read from.
-- **SQLite/Drizzle** storage — JSONL is fine until it isn't (tech-stack target, no pain yet).
+- **External delivery** — **done for Discord (Phase 36)**: nudges + approvals reach the owner by DM and a
+  reply re-enters the same conversation. Email/Slack remain deferred (each is another outward-facing
+  channel needing its own approval); `notifications.jsonl` / `nudges.jsonl` are the local substrate.
+- **SQLite** storage — **DONE (Phase 40) and now live.** *Drizzle specifically was dropped on purpose:*
+  the event log is one table with three query shapes (append / read by source / tail by seq), so an ORM
+  would add a dependency and a schema layer for nothing. Revisit only if a second table appears.
+- **A db→jsonl exporter** — `migrate-events` is deliberately one-way. Nothing needs the reverse yet, but
+  it is the gap that makes a rollback to `"jsonl"` lossy for anything appended since the flip.
+- **A backup of `.executive/config.json`** — it is gitignored, hand-edited, holds the only copy of
+  `discord.ownerId`/`repoSearchRoots`/OCR settings, and **was destroyed once in this session with no way
+  to recover it**. The `execRoot()` guardrail stops the specific cause; it does not create a backup.
 - **`rules.md` / `planner.md`** — the vision's remaining 4-layer artifacts (editable decision rules /
   long-term goals). Speculative; rules already live as code in `src/planner/rules.ts`.
 - **Wiring approved proposals to real execution** — **partly done (Phase 27):** approving an *executable
@@ -477,7 +540,13 @@ Transcription now has **three working backends** (Phase 25); pick one in the das
 
 ```
 src/
-├── events/        # JSONL EventStore, seq, types
+├── events/        # EventStore: store.ts is a thin dispatcher over backend.ts
+│                  #   jsonl-backend.ts | sqlite-backend.ts (bun:sqlite) — chosen by config.storage.backend
+│                  #   seq.ts/meta.json allocate seq for BOTH backends; migrate.ts = one-way jsonl→db
+├── agent/         # the conversational front door (chat + Discord): tools, loop, protocol, session
+│                  #   command-guard.ts = the run_command denylist (a guardrail in code, not config)
+├── proactive/     # rules.ts decides WHEN to nudge (pure); compose.ts writes the sentence; log.ts
+├── channel/       # Discord adapter (hand-rolled, zero deps) — ownerId is an auth boundary
 ├── watchers/      # git + fs watchers
 ├── state/         # State Builder (state.json/context.json) — incl. task/project inference
 │                  #   patterns.ts = behavioural metrics (pure) so the Planner can read State only
@@ -498,8 +567,10 @@ src/
 ├── watchers/      # git + fs + screen (Layer 1) watchers; build.ts (multi-repo watcher assembly)
 ├── ui/            # Bun.serve dashboard (server.ts + page.ts) + models.ts (browser-wasm asset fetch)
 ├── config.ts  paths.ts  bootstrap.ts  index.ts (CLI)
-.executive/        # runtime data (gitignored): config.json, claude.md, events/, state/plan/digest/
-                   #   proposal/changeset/exec-report, auto-report, notifications, inferred, advisor.json,
+.executive/        # runtime data (gitignored): config.json, claude.md, events/ (now FROZEN — the backup),
+                   #   events.db (+ -wal/-shm) = THE LIVE EVENT STORE, meta.json (seq),
+                   #   state/plan/digest/context, proposal/changeset/exec-report, auto-report,
+                   #   notifications.jsonl, nudges.jsonl, conversation.jsonl, inferred, advisor.json,
                    #   vendor/ + models/ (browser-wasm transformers.js + Whisper model, served from 127.0.0.1)
 docs/scopes/       # per-phase specs
 CLAUDE.md          # authoritative phase log + workflow + guardrails
