@@ -36,6 +36,12 @@
 > - **Known model-quality limits (not bugs to chase):** tool selection is not deterministic (one run
 >   reached for `run_command` instead of `save_file`; one claimed success with `tools: (none)`), and a
 >   hard prompt can take 100–340 s.
+> - **`agent.fileOutput.allowExecutable` and `allowOverwrite` are `true` in the owner's runtime config
+>   ON PURPOSE — the owner turned them on.** Do not "fix" them back to the source defaults. It means
+>   the agent may write `.bat`/`.ps1`/`.exe` into an approved folder and may replace an existing file
+>   there, so a save into those folders is not automatically reversible. (They were briefly suspected
+>   of being another config-corruption incident; a canary — md5 the real `config.json`, run the full
+>   suite, md5 again — cleared the test suite, and the owner confirmed it was them.)
 > - **Incident worth remembering:** an auto-approving *test harness* (the architect's, not the product)
 >   let the agent run `git stash` + commit and sweep ~2 h of uncommitted work; recovered with
 >   `git stash pop`. The Phase-38 denylist behaved correctly — `git reset --hard` was refused; `git stash`

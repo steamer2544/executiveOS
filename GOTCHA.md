@@ -132,6 +132,21 @@
 
 ## 2. Windows / PowerShell
 
+- **`Bun.spawnSync(["cmd.exe","/c", cmd])` EATS the inner double quotes — and the command then
+  silently answers about the wrong thing.** *Symptom:* `run_command` reported a folder MISSING that
+  `Test-Path` confirms exists; the agent told the owner their project folder did not exist.
+  *Cause:* Bun escapes `"` when it builds the Windows command line, so cmd receives `\"C:\path\"`
+  and treats the quote as part of the name. Measured: `if exist "C:\Users\…\project"` → MISSING,
+  the unquoted form → FOUND. **This does not error** — you get a confident wrong answer, which is
+  worse. *Fix:* write the command to a temp `.bat` and run `cmd.exe /d /c <file>` — a file has no
+  quoting layer at all (`shellFor`/`cleanupShell` in `src/agent/tools.ts`; `src/screen/*.ts` reaches
+  for the same trick with PowerShell). Most real commands quote a path, so assume this bites
+  everything, not an edge case. (Phase 41)
+- **`sh -c` is not available on Windows — and whether it *looks* available depends on the parent
+  shell.** *Symptom:* every `run_command` returns `Executable not found in $PATH: "sh"` for the
+  owner, while the identical code passes in testing on the same machine. *Cause:* Git Bash puts `sh`
+  on PATH, so a daemon started from Git Bash works and one started from PowerShell does not. *Tell:*
+  "works for me" where the only difference is the terminal you launched from. (Phase 41)
 - **Windows Defender/AMSI blocks screen-capture scripts.** *Symptom:* `captureScreen` fails with "This
   script contains malicious content and has been blocked by your antivirus software" (exit 1).
   *Cause:* a spawned PowerShell doing `Graphics.CopyFromScreen` trips the AV screen-grab heuristic — via
@@ -241,6 +256,15 @@
 
 ## 4. Testing (how to not ship a green-but-fake suite)
 
+- **Generating source through a shell heredoc can plant INVISIBLE control characters.** *Symptom:* a
+  freshly written function returned `null` for every input; the source on screen looked correct and
+  `tsc` was green. *Cause:* a `python - <<'PY'` heredoc turned `\b` inside a regex into a literal
+  **U+0008 backspace**, so `/<script\b/` was really `/<script␈/` and never matched. The character is
+  invisible in `cat`, in the editor, and in a diff. *Tell:* `fn.toString()` shows the escape as a control char (Bun prints it as \u0008); or
+  `grep -rlP '[\x00-\x08\x0b\x0c\x0e-\x1f]' src/`. *Fix:* write regex- or escape-heavy code with the
+  editing tool directly, never through a shell/python layer — and if you must, re-read the emitted
+  bytes, not the terminal echo. Same family as §8's template-literal trap, one layer further out.
+  (Phase 41)
 - **Assertions inside an un-awaited `setTimeout` never run.** *Symptom:* a test "passes" even against
   deliberately-broken code. *Cause:* the test function returns before the timer fires, so bun marks it
   passed; a later throw isn't attributed. *Tell:* the `expect() calls` count is far lower than the number
@@ -312,6 +336,21 @@
 
 ## 7. The agent (Phase 35)
 
+- **A large file cannot be produced in one model response, and the failure does not look like
+  truncation.** *Symptom:* the owner asked for Tetris and received 9 KB of raw
+  `<tool_call><function=save_file>` XML in Discord, cut off mid-line — preceded by five identical
+  "path is required" errors. *Causes, all measured:* (a) a Tetris page is **still truncated at 6144
+  output tokens (68 s)**, and §1's ~125 s wall caps us near there, so one-shot generation is not
+  viable; (b) a tool call whose arguments overflow arrives as **`input: {}`**, which used to be run
+  as a genuine empty call — hence the five errors; (c) having given up on `tool_use`, the model
+  hand-writes its own `<tool_call>` template as prose. *Fix:* `save_file` has `append` so a file
+  arrives in parts; `TruncatedToolCallError` is raised for an empty `tool_use` at
+  `stop_reason: max_tokens` and fed back to the model as a failed tool result telling it to chunk;
+  `parseXmlToolCall` reads the template; `maxToolRounds` is **20**, because 8 is enough for lookups
+  and not for writing. **Chunking invents new ways to be wrong** — `incompleteHtmlReason()` catches
+  both an unfinished file (the model announced success with `<script>` still open) and a lost or
+  out-of-order chunk (an assembled file began with `</body>`, every closing tag balanced, no
+  `<canvas>`, script dead on `getContext of null`). (Phase 41)
 - **A "rejects path escape" test can pass without the check ever running.** *Symptom:* removing BOTH
   containment layers from `resolveSafePath` left the whole suite green. *Cause:* the test used
   `../../etc/passwd`, which resolves to a path that **does not exist**, so `existsSync` returned false
