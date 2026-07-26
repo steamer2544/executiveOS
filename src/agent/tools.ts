@@ -8,7 +8,7 @@
 // the same gate. See resolveSafePath().
 
 import {
-  existsSync, readFileSync, statSync, readdirSync, writeFileSync, mkdirSync,
+  existsSync, readFileSync, statSync, readdirSync, writeFileSync, appendFileSync, mkdirSync,
   mkdtempSync, rmSync,
 } from "node:fs";
 import { resolve, relative, isAbsolute, sep, join, extname, dirname, basename } from "node:path";
@@ -987,6 +987,39 @@ export function cleanupShell(argv: string[]): void {
   }
 }
 
+
+/**
+ * Does a partially-written file look finished?
+ *
+ * Chunked writing (see `append`) works mechanically, but nothing made the model CHECK it
+ * had finished — live, it wrote three chunks of a Tetris page, stopped with the `<script>`
+ * still open and no `</html>`, and told the owner "สำเร็จแล้ว! 🎮". Only structural,
+ * language-specific facts are used: an unclosed tag is not a matter of taste. Anything
+ * other than HTML returns null (unknown), because guessing at "finished" for prose or CSV
+ * would nag on perfectly complete files.
+ */
+export function incompleteHtmlReason(path: string, text: string): string | null {
+  if (!["html", "htm"].includes(fileExt(basename(path)))) return null;
+
+  // A chunk written out of order, or a first chunk that was lost. Seen live: the assembled
+  // file began with `</body>` — every closing tag balanced, so a "did it finish?" check
+  // passed while the page had no <head>, no <body> and no <canvas>, and the script died on
+  // `getContext of null`. A closing tag with nothing to close is the tell.
+  for (const tag of ["html", "body", "head"]) {
+    const close = new RegExp(`</${tag}>`, "i");
+    const open = new RegExp(`<${tag}\\b`, "i");
+    if (close.test(text) && !open.test(text)) {
+      return `there is a </${tag}> with no opening <${tag}> — the parts are out of order or one is missing`;
+    }
+  }
+  if ((text.match(/<script\b/gi) ?? []).length > (text.match(/<\/script>/gi) ?? []).length) {
+    return "a <script> tag is still open";
+  }
+  if (/<html\b/i.test(text) && !/<\/html>/i.test(text)) return "there is no closing </html>";
+  if (/<body\b/i.test(text) && !/<\/body>/i.test(text)) return "there is no closing </body>";
+  return null;
+}
+
 /** The configured output directories, cleaned. */
 export function outputDirs(config: Config): string[] {
   return (config.agent?.fileOutput?.dirs ?? []).filter(
@@ -1134,6 +1167,13 @@ const saveFile: AgentTool = {
           "whenever the owner names a location. Omit it only when they did not say where, " +
           "and it goes to their default folder.",
       },
+      append: {
+        type: "boolean",
+        description:
+          "Append to the file instead of creating it. Use this to write a LARGE file in " +
+          "several calls: first call without append, then append the remaining parts in " +
+          "order. Keep each part under ~3000 characters.",
+      },
     },
     required: ["path", "content"],
   },
@@ -1161,9 +1201,33 @@ const saveFile: AgentTool = {
 
     if (!existsSync(t.dir)) return fail(`output folder does not exist: ${t.dir}`);
 
+    const content = typeof args.content === "string" ? args.content : "";
+    const append = args.append === true;
+
+    // Appending continues a file this same conversation started, so the overwrite rule
+    // (which exists to protect the owner's OWN files) must not divert it to `name-2.ext`.
+    if (append) {
+      try {
+        appendFileSync(t.path, content, "utf-8");
+      } catch (e) {
+        return fail(`could not append to ${t.path}: ${(e as Error).message}`);
+      }
+      const total = statSync(t.path).size;
+      const why = incompleteHtmlReason(t.path, readFileSync(t.path, "utf-8"));
+      return ok(
+        `appended ${content.length} characters to:
+${t.path}
+` +
+          `The file is now ${total} bytes.` +
+          (why
+            ? ` NOT FINISHED YET — ${why}. Call save_file again with append: true and the ` +
+              "next part. Do NOT tell the owner it is done until this warning is gone."
+            : " It looks complete.")
+      );
+    }
+
     const overwrite = ctx.config.agent?.fileOutput?.allowOverwrite === true;
     const finalPath = overwrite ? t.path : nextFreePath(t.path);
-    const content = typeof args.content === "string" ? args.content : "";
     try {
       writeFileSync(finalPath, content, "utf-8");
     } catch (e) {
@@ -1176,11 +1240,15 @@ const saveFile: AgentTool = {
         : t.exists
           ? " (replaced the existing file)"
           : "";
+    const why = incompleteHtmlReason(finalPath, content);
     return ok(
       `saved ${content.length} characters to:
 ${finalPath}${note}
 ` +
-        "Tell the owner this exact path."
+        (why
+          ? `NOT FINISHED YET — ${why}. Call save_file again with append: true and the next ` +
+            "part. Do NOT tell the owner it is done until this warning is gone."
+          : "Tell the owner this exact path.")
     );
   },
 };

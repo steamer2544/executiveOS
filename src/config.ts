@@ -96,7 +96,8 @@ export interface Config {
   agent?: {
     enabled?: boolean;          // if true, the dashboard chat panel and /api/chat work. Default false.
     toolProtocol?: AgentToolProtocol; // how tool calls are expressed. Default "auto".
-    maxToolRounds?: number;     // hard cap on tool round-trips per message. Default 8.
+    maxToolRounds?: number;     // hard cap on tool round-trips per message. Default 20 —
+                                // writing a large file in parts needs several rounds.
     historyTurns?: number;      // user turns kept in the model's context. Default 20.
     speak?: boolean;            // read replies aloud in the browser. Default false.
     /** Write tools the owner has said "trust this one from now on" to. Empty = ask every time.
@@ -287,7 +288,7 @@ export function defaultConfig(): Config {
     agent: {
       enabled: false,
       toolProtocol: "auto",
-      maxToolRounds: 8,
+      maxToolRounds: 20,
       historyTurns: 20,
       speak: false,
       trustedTools: [],

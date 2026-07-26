@@ -34,6 +34,7 @@ import {
   isToolsUnsupported,
   AnthropicChatBackend,
   ContextTooHeavyError,
+  TruncatedToolCallError,
 } from "./protocol.js";
 import {
   appendMessage,
@@ -56,7 +57,17 @@ import {
   NEVER_TRUSTABLE,
 } from "../config.js";
 
-const DEFAULT_MAX_ROUNDS = 8;
+/**
+ * Tool round-trips per message.
+ *
+ * 8 was enough when a tool call was a lookup. It is not enough to WRITE something: a file
+ * too large for one call arrives in parts, and one Tetris page spent 2 rounds discovering
+ * the truncation plus 3 appends and still hit the cap with the `<script>` open — the owner
+ * got "ผมหาข้อมูลหลายรอบแล้ว…" and half a file. The cap exists to stop a runaway, not to
+ * budget honest work, and an unused round costs nothing (the loop exits the moment the
+ * model answers).
+ */
+const DEFAULT_MAX_ROUNDS = 20;
 const DEFAULT_HISTORY_TURNS = 20;
 
 /** The answer used when the model burns its tool budget without ever concluding. */
@@ -309,7 +320,29 @@ async function driveLoop(opts: TurnOptions, already: AgentTurn["toolCalls"]): Pr
   const degraded: { turns: number | null } = { turns: null };
 
   for (let round = 0; round < maxRounds; round++) {
-    const s = await step(backendRef, config, tools, degraded);
+    let s;
+    try {
+      s = await step(backendRef, config, tools, degraded);
+    } catch (e) {
+      // The model tried to send a whole large file in one call and it was cut off. Tell it
+      // so, as a failed tool result, and let it retry in parts — throwing here would end
+      // the turn with an exception for a problem the model can actually fix.
+      if (e instanceof TruncatedToolCallError && round < maxRounds - 1) {
+        appendMessage({
+          role: "tool",
+          text:
+            `Your ${e.toolName} call was cut off before its arguments finished — the ` +
+            "content was too large for one call. Write the file in parts instead: call " +
+            "save_file with the first ~2000 characters, then call it again with " +
+            "`append: true` for each following part until the file is complete.",
+          toolName: e.toolName,
+          toolArgs: {},
+          toolOk: false,
+        });
+        continue;
+      }
+      throw e;
+    }
 
     if (s.toolCalls.length === 0) {
       const reply = withDegradedNote(s.text.trim() || "(ไม่มีคำตอบ)", degraded.turns);

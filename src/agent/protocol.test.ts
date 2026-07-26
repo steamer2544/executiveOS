@@ -15,6 +15,9 @@ import {
   effectiveTimeoutMs,
   gatewayReachable,
   chatErrorMessageChecked,
+  parseXmlToolCall,
+  parseNativeStep,
+  TruncatedToolCallError,
 } from "./protocol.js";
 import type { TranscriptItem } from "./types.js";
 
@@ -323,5 +326,56 @@ describe("gatewayReachable / chatErrorMessageChecked", () => {
     const msg = await chatErrorMessageChecked(new Error("agent HTTP 400: bad tools"), CFG);
     expect(msg).toContain("gateway ปฏิเสธ");
     expect(calls).toBe(0);
+  });
+});
+
+// Qwen's own tool-call template. Live: after five truncated native calls the model gave up
+// on tool_use and printed 9 KB of this as prose, so the owner got raw XML instead of a file.
+describe("parseXmlToolCall", () => {
+  it("parses the template the model actually emitted", () => {
+    const call = parseXmlToolCall(
+      "<tool_call>\n<function=save_file>\n<parameter=path>\ntetris.html\n</parameter>\n" +
+        "<parameter=content>\n<!DOCTYPE html>\n</parameter>\n</function>\n</tool_call>"
+    );
+    expect(call).toEqual({ name: "save_file", args: { path: "tetris.html", content: "<!DOCTYPE html>" } });
+  });
+
+  it("keeps the inner content intact — it is a whole file, not a token", () => {
+    const body = "<html>\n  <body>a < b && c</body>\n</html>";
+    const call = parseXmlToolCall(`<tool_call><function=save_file><parameter=content>\n${body}\n</parameter></function></tool_call>`);
+    expect((call!.args as { content: string }).content).toBe(body);
+  });
+
+  it("recovers a call whose closing tags were cut off", () => {
+    // The exact shape of the live failure: truncated mid-stream, no </tool_call>.
+    const call = parseXmlToolCall("<tool_call>\n<function=save_file>\n<parameter=path>\na.html\n</parameter>\n<parameter=content>\n<h1>hi");
+    expect(call?.name).toBe("save_file");
+    expect((call!.args as { content: string }).content).toBe("<h1>hi");
+  });
+
+  it("returns null for prose, so an ordinary answer is never mistaken for a call", () => {
+    expect(parseXmlToolCall("ผมสร้างไฟล์ให้แล้วครับ")).toBeNull();
+    expect(parseXmlToolCall("<tool_call>no function here</tool_call>")).toBeNull();
+  });
+});
+
+describe("truncated tool call", () => {
+  it("a max_tokens tool_use with no arguments is reported as truncated, not run empty", () => {
+    // Live: five save_file calls arrived with input {} because the model ran out of budget
+    // mid-JSON, and each executed as a real empty call → "path is required" five times.
+    expect(() =>
+      parseNativeStep({
+        stop_reason: "max_tokens",
+        content: [{ type: "tool_use", id: "t1", name: "save_file", input: {} }],
+      })
+    ).toThrow(TruncatedToolCallError);
+  });
+
+  it("an empty-argument call that finished normally is still a real call", () => {
+    const step = parseNativeStep({
+      stop_reason: "tool_use",
+      content: [{ type: "tool_use", id: "t1", name: "get_state", input: {} }],
+    });
+    expect(step.toolCalls[0]!.name).toBe("get_state");
   });
 });

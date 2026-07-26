@@ -77,6 +77,38 @@ export function parseJsonToolCall(
   return null;
 }
 
+/**
+ * Parse Qwen's own tool-call template, which it falls back to when the native path fails.
+ *
+ *   <tool_call><function=save_file><parameter=path>x.html</parameter>
+ *   <parameter=content>…</parameter></function></tool_call>
+ *
+ * Observed live: after five truncated native calls the model gave up on `tool_use` and
+ * printed this as prose, so the owner received 9 KB of raw XML instead of a file. It is
+ * the model's native template, not something we invented, so parsing it costs nothing and
+ * converts a garbage reply into the call it was trying to make.
+ *
+ * Deliberately tolerant of the whitespace the model puts around values (it pretty-prints
+ * them onto their own lines), but NOT of a missing function name — that is prose.
+ */
+export function parseXmlToolCall(
+  text: string
+): { name: string; args: Record<string, unknown> } | null {
+  const block = /<tool_call>([\s\S]*?)(?:<\/tool_call>|$)/i.exec(text);
+  if (!block?.[1]) return null;
+  const body = block[1];
+  const fn = /<function=([\w.-]+)\s*>/i.exec(body);
+  if (!fn?.[1]) return null;
+
+  const args: Record<string, unknown> = {};
+  const re = /<parameter=([\w.-]+)\s*>([\s\S]*?)(?:<\/parameter>|(?=<parameter=)|$)/gi;
+  for (let m = re.exec(body); m; m = re.exec(body)) {
+    // Trim only the newlines the template adds; inner content (a whole HTML file) is kept.
+    args[m[1]!] = (m[2] ?? "").replace(/^\r?\n/, "").replace(/\s+$/, "");
+  }
+  return { name: fn[1], args };
+}
+
 /** Strip a fenced tool-call block out of prose, so leftover text reads cleanly. */
 export function stripToolBlock(text: string): string {
   return text.replace(/```(?:json)?\s*[\s\S]*?```/gi, "").trim();
@@ -162,13 +194,22 @@ export function parseNativeStep(json: unknown): ModelStep {
       if (b.type === "text" && typeof b.text === "string") {
         texts.push(b.text);
       } else if (b.type === "tool_use" && typeof b.name === "string") {
+        const input =
+          typeof b.input === "object" && b.input !== null
+            ? (b.input as Record<string, unknown>)
+            : {};
+        // A tool call whose arguments never finished arriving is NOT a call with no
+        // arguments. Live: five save_file calls in a row came back with `input: {}` because
+        // the model ran out of budget mid-JSON writing a large file, and each was executed
+        // as a real (empty) call — so the owner saw "path is required" five times instead of
+        // "that file is too big to send in one piece".
+        if (stopReason === "max_tokens" && Object.keys(input).length === 0) {
+          throw new TruncatedToolCallError(b.name);
+        }
         toolCalls.push({
           id: typeof b.id === "string" ? b.id : crypto.randomUUID(),
           name: b.name,
-          args:
-            typeof b.input === "object" && b.input !== null
-              ? (b.input as Record<string, unknown>)
-              : {},
+          args: input,
         });
       }
     }
@@ -293,10 +334,24 @@ export class AnthropicChatBackend implements ChatBackend {
         // the loop, which can retry with less context.
         if (isEmptyMaxTokens(json)) throw new ContextTooHeavyError(budget);
         const step = parseNativeStep(json);
-        if (native) return step;
+        if (native) {
+          // Even on the native path the model sometimes hand-writes its own tool-call
+          // template as prose. Honour it rather than showing the owner raw XML.
+          if (step.toolCalls.length === 0) {
+            const xml = parseXmlToolCall(step.text);
+            if (xml) {
+              return {
+                text: stripToolBlock(step.text).replace(/<tool_call>[\s\S]*$/i, "").trim(),
+                toolCalls: [{ id: crypto.randomUUID(), ...xml }],
+                stopReason: step.stopReason,
+              };
+            }
+          }
+          return step;
+        }
 
         // json protocol: the tool call is inside the text.
-        const call = parseJsonToolCall(step.text);
+        const call = parseJsonToolCall(step.text) ?? parseXmlToolCall(step.text);
         if (!call) return { text: step.text, toolCalls: [], stopReason: step.stopReason };
         return {
           text: stripToolBlock(step.text),
@@ -478,6 +533,18 @@ export function effectiveTimeoutMs(configured: number): number {
  * moves is the CONTEXT, and the loop is what owns it — hence a distinct error type it
  * can catch and retry smaller.
  */
+export class TruncatedToolCallError extends Error {
+  readonly toolName: string;
+  constructor(toolName: string) {
+    super(
+      `agent: the ${toolName} call was cut off before its arguments finished — the content ` +
+        "is too large to send in one call"
+    );
+    this.name = "TruncatedToolCallError";
+    this.toolName = toolName;
+  }
+}
+
 export class ContextTooHeavyError extends Error {
   readonly budget: number | null;
   constructor(budget: number | null = null) {

@@ -43,7 +43,17 @@ real work: an event log, derived state, and their git repos.
    (e.g. "opm-be"), pass it as the \`repo\` argument to read_file / grep / git_log /
    git_status. If you are unsure a repo exists or what it is called, call list_repos
    first — do NOT answer about it from the current project's files.
-7. If you cannot do exactly what was asked, say which part you could not do and what
+7. Pick the right tool for producing a file, and NEVER use run_command to create or edit
+   one. A finished file for the owner (an HTML page, a note, a CSV) → \`save_file\`, and
+   pass the folder they named as \`dir\`; a change to a project's existing code →
+   \`edit_files\`. A shell redirect gets the path wrong and leaves nothing behind.
+8. A tool call's arguments have a hard size limit — a whole large file does NOT fit in
+   one call, and when it overflows the call arrives with no arguments at all. For
+   anything over roughly 3000 characters, write it in parts: \`save_file\` with the first
+   part, then \`save_file\` again with \`append: true\` for each following part, in order,
+   until the file is complete. Never shrink or truncate what the owner asked for just to
+   make it fit in one call.
+9. If you cannot do exactly what was asked, say which part you could not do and what
    you did instead. Never present a near-miss as the thing they asked for. "ผมเขียน
    ไฟล์ตรงนั้นไม่ได้ ขอ commit ไว้ที่ … แทน" is a good answer; silently delivering
    something elsewhere and calling it done is not.`;

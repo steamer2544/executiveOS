@@ -18,7 +18,7 @@ import {
   isToolsUnsupported,
   ContextTooHeavyError,
 } from "./protocol.js";
-import { resolveSafePath, resolveRepo, humanDuration, findTool, previewWrite, nextFreePath, shellFor, cleanupShell, resolveNewRepoPath, describeSaveTarget, isApprovedDir, gitRepoOf, READ_TOOLS, WRITE_TOOLS, ALL_TOOLS } from "./tools.js";
+import { resolveSafePath, resolveRepo, humanDuration, findTool, previewWrite, nextFreePath, shellFor, cleanupShell, resolveNewRepoPath, describeSaveTarget, isApprovedDir, gitRepoOf, incompleteHtmlReason, READ_TOOLS, WRITE_TOOLS, ALL_TOOLS } from "./tools.js";
 import { runTurn, resumeTurn, CONTEXT_LADDER } from "./loop.js";
 import { readConversation, buildTranscript, trimTranscript, readPending, AGENT_CONTRACT, clearConversation, readSessionTrust, appendMessage, matchChatCommand } from "./session.js";
 import { loadConfig, defaultConfig, trustTool, readFileOutputConfig, NEVER_TRUSTABLE } from "../config.js";
@@ -1316,6 +1316,98 @@ describe("save_file destination + approval", () => {
   });
 });
 
+// A whole large file does not fit in one tool call: measured on the real gateway, a Tetris
+// page was still truncated at 6144 output tokens (68 s), and the wall clock caps us near
+// there. So a big file has to arrive in pieces.
+describe("save_file append (large files)", () => {
+  const OUT = DIR + "/append";
+  const tool = findTool("save_file")!;
+  function ctx(extra: Record<string, unknown> = {}): ToolContext {
+    const fileOutput = { dirs: [OUT], ...extra };
+    return { config: { ...defaultConfig(), agent: { ...defaultConfig().agent, fileOutput } } as Config, roots: [] };
+  }
+  beforeEach(() => mkdirSync(OUT, { recursive: true }));
+  afterEach(() => { try { rmSync(OUT, { recursive: true, force: true }); } catch {} });
+
+  it("builds one file across several calls, in order", async () => {
+    await tool.run({ path: "big.html", content: "<html>", dir: OUT }, ctx());
+    await tool.run({ path: "big.html", content: "BODY", dir: OUT, append: true }, ctx());
+    const last = await tool.run({ path: "big.html", content: "</html>", dir: OUT, append: true }, ctx());
+    expect(last.ok).toBe(true);
+    expect(readFileSync(join(OUT, "big.html"), "utf-8")).toBe("<html>BODY</html>");
+  });
+
+  it("append does NOT get diverted to name-2 by the overwrite rule", () => {
+    // The rule protects the owner's own files; a file this conversation just created is
+    // not one of those, and diverting the second chunk would silently split the output.
+    return (async () => {
+      await tool.run({ path: "big.txt", content: "one", dir: OUT }, ctx());
+      await tool.run({ path: "big.txt", content: "two", dir: OUT, append: true }, ctx());
+      expect(existsSync(join(OUT, "big-2.txt"))).toBe(false);
+      expect(readFileSync(join(OUT, "big.txt"), "utf-8")).toBe("onetwo");
+    })();
+  });
+
+  it("reports the running total so the model knows where it is", async () => {
+    await tool.run({ path: "big.txt", content: "12345", dir: OUT }, ctx());
+    const r = await tool.run({ path: "big.txt", content: "678", dir: OUT, append: true }, ctx());
+    expect(r.content).toContain("8 bytes");
+  });
+
+  it("still obeys the folder-approval and executable gates when appending", async () => {
+    const other = DIR + "/notapproved";
+    mkdirSync(other, { recursive: true });
+    expect((await tool.run({ path: "a.txt", content: "x", dir: other, append: true }, ctx())).ok).toBe(false);
+    expect((await tool.run({ path: "a.bat", content: "x", dir: OUT, append: true }, ctx())).ok).toBe(false);
+    rmSync(other, { recursive: true, force: true });
+  });
+
+  it("says a chunked HTML file is not finished, so the model keeps going", async () => {
+    // Live: the model wrote three chunks, stopped with <script> still open and no </html>,
+    // and told the owner "สำเร็จแล้ว! 🎮". Nothing had told it otherwise.
+    const first = await tool.run(
+      { path: "g.html", content: "<html><body><script>let a=1;", dir: OUT },
+      ctx()
+    );
+    expect(first.content).toContain("NOT FINISHED");
+    const mid = await tool.run({ path: "g.html", content: "let b=2;", dir: OUT, append: true }, ctx());
+    expect(mid.content).toContain("NOT FINISHED");
+    const last = await tool.run(
+      { path: "g.html", content: "</script></body></html>", dir: OUT, append: true },
+      ctx()
+    );
+    expect(last.content).toContain("looks complete");
+    expect(last.content).not.toContain("NOT FINISHED");
+  });
+
+  it("only judges completeness for HTML — never nags about prose or data", () => {
+    expect(incompleteHtmlReason("a.txt", "half a sen")).toBeNull();
+    expect(incompleteHtmlReason("a.csv", "x,y\n1,")).toBeNull();
+    expect(incompleteHtmlReason("a.md", "# unfinished")).toBeNull();
+  });
+
+  it("catches a lost or out-of-order chunk, not just an unfinished one", () => {
+    // Live: the assembled file began with "</body>". Every closing tag balanced, so a
+    // naive completeness check passed — while the page had no <body> and no <canvas>, and
+    // the script died on `getContext of null`.
+    const r = incompleteHtmlReason("a.html", "</body>\n<script>let a=1;</script>\n</body>\n</html>");
+    expect(r).toContain("out of order");
+  });
+
+  it("names which structural tag is missing", () => {
+    expect(incompleteHtmlReason("a.html", "<html><script>x")).toContain("<script>");
+    expect(incompleteHtmlReason("a.html", "<html><body>hi</body>")).toContain("</html>");
+    expect(incompleteHtmlReason("a.html", "<html><body>hi</body></html>")).toBeNull();
+    // A fragment with no <html> at all is not "unfinished" — it may be exactly what was asked for.
+    expect(incompleteHtmlReason("a.html", "<p>a snippet</p>")).toBeNull();
+  });
+
+  it("the contract tells the model to split a large file rather than shrink it", () => {
+    expect(AGENT_CONTRACT).toContain("append: true");
+    expect(AGENT_CONTRACT).toMatch(/never shrink or truncate/i);
+  });
+});
+
 describe("nextFreePath", () => {
   const OUT = DIR + "/free";
   beforeEach(() => mkdirSync(OUT, { recursive: true }));
@@ -1357,7 +1449,7 @@ describe("config", () => {
     const c = loadConfig();
     expect(c.agent!.enabled).toBe(false);
     expect(c.agent!.trustedTools).toEqual([]);
-    expect(c.agent!.maxToolRounds).toBe(8);
+    expect(c.agent!.maxToolRounds).toBe(defaultConfig().agent!.maxToolRounds);
   });
 });
 
