@@ -21,7 +21,12 @@ import type {
 import type { Config } from "../config.js";
 
 import { ALL_TOOLS, agentRoots, findTool, previewWrite } from "./tools.js";
-import { createChatBackend, isToolsUnsupported, AnthropicChatBackend } from "./protocol.js";
+import {
+  createChatBackend,
+  isToolsUnsupported,
+  AnthropicChatBackend,
+  ContextTooHeavyError,
+} from "./protocol.js";
 import {
   appendMessage,
   buildAgentSystemPrompt,
@@ -32,6 +37,7 @@ import {
   writePending,
   readSessionTrust,
   addSessionTrust,
+  trimTranscript,
 } from "./session.js";
 import { llmMaxTokens, llmTimeoutMs, trustTool, NEVER_TRUSTABLE } from "../config.js";
 
@@ -99,19 +105,13 @@ async function runTool(
  * `tools` field. Whether the 9arm gateway supports native tool calling is unmeasured
  * (every probe hit a 524 outage), so the downgrade is a real path, not a formality.
  */
-async function step(
+async function stepOnce(
   backendRef: { current: ChatBackend },
   config: Config,
-  tools: AgentTool[]
+  tools: AgentTool[],
+  transcript: ReturnType<typeof buildTranscript>
 ) {
-  const input = {
-    system: buildAgentSystemPrompt(),
-    transcript: buildTranscript(
-      readConversation(),
-      config.agent?.historyTurns ?? DEFAULT_HISTORY_TURNS
-    ),
-    tools,
-  };
+  const input = { system: buildAgentSystemPrompt(), transcript, tools };
   try {
     return await backendRef.current.step(input);
   } catch (e) {
@@ -130,6 +130,52 @@ async function step(
     }
     throw e;
   }
+}
+
+/**
+ * How much history to keep, per attempt: the configured window first, then progressively
+ * less. This is the inverse of the ceiling ladder it replaced — measurement says the
+ * ceiling cannot be raised (the gateway's ~125 s wall caps what can come back) while
+ * shrinking the context is what actually rescues a spiralling turn (full history 0/7,
+ * last few turns 3/3, last turn only 4/4).
+ */
+export const CONTEXT_LADDER: ReadonlyArray<number | null> = [null, 3, 1];
+
+/**
+ * Ask the model for one step, shrinking the context if it burns its whole budget thinking.
+ *
+ * `degraded` records the smallest window a step had to fall back to, so the turn can tell
+ * the owner it answered without the earlier history rather than silently forgetting it.
+ */
+async function step(
+  backendRef: { current: ChatBackend },
+  config: Config,
+  tools: AgentTool[],
+  degraded: { turns: number | null }
+) {
+  const configured = config.agent?.historyTurns ?? DEFAULT_HISTORY_TURNS;
+  const full = buildTranscript(readConversation(), configured);
+
+  let lastErr: unknown;
+  let lastWidth = -1;
+  for (const rung of CONTEXT_LADDER) {
+    const transcript = rung === null ? full : trimTranscript(full, rung);
+    // Skip a rung that would re-send an identical request — a short conversation makes the
+    // upper rungs no smaller than the full window. SKIP, never stop: the rungs below are
+    // still smaller, and stopping here was a real bug (a 2-turn chat that spiralled failed
+    // outright because the single-turn rescue was never reached).
+    if (lastErr && transcript.length === lastWidth) continue;
+    lastWidth = transcript.length;
+    try {
+      const out = await stepOnce(backendRef, config, tools, transcript);
+      if (rung !== null) degraded.turns = rung;
+      return out;
+    } catch (e) {
+      lastErr = e;
+      if (!(e instanceof ContextTooHeavyError)) throw e;
+    }
+  }
+  throw lastErr ?? new Error("agent: request failed");
 }
 
 // ─── Turn ─────────────────────────────────────────────────────────────────────
@@ -203,14 +249,15 @@ async function driveLoop(opts: TurnOptions, already: AgentTurn["toolCalls"]): Pr
   const maxRounds = config.agent?.maxToolRounds ?? DEFAULT_MAX_ROUNDS;
   const backendRef = { current: opts.backend ?? createChatBackend(config) };
   const toolCalls: AgentTurn["toolCalls"] = [...already];
+  const degraded: { turns: number | null } = { turns: null };
 
   for (let round = 0; round < maxRounds; round++) {
-    const s = await step(backendRef, config, tools);
+    const s = await step(backendRef, config, tools, degraded);
 
     if (s.toolCalls.length === 0) {
-      const reply = s.text.trim() || "(ไม่มีคำตอบ)";
+      const reply = withDegradedNote(s.text.trim() || "(ไม่มีคำตอบ)", degraded.turns);
       appendMessage({ role: "assistant", text: reply });
-      return { reply, toolCalls, pending: null, cappedOut: false };
+      return { reply, toolCalls, pending: null, cappedOut: false, degradedTurns: degraded.turns };
     }
 
     for (const call of s.toolCalls) {
@@ -240,7 +287,13 @@ async function driveLoop(opts: TurnOptions, already: AgentTurn["toolCalls"]): Pr
         };
         writePending(pending);
         if (s.text.trim()) appendMessage({ role: "assistant", text: s.text.trim() });
-        return { reply: s.text.trim(), toolCalls, pending, cappedOut: false };
+        return {
+          reply: s.text.trim(),
+          toolCalls,
+          pending,
+          cappedOut: false,
+          degradedTurns: degraded.turns,
+        };
       }
 
       const r = await runTool(tool, call.args, config);
@@ -251,14 +304,28 @@ async function driveLoop(opts: TurnOptions, already: AgentTurn["toolCalls"]): Pr
   // Budget spent. Ask once more with no tools available, so the model has to answer.
   let reply = "";
   try {
-    const final = await step(backendRef, config, []);
+    const final = await step(backendRef, config, [], degraded);
     reply = final.text.trim();
   } catch {
     reply = "";
   }
-  if (!reply) reply = CAPPED_FALLBACK;
+  reply = reply ? withDegradedNote(reply, degraded.turns) : CAPPED_FALLBACK;
   appendMessage({ role: "assistant", text: reply });
-  return { reply, toolCalls, pending: null, cappedOut: true };
+  return { reply, toolCalls, pending: null, cappedOut: true, degradedTurns: degraded.turns };
+}
+
+/**
+ * Say so when a turn only got through by dropping history. Silently forgetting the
+ * conversation would read as the agent being erratic; naming it lets the owner decide
+ * whether to re-state context or clear the chat.
+ */
+function withDegradedNote(reply: string, turns: number | null): string {
+  if (turns === null) return reply;
+  return (
+    reply +
+    `\n\n_(ประวัติแชทยาวเกินไป ผมตอบรอบนี้โดยใช้แค่ ${turns} ข้อความล่าสุดครับ — ` +
+    "ถ้าอยากเริ่มใหม่ให้สะอาด กดล้างแชทได้)_"
+  );
 }
 
 function findToolIn(tools: AgentTool[], name: string): AgentTool | undefined {

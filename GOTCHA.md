@@ -34,6 +34,42 @@
   AGENT_CONTRACT) is what tips it into the loop — trigger is the prompt, cure is sampling + re-sample.
   Other backends (worker/synth/infer) still use `temperature:0` and could hit this on a reasoning-heavy
   prompt — give them the same treatment if they ever return an empty `max_tokens`.
+  **⚠️ SUPERSEDED IN PART — read the next entry.** The sampling half stands. The *recovery* half above
+  (`SAMPLE_MAX=4` re-sampling, and the later `BUDGET_LADDER` that escalated the ceiling) was built on two
+  premises that later measurement **disproved**: rolls are not independent, and a bigger ceiling cannot
+  come back at all. Both were removed.
+- **🧱 THE GATEWAY KILLS ANY REQUEST AT ~125 s — so there is a hard ceiling on output tokens, and
+  `max_tokens` above it is a lie.** *Symptom:* the Discord bot answered "สวัสดี" with "gateway ตอบช้า
+  เกินไป (ลองอัตโนมัติ 2 ครั้งแล้ว)" — three times, an hour apart, while the gateway was demonstrably
+  healthy (a bare `hi` returned 200 in 1.8 s). *Cause, measured:* Cloudflare in front of the origin cuts
+  every request at ~125 s (observed 125.0 / 125.1 / 125.7 / 126.4 / 127.0 / 128.2 s), and the model
+  generates at **33–48 tok/s** on a real 21 k-token agent request — *slower the longer it runs*. So:
+  · 3072 tokens → came back 6/6, in 47–72 s · 4096 → 5/6, in 85–124 s (the 6th hit the wall)
+  · **8192 → never**. The agent's base budget was 8192 and its ladder escalated to 16384/32768 —
+  **responses that can never physically exist.** Attempt 1 aborted at our 120 s deadline, the retry asked
+  for *twice as much* and aborted again: 4 minutes to produce one apologetic sentence.
+  **Streaming does NOT escape it** — with `stream:true` exactly two SSE chunks arrive (`message_start`,
+  `content_block_start`) and then the socket is silent for the entire think, because the gateway does not
+  emit thinking tokens; the proxy sees an idle connection and cuts it identically.
+  *Fix:* `WALL_SAFE_MAX_TOKENS = 3072` clamps the ceiling (config may lower it, never raise it) and
+  `WALL_SAFE_TIMEOUT_MS = 115_000` aborts before the wall so we classify the stall instead of parsing a
+  Cloudflare HTML page. **Anything that raises `max_tokens` for the agent is a no-op at best.**
+- **The context is the lever, not the ceiling — and a spiral is near-deterministic per context.** Same
+  incident. The old code re-rolled an empty `max_tokens` at the same ceiling on the theory that each roll
+  was an independent ~25% risk. Measured on the transcript that triggered it: **0/7 with the full history,
+  0/3 at 40 items, 0/3 at 20 items** — the same context reproduces the spiral, so re-rolling only buys
+  another ~2 minutes of failing identically. Meanwhile **the last few turns answered 3/3 and a single turn
+  4/4.** *Fix:* the ceiling ladder was **inverted into a context ladder** — `CONTEXT_LADDER = [null, 3, 1]`
+  in `src/agent/loop.ts`; the backend raises a typed `ContextTooHeavyError` and the loop retries with less
+  history, telling the owner when it had to. *Note it is not simply "shorter is better":* 40 items once
+  answered where 20 did not — the spiral is content-dependent, so trim toward the recent turns rather than
+  assuming a size threshold. **Beware the failure mode this created once:** a rung that trims to the same
+  transcript as the previous one must be **skipped, not treated as the end of the ladder** — stopping there
+  meant a short conversation never reached the single-turn rescue and failed outright (caught live).
+- **A conversation degrades itself.** Every failed turn leaves the owner's message in
+  `conversation.jsonl` with no assistant reply, so the next attempt carries one more orphan and a bigger
+  context. Three failed "สวัสดี" in a row is a *self-reinforcing* state, not three unlucky rolls.
+  If the agent has started failing consistently, look at the transcript before suspecting the gateway.
 - **A code fix does NOT reach a running daemon until it restarts.** The owner kept seeing the think-loop
   error *after* the fix was pushed because their `ui`/Discord bot process was still running the old
   `protocol.ts` in memory. `config.json` is re-read every tick (hot), but **source is loaded once at

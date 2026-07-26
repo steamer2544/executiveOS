@@ -102,6 +102,12 @@ export interface AgentTurn {
   pending: PendingWrite | null;
   /** True when the turn ended because it hit maxToolRounds. */
   cappedOut: boolean;
+  /**
+   * Set when the turn only completed after dropping history (the model was spending its
+   * whole budget thinking): the number of recent user turns it fell back to. `null` when
+   * the full configured window was used.
+   */
+  degradedTurns?: number | null;
 }
 
 // ─── Backend ──────────────────────────────────────────────────────────────────

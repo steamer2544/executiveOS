@@ -16,10 +16,11 @@ import {
   encodeJson,
   parseNativeStep,
   isToolsUnsupported,
+  ContextTooHeavyError,
 } from "./protocol.js";
 import { resolveSafePath, resolveRepo, humanDuration, findTool, READ_TOOLS, WRITE_TOOLS, ALL_TOOLS } from "./tools.js";
-import { runTurn, resumeTurn } from "./loop.js";
-import { readConversation, buildTranscript, readPending, AGENT_CONTRACT, clearConversation, readSessionTrust } from "./session.js";
+import { runTurn, resumeTurn, CONTEXT_LADDER } from "./loop.js";
+import { readConversation, buildTranscript, trimTranscript, readPending, AGENT_CONTRACT, clearConversation, readSessionTrust, appendMessage } from "./session.js";
 import { loadConfig, defaultConfig, trustTool, NEVER_TRUSTABLE } from "../config.js";
 import { configPath } from "../paths.js";
 
@@ -417,6 +418,114 @@ describe("runTurn", () => {
     });
   }
 
+  // The recovery for a context the model spirals on. Live measurement: the gateway kills
+  // any request at ~125 s and the model runs at 33–48 tok/s, so a bigger ceiling can never
+  // come back — but the same question answered 4/4 once the history was dropped.
+  describe("context ladder (spiral recovery)", () => {
+    /** Spirals while the transcript still has more than `answerAt` user turns. */
+    function spiralUntil(answerAt: number, reply = "ตอบได้แล้วครับ") {
+      const widths: number[] = [];
+      const backend: ChatBackend = {
+        name: "spiral",
+        protocol: "native",
+        async step(input) {
+          const turns = input.transcript.filter((t) => t.kind === "user").length;
+          widths.push(turns);
+          if (turns > answerAt) throw new ContextTooHeavyError(3072);
+          return textStep(reply);
+        },
+      };
+      return { backend, widths };
+    }
+
+    function seedHistory(turns: number): void {
+      for (let i = 0; i < turns; i++) {
+        appendMessage({ role: "user", text: `เก่า ${i}` });
+        appendMessage({ role: "assistant", text: `ตอบ ${i}` });
+      }
+    }
+
+    it("shrinks the context and answers, instead of failing the turn", async () => {
+      seedHistory(10);
+      const { backend, widths } = spiralUntil(3);
+      const turn = await runTurn("สวัสดี", { config: loadConfig(), backend, tools: FAKE_TOOLS });
+
+      expect(turn.reply).toContain("ตอบได้แล้วครับ");
+      // It tried the full window first, then a smaller one — never a bigger one.
+      expect(widths.length).toBeGreaterThan(1);
+      expect(widths[widths.length - 1]).toBeLessThan(widths[0]!);
+    });
+
+    it("falls all the way back to a single turn when nothing else works", async () => {
+      seedHistory(10);
+      const { backend, widths } = spiralUntil(1);
+      const turn = await runTurn("สวัสดี", { config: loadConfig(), backend, tools: FAKE_TOOLS });
+
+      expect(turn.reply).toContain("ตอบได้แล้วครับ");
+      expect(widths[widths.length - 1]).toBe(1);
+    });
+
+    it("tells the owner it dropped history rather than silently forgetting", async () => {
+      seedHistory(10);
+      const { backend } = spiralUntil(3);
+      const turn = await runTurn("สวัสดี", { config: loadConfig(), backend, tools: FAKE_TOOLS });
+
+      expect(turn.degradedTurns).toBe(3);
+      expect(turn.reply).toContain("ประวัติแชท");
+      // …and the note is persisted, so the dashboard and Discord both show it.
+      expect(readConversation().at(-1)!.text).toContain("ประวัติแชท");
+    });
+
+    it("says nothing about history when the full window worked", async () => {
+      seedHistory(3);
+      const backend = mockBackend([textStep("ปกติครับ")]);
+      const turn = await runTurn("สวัสดี", { config: loadConfig(), backend, tools: FAKE_TOOLS });
+
+      expect(turn.degradedTurns).toBeNull();
+      expect(turn.reply).toBe("ปกติครับ");
+    });
+
+    it("gives up when even one turn spirals — and does not retry forever", async () => {
+      seedHistory(10);
+      const { backend, widths } = spiralUntil(0);
+      await expect(
+        runTurn("สวัสดี", { config: loadConfig(), backend, tools: FAKE_TOOLS })
+      ).rejects.toBeInstanceOf(ContextTooHeavyError);
+      expect(widths.length).toBeLessThanOrEqual(CONTEXT_LADDER.length);
+    });
+
+    it("still reaches the smallest rung when the history is already short", async () => {
+      // Regression: a 2-turn conversation makes the middle rung identical to the full
+      // window. Stopping there (instead of skipping it) meant the single-turn rescue never
+      // ran, and a short chat that spiralled failed outright — seen live.
+      seedHistory(1);
+      const { backend, widths } = spiralUntil(1);
+      const turn = await runTurn("สวัสดี", { config: loadConfig(), backend, tools: FAKE_TOOLS });
+
+      expect(turn.reply).toContain("ตอบได้แล้วครับ");
+      expect(widths[widths.length - 1]).toBe(1);
+      // The redundant rung is skipped, not re-sent: no two attempts of the same width.
+      expect(new Set(widths).size).toBe(widths.length);
+    });
+
+    it("does not shrink for an ordinary error — only for a spent budget", async () => {
+      seedHistory(10);
+      let calls = 0;
+      const backend: ChatBackend = {
+        name: "boom",
+        protocol: "native",
+        async step() {
+          calls++;
+          throw new Error("agent HTTP 401: unauthorized");
+        },
+      };
+      await expect(
+        runTurn("สวัสดี", { config: loadConfig(), backend, tools: FAKE_TOOLS })
+      ).rejects.toThrow(/401/);
+      expect(calls).toBe(1);
+    });
+  });
+
   it("feeds the tool result back before the next model call", async () => {
     const backend = mockBackend([callStep("get_state"), textStep("done")]);
     await runTurn("hi", { config: loadConfig(), backend, tools: FAKE_TOOLS });
@@ -743,6 +852,77 @@ describe("buildTranscript", () => {
       10
     );
     expect((t[1] as any).results[0].ok).toBe(false);
+  });
+});
+
+// The recovery lever for a model that spends its whole budget thinking. Measured on the
+// transcript that triggered it: full history answered 0/7, the last few turns 3/3, a
+// single turn 4/4 — so shrinking context is the only thing that moves, and it must never
+// hand the model a tool_result whose tool_use was cut away.
+describe("trimTranscript", () => {
+  const conv = [
+    { id: "u1", ts: "", role: "user" as const, text: "one" },
+    { id: "t1", ts: "", role: "tool" as const, text: "r1", toolName: "get_state", toolOk: true },
+    { id: "a1", ts: "", role: "assistant" as const, text: "a1" },
+    { id: "u2", ts: "", role: "user" as const, text: "two" },
+    { id: "t2", ts: "", role: "tool" as const, text: "r2", toolName: "grep", toolOk: true },
+    { id: "a2", ts: "", role: "assistant" as const, text: "a2" },
+    { id: "u3", ts: "", role: "user" as const, text: "three" },
+  ];
+
+  it("keeps only the last N user turns and everything after them", () => {
+    const t = trimTranscript(buildTranscript(conv, 20), 1);
+    expect(t).toEqual([{ kind: "user", text: "three" }]);
+  });
+
+  it("keeps the tool exchanges that belong to the kept turns", () => {
+    const t = trimTranscript(buildTranscript(conv, 20), 2);
+    expect(t[0]).toEqual({ kind: "user", text: "two" });
+    expect(t.some((i) => i.kind === "tool_results")).toBe(true);
+  });
+
+  it("never leaves a tool_result without its tool_use — at every cut depth", () => {
+    // A deeper fixture than `conv`: every turn carries a tool exchange, so a cut made by
+    // raw item count (rather than at a user boundary) really does land between a tool_use
+    // and its tool_result. With the shallow fixture this test passed against a broken
+    // implementation, which is the whole failure mode GOTCHA §4 exists to catch.
+    const deep = [1, 2, 3, 4, 5].flatMap((i) => [
+      { id: `u${i}`, ts: "", role: "user" as const, text: `ถาม ${i}` },
+      { id: `t${i}`, ts: "", role: "tool" as const, text: `ผล ${i}`, toolName: "grep", toolOk: true },
+      { id: `a${i}`, ts: "", role: "assistant" as const, text: `ตอบ ${i}` },
+    ]);
+    const full = buildTranscript(deep, 20);
+
+    for (let n = 1; n <= 4; n++) {
+      const t = trimTranscript(full, n);
+      // The invariant that makes orphaning impossible: a trim always starts at a user turn.
+      expect(t[0]!.kind).toBe("user");
+      t.forEach((item, i) => {
+        if (item.kind !== "tool_results") return;
+        const prev = t[i - 1];
+        expect(prev?.kind).toBe("assistant");
+        const ids = (prev as { toolCalls: Array<{ id: string }> }).toolCalls.map((c) => c.id);
+        for (const r of item.results) expect(ids).toContain(r.id);
+      });
+    }
+  });
+
+  it("returns the transcript untouched when it is already short enough", () => {
+    const full = buildTranscript(conv, 20);
+    expect(trimTranscript(full, 99)).toBe(full);
+  });
+
+  it("shrinks monotonically — a smaller rung is never larger", () => {
+    const full = buildTranscript(conv, 20);
+    expect(trimTranscript(full, 1).length).toBeLessThanOrEqual(trimTranscript(full, 2).length);
+  });
+
+  it("the ladder only ever shrinks, and ends at a single turn", () => {
+    // If this ever grows a rung that raises the ceiling again, the measurement that killed
+    // that idea (a bigger response cannot come back before the gateway wall) is being undone.
+    const rungs = CONTEXT_LADDER.filter((r): r is number => r !== null);
+    expect(rungs).toEqual([...rungs].sort((a, b) => b - a));
+    expect(rungs[rungs.length - 1]).toBe(1);
   });
 });
 

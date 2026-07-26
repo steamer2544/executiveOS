@@ -9,6 +9,10 @@ import {
   isTransientNetworkError,
   isEmptyMaxTokens,
   chatErrorMessage,
+  ContextTooHeavyError,
+  WALL_SAFE_MAX_TOKENS,
+  GATEWAY_WALL_MS,
+  effectiveTimeoutMs,
 } from "./protocol.js";
 import type { TranscriptItem } from "./types.js";
 
@@ -152,71 +156,65 @@ describe("AnthropicChatBackend.step — retry once on a transient failure", () =
     expect(calls).toBe(1);
   });
 
-  it("re-samples once on an empty max_tokens response (Qwen think-loop) then succeeds", async () => {
+  // An exhausted budget is raised as a TYPED error, not retried. Measured: the gateway
+  // kills any request at ~125 s and the model generates at 33–48 tok/s, so a bigger
+  // ceiling can never come back; and the spiral is near-deterministic per context (0/7,
+  // 0/3, 0/3 on the same transcripts), so re-rolling only burns another ~2 minutes.
+  it("throws ContextTooHeavyError on an empty max_tokens — without retrying", async () => {
     let calls = 0;
     globalThis.fetch = (async () => {
       calls++;
-      if (calls === 1) {
-        // stopped at max_tokens with no usable content — the think-loop casualty
-        return {
-          ok: true, status: 200,
-          json: async () => ({ content: [], stop_reason: "max_tokens" }),
-          text: async () => "",
-        } as unknown as Response;
-      }
-      return okResponse("answered on the second roll");
-    }) as unknown as typeof fetch;
-
-    const out = await makeBackend().step({ system: "s", transcript: HELLO, tools: [] });
-    expect(calls).toBe(2);
-    expect(out.text).toBe("answered on the second roll");
-  });
-
-  it("re-samples an empty max_tokens up to 3 times then succeeds on the 4th", async () => {
-    let calls = 0;
-    const empty = { ok: true, status: 200, json: async () => ({ content: [], stop_reason: "max_tokens" }), text: async () => "" } as unknown as Response;
-    globalThis.fetch = (async () => {
-      calls++;
-      return calls < 4 ? empty : okResponse("finally");
-    }) as unknown as typeof fetch;
-
-    const out = await makeBackend().step({ system: "s", transcript: HELLO, tools: [] });
-    expect(calls).toBe(4);
-    expect(out.text).toBe("finally");
-  });
-
-  it("gives up after SAMPLE_MAX empty max_tokens and throws the budget error", async () => {
-    let calls = 0;
-    globalThis.fetch = (async () => {
-      calls++;
-      return { ok: true, status: 200, json: async () => ({ content: [], stop_reason: "max_tokens" }), text: async () => "" } as unknown as Response;
-    }) as unknown as typeof fetch;
-
-    await expect(makeBackend().step({ system: "s", transcript: HELLO, tools: [] })).rejects.toThrow(
-      /max_tokens/,
-    );
-    expect(calls).toBe(4); // SAMPLE_MAX
-  });
-
-  // Phase 40 follow-up: re-sampling at the SAME ceiling was measured to be useless for an
-  // exhausted budget — all four attempts came back with output_tokens EXACTLY 8192. Each
-  // retry must now also RAISE the ceiling.
-  it("raises max_tokens on each empty-max_tokens retry (1x, 2x, 4x, 4x)", async () => {
-    const budgets: number[] = [];
-    globalThis.fetch = (async (_url: string, init: { body: string }) => {
-      budgets.push((JSON.parse(init.body) as { max_tokens: number }).max_tokens);
       return { ok: true, status: 200, json: async () => ({ content: [], stop_reason: "max_tokens" }), text: async () => "" } as unknown as Response;
     }) as unknown as typeof fetch;
 
     await expect(
       makeBackend().step({ system: "s", transcript: HELLO, tools: [] })
-    ).rejects.toThrow(/max_tokens/);
-
-    const base = budgets[0]!;
-    expect(budgets).toEqual([base, base * 2, base * 4, base * 4]);
+    ).rejects.toBeInstanceOf(ContextTooHeavyError);
+    expect(calls).toBe(1);
   });
 
-  it("a transient retry does NOT escalate the budget (only an exhausted one does)", async () => {
+  it("never asks for more output tokens than the gateway can return before its wall", async () => {
+    const budgets: number[] = [];
+    globalThis.fetch = (async (_url: string, init: { body: string }) => {
+      budgets.push((JSON.parse(init.body) as { max_tokens: number }).max_tokens);
+      return okResponse("ok");
+    }) as unknown as typeof fetch;
+
+    // Ask for far more than the wire can deliver; the clamp must win.
+    await new AnthropicChatBackend({
+      baseUrl: "https://gw.test",
+      model: "m",
+      apiKey: "k",
+      maxTokens: 32768,
+      timeoutMs: 50,
+      protocol: "native",
+    }).step({ system: "s", transcript: HELLO, tools: [] });
+
+    expect(budgets).toEqual([WALL_SAFE_MAX_TOKENS]);
+    expect(WALL_SAFE_MAX_TOKENS).toBeLessThan(GATEWAY_WALL_MS / 1000 * 48);
+  });
+
+  it("a configured ceiling BELOW the clamp is respected (the clamp only lowers)", async () => {
+    const budgets: number[] = [];
+    globalThis.fetch = (async (_url: string, init: { body: string }) => {
+      budgets.push((JSON.parse(init.body) as { max_tokens: number }).max_tokens);
+      return okResponse("ok");
+    }) as unknown as typeof fetch;
+
+    await new AnthropicChatBackend({
+      baseUrl: "https://gw.test", model: "m", apiKey: "k",
+      maxTokens: 512, timeoutMs: 50, protocol: "native",
+    }).step({ system: "s", transcript: HELLO, tools: [] });
+
+    expect(budgets).toEqual([512]);
+  });
+
+  it("aborts before the gateway's wall, so a stall is ours to classify", () => {
+    expect(effectiveTimeoutMs(120_000)).toBeLessThan(GATEWAY_WALL_MS);
+    expect(effectiveTimeoutMs(30_000)).toBe(30_000); // never lengthens a shorter deadline
+  });
+
+  it("a transient retry re-sends the SAME budget (there is no headroom to buy)", async () => {
     const budgets: number[] = [];
     let calls = 0;
     globalThis.fetch = (async (_url: string, init: { body: string }) => {
@@ -228,20 +226,14 @@ describe("AnthropicChatBackend.step — retry once on a transient failure", () =
 
     const out = await makeBackend().step({ system: "s", transcript: HELLO, tools: [] });
     expect(out.text).toBe("recovered");
-    // Attempt 2 is 2x by the ladder — the ladder is indexed by attempt, and a transient
-    // failure consumes an attempt. That is deliberate: extra headroom never hurts a call
-    // that was going to answer anyway, and keeping one ladder keeps the accounting honest.
-    expect(budgets.length).toBe(2);
+    expect(budgets).toEqual([budgets[0]!, budgets[0]!]);
   });
 
-  it("the budget error no longer tells the owner to raise a setting step() already raised", async () => {
-    globalThis.fetch = (async () => (
-      { ok: true, status: 200, json: async () => ({ content: [], stop_reason: "max_tokens" }), text: async () => "" } as unknown as Response
-    )) as unknown as typeof fetch;
-
-    await expect(
-      makeBackend().step({ system: "s", transcript: HELLO, tools: [] })
-    ).rejects.toThrow(/retrying with more headroom|smaller, or one step at a time/);
+  it("names a spent thinking budget honestly — not as a slow gateway or a crash", () => {
+    const msg = chatErrorMessage(new ContextTooHeavyError(3072));
+    expect(msg).toContain("คิดจนหมดโควตา");
+    expect(msg).not.toContain("พัง:"); // not the generic crash branch
+    expect(msg).not.toContain("ตอบช้าเกินไป"); // and not mistaken for a timeout
   });
 
   it("retries once on an unparseable body (transient gateway hiccup) then succeeds", async () => {

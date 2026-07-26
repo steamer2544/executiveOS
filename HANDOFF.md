@@ -87,6 +87,19 @@
 > (sent vs answered per source) after Phase 36 has run a couple of weeks — that measurement gates the
 > `rules+llm` nudge dial.
 >
+> **🔴 SUPERSEDED — the budget ladder described two paragraphs below was REMOVED.** A later session
+> measured the thing neither earlier session checked: **the gateway kills every request at ~125 s**
+> (Cloudflare, 6 observations 125.0–128.2 s) and the model runs at **33–48 tok/s**, so **~4,000 output
+> tokens is the physical ceiling** — the ladder's 16384/32768 rungs asked for responses that *can never
+> come back*, and even the 8192 base was over the wall. Streaming does not help (the gateway emits no
+> thinking tokens, so the socket is idle and the proxy cuts it anyway). The "4/4 at 32768" reading below
+> was a misinterpretation: those rolls just didn't spiral. Also disproved: the spiral is **near-
+> deterministic per context** (0/7, 0/3, 0/3 on the same transcripts) — not an independent per-roll risk —
+> while shrinking the context answered 3/3 and 4/4. **The ceiling ladder is now a CONTEXT ladder**
+> (`WALL_SAFE_MAX_TOKENS`/`WALL_SAFE_TIMEOUT_MS` clamps + `ContextTooHeavyError` + `CONTEXT_LADDER =
+> [null, 3, 1]`). See CLAUDE.md "Agent context ladder" and GOTCHA §1. Keep reading below only for the
+> history of how the wrong conclusion was reached.
+>
 > **Agent budget ladder (this session, `/debug-mantra`) — a SECOND, different `max_tokens` failure.** The
 > bot answered *"เป็นยังไงบ้าง"* correctly from real state, then failed *"คุณสร้างโปรแกรมเครื่องคิดเลข
 > ง่ายๆ ไว้บนเดสทอปผมได้ไหม"* with *"used its entire token budget thinking"*. **This is NOT the

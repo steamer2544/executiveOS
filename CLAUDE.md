@@ -1258,6 +1258,43 @@ docs/scopes/           # per-phase specs (the contract handed to the implementer
   explicit assertion that the exclusion cannot hide a backend that fails to compute it. `GOTCHA.md` §1
   gained the full diagnosis. **The owner's running bot must be RESTARTED to pick this up** — the ladder
   lives in source, and only `config.json` is hot-reloaded.
+- **Agent context ladder — the gateway's wall clock (`/debug-mantra`, this session)** — a **third**
+  `max_tokens`-shaped failure, and the one that invalidates the previous two fixes' recovery half. The
+  Discord bot answered *"สวัสดี"* with *"gateway ตอบช้าเกินไป (ลองอัตโนมัติ 2 ครั้งแล้ว)"* **3/3 times,
+  an hour apart** — while the gateway was healthy (bare `hi` → 200 in 1.8 s). **Root cause: Cloudflare
+  cuts every request at ~125 s** (measured 6× : 125.0–128.2 s) and the model generates at **33–48 tok/s**
+  on a real 21 k-token agent request, so **~4,000 output tokens is the physical ceiling**. The base
+  budget was 8192 and `BUDGET_LADDER` escalated retries to 16384/32768 — **responses that can never come
+  back**; attempt 1 aborted at 120 s, the retry asked for twice as much and aborted again (≈4 min → one
+  apologetic sentence, matching the owner's 19:33→19:38 timestamps exactly). **Streaming does not escape
+  it:** with `stream:true` exactly two SSE chunks arrive (`message_start`, `content_block_start`) and the
+  socket is then idle for the whole think — the gateway does not emit thinking tokens — so the proxy cuts
+  it the same way. **The previous session's "4/4 at 32768" was misread**: those rolls simply didn't
+  spiral (they finished at ~2 k tokens); the higher ceiling never helped a spiralling run and could not.
+  **Second measured correction: the spiral is near-deterministic per context, not an independent
+  ~25% roll** — the owner's transcript failed **0/7** full, **0/3** at 40 items, **0/3** at 20 items,
+  while the last few turns answered **3/3** and a single turn **4/4**. So re-sampling at the same ceiling
+  (`SAMPLE_MAX=4`) could only burn another ~2 minutes failing identically. **Fix — the ceiling ladder is
+  inverted into a context ladder:** `WALL_SAFE_MAX_TOKENS = 3072` + `WALL_SAFE_TIMEOUT_MS = 115_000`
+  clamp what is asked for (config may lower, never raise); an exhausted budget is raised as a typed
+  `ContextTooHeavyError` (never retried in place); `CONTEXT_LADDER = [null, 3, 1]` in `loop.ts` retries
+  with progressively less history via a new pure `trimTranscript()` (cuts only at a `kind:"user"` item,
+  so a `tool_result` can never be orphaned from its `tool_use`); a successful degraded turn **says so**
+  (`AgentTurn.degradedTurns` + a Thai note appended to the reply) rather than silently forgetting; and
+  `chatErrorMessage` names a spent thinking budget honestly instead of blaming gateway latency.
+  **Also diagnosed: a conversation degrades itself** — each failed turn leaves an orphan user message, so
+  three failed "สวัสดี" is a self-reinforcing state; the owner's log was cleared (backed up first).
+  784 passing tests (+13). **Sabotage-checked 5/5** (remove the clamp · retry the spent budget · flatten
+  the ladder · trim by raw item count · `break` instead of `continue`) — each fails exactly the tests
+  written to prevent it. One of those sabotages exposed a **vacuous test of my own** (the orphan check
+  passed against a broken trim because the shallow fixture hit the early-return path) — the fixture was
+  deepened until it bites. **Live-validated:** the exact transcript that failed 0/7 now answers 4/4 in
+  30–44 s (degrading to 3 turns and saying so); a clean conversation is unaffected (2.8–24 s,
+  `degradedTurns: null`); and the real runtime answers "สวัสดี" with true state. **A live run also caught
+  a real bug in this very fix** — a redundant rung `break`ing the ladder instead of skipping it meant a
+  short conversation never reached the single-turn rescue; fixed + regression-tested. **The owner's bot
+  must be RESTARTED** — this lives in source, only `config.json` is hot-reloaded. Files:
+  `src/agent/{protocol,loop,session,types}.ts` (+ tests), `GOTCHA.md` §1.
 - **Loop complete (manual trigger):** `auto --apply` runs the whole chain in one command; the human
   reviews/merges the `executive/change-<id>` branch.
 

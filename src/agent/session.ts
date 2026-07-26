@@ -168,6 +168,27 @@ export function buildTranscript(messages: ChatMessage[], historyTurns: number): 
   return out;
 }
 
+/**
+ * Keep only the last `userTurns` user messages and everything after them.
+ *
+ * The recovery lever when the model spirals on a heavy context: measured on the
+ * transcript that triggered it, the full 20-turn history answered 0/7 while the last
+ * few turns answered 3/3 and a single turn 4/4.
+ *
+ * Cutting at a `kind: "user"` item can never orphan a `tool_results` from its
+ * `tool_use` — `buildTranscript` always emits that pair adjacently, and the item we cut
+ * at is a user message, so any surviving pair is wholly inside the slice.
+ */
+export function trimTranscript(items: TranscriptItem[], userTurns: number): TranscriptItem[] {
+  if (userTurns <= 0) return [];
+  const userIdx: number[] = [];
+  items.forEach((it, i) => {
+    if (it.kind === "user") userIdx.push(i);
+  });
+  if (userIdx.length <= userTurns) return items;
+  return items.slice(userIdx[userIdx.length - userTurns]!);
+}
+
 // ─── Pending write ────────────────────────────────────────────────────────────
 
 export function readPending(): PendingWrite | null {
