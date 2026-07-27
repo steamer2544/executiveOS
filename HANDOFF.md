@@ -108,8 +108,16 @@
 >    (see the red block above) and the only snapshot on disk, `config.json.pre-sqlite` (2026-07-25), is
 >    **missing the entire `agent` and `advisor` blocks** — restoring it would not bring back
 >    `discord.ownerId`, `repoSearchRoots` or `fileOutput.dirs`. Small job, unbounded downside.
+>    **📄 SCOPE IS WRITTEN AND READY TO DELEGATE: `docs/scopes/phase-43-config-backup.md`.**
 > 2. **Candidate A — surface `State.patterns`** (§6). Cheap, read-only, closes the loop on numbers the
 >    Planner and Advisor already reason over but the owner cannot see.
+>    **📄 SCOPE IS WRITTEN AND READY TO DELEGATE: `docs/scopes/phase-44-surface-patterns.md`.**
+>
+> **43 and 44 touch DISJOINT files on purpose** (43: `config.ts` + `paths.ts`; 44: `report/*` +
+> `ui/page.ts`), so they can be delegated **in parallel** — which matters, because a parallel run whose
+> `bun run typecheck` sees another job's half-edited file will try to "fix" files it was told not to
+> touch. Both scopes already carry the standard delegation guards in their header (read the spec only,
+> never print full test output, keep the report under 20 lines).
 > 3. **Candidate C — `/scrutinize` the dashboard's visual design** (§6, new). Needs a scope doc first;
 >    the file is one 988-line template literal, so read GOTCHA §8 before touching it.
 > 4. **Candidate B — derive the OCR language from the window title** (§6).
