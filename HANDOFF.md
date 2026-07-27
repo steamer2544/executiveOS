@@ -97,8 +97,33 @@
 > that touched config/fixtures: `git grep -nE "MTUz|sk-|xox[baprs]-|-----BEGIN|Bearer [A-Za-z0-9._-]{20}"
 > $(git rev-list --all)` (expect only the two `agent.test.ts` fixtures).
 >
-> **▶️ NEXT UP — the planned roadmap is EMPTY** (Phase 40 was the last promised item; Phase 41 and 42
-> came from live failures and live data, not a list). Nothing is pending.
+> **▶️ NEXT UP — the queue, in the order it is worth doing** (measured 2026-07-27, after Phase 42.1).
+> The *planned* roadmap ended at Phase 40; everything since came from live failures and live data, and
+> so does this list. Full detail for each is in **§6**.
+>
+> 0. **Restart `ui` if it has been running since before the last pull.** Not a task, a habit — code is
+>    loaded once at process start, only `config.json` is hot-reloaded. On 07-27 the daemon was found
+>    serving :4317 with Phase-42 code, 30 min after 42.1 landed.
+> 1. **Back up `.executive/config.json` on every write.** The one real risk left. It was destroyed once
+>    (see the red block above) and the only snapshot on disk, `config.json.pre-sqlite` (2026-07-25), is
+>    **missing the entire `agent` and `advisor` blocks** — restoring it would not bring back
+>    `discord.ownerId`, `repoSearchRoots` or `fileOutput.dirs`. Small job, unbounded downside.
+> 2. **Candidate A — surface `State.patterns`** (§6). Cheap, read-only, closes the loop on numbers the
+>    Planner and Advisor already reason over but the owner cannot see.
+> 3. **Candidate C — `/scrutinize` the dashboard's visual design** (§6, new). Needs a scope doc first;
+>    the file is one 988-line template literal, so read GOTCHA §8 before touching it.
+> 4. **Candidate B — derive the OCR language from the window title** (§6).
+> 5. **Then wait and read `nudges.jsonl`.** That measurement still gates the `rules+llm` dial and cannot
+>    be rushed — see the caveats immediately below, which change how to read it.
+>
+> **📊 The nudge baseline, as actually measured on 2026-07-27** (not a plan — the current file):
+> `sent 6 · answered 5 · expired 1 · suppressed 8`. **All 5 `answered` records predate Phase 42 and
+> carry no `latencyMs`** — they are the old blunt signal and are unusable for the ratio. The usable
+> sample is **n = 1** (one `expired`, 41.9 min). The clock genuinely starts now.
+> **And "per source" is vacuous:** every nudge ever sent is `source: "plan"` (`long_session` ×3,
+> `grinding_on_file` ×2, `checkpoint_work` ×1) — autopilot/executor/worker have never fired one. When
+> the sample is big enough, **group by the rule kind inside `key`, not by `source`**, or the breakdown
+> will have exactly one bucket.
 >
 > **▶️ PHASE 42 (this session) — read the nudge log, found two defects, fixed both.** Details in the
 > `CLAUDE.md` Phase 42 entry; the load-bearing facts:
@@ -612,6 +637,52 @@ list from it — Thai characters in the title → `tha+eng`, otherwise `eng` —
 `config.screen.ocr.languages` stays the manual override. Everything needed is in `src/state/types.ts`
 (`currentWindow`) and `src/screen/screen-infer.ts` (which already reads the config block).
 
+### 🔴 Back up `.executive/config.json` — the one real risk left
+Promoted out of "deferred" on 2026-07-27, because the situation is worse than that section said. The
+file is gitignored, hand-edited, holds the **only** copy of `discord.ownerId`, `agent.repoSearchRoots`,
+`agent.fileOutput.dirs`, the OCR engine choice and every autonomy toggle — and it **was destroyed once**
+(see the red block at the top). The claim "there is no backup" is now half-true in the worse direction:
+`.executive/config.json.pre-sqlite` **does** exist, dated 2026-07-25, and a `diff` against the live file
+shows it is **missing the entire `agent` and `advisor` blocks**. Restoring it would silently produce a
+runtime with no Discord owner, no repo discovery and no file-output dirs — a backup that looks like
+insurance and is not.
+
+The `execRoot()` guardrail (throws under `NODE_ENV=test` when `EXECUTIVE_HOME` is unset) stops the
+specific cause; it creates nothing. What is wanted is small: on every `config.json` write —
+`updateTranscribeConfig` / `updateScreenConfig` / `updateAutonomyConfig` all already go through the
+atomic temp+rename path in `src/fs-atomic.ts` — copy the previous contents to
+`.executive/config-backups/config-<ts>.json` first, keep the last N, and never let a backup failure
+block the write. Rotation matters: a single `.bak` overwritten by the next bad write is how the
+existing snapshot became useless.
+
+### ⏭️ Candidate C — `/scrutinize` the dashboard's visual design
+**Not yet scoped — write a scope doc first, then run the normal workflow.** The dashboard is the face
+of the product and has never had a design pass; it grew a card per phase. What a reviewer starts from,
+measured 2026-07-27:
+
+- `src/ui/page.ts` is **988 lines**, and the page is **one big template literal** (inline CSS + inline
+  JS, self-contained by design — no external resources, served on 127.0.0.1). **Read `GOTCHA.md` §8
+  before editing it:** every regex backslash inside that literal is eaten at emit time, and `bun test`
+  stays green while the whole inline script dies with `Invalid regular expression`. The opt-in
+  `bun run test:e2e:chat` (real Chromium, no gateway needed) is what catches that class of breakage —
+  run it after any page edit.
+- **12 cards in one 920px single-column grid**, and the DOM order is the finding: `chat`, `listen`,
+  **`settings` (~80 lines tall)**, **`autonomy`**, **`fileOutput`**, `proposals` all come *before*
+  `Now`, `Recommended action` and `Needs you`. The owner scrolls past ~190 lines of configuration to
+  reach "what needs me" — which is the entire point of the product. Information architecture is the
+  first thing to question, ahead of any styling.
+- Theming is **9 CSS custom properties** (`--bg --card --fg --muted --line --accent --act --ask
+  --danger`) plus exactly **one** `@media (prefers-color-scheme: light)` override. There are **no
+  width breakpoints** — only two `flex-wrap` spots — so narrow windows are untested.
+- Constraints that must survive any redesign: no external fonts/CSS/JS (the page must keep working
+  offline and must not phone out), the `🔴 Listening…` / `🔴 reading screen` indicators stay
+  **visible** (Phase 23/29 ethics, non-negotiable), and `autopilot.apply` stays **off** the page
+  (Phase 34 — arming it is a deliberate `config.json` edit, and this page is unauthenticated).
+
+Do the intent pass properly here: the honest question is not "which colours" but **"what should this
+page show when the owner opens it for five seconds?"** — Phase 35 was built because the dashboard was
+pull-only and went unused, and the answer may be that most of these cards belong behind a toggle.
+
 ### Needs the owner (to go live — code is complete)
 Transcription now has **three working backends** (Phase 25); pick one in the dashboard **Settings** card:
 - **Groq** (`whisper-api` preset) — free tier ~2000 req/day. Put the key in `.env` under
@@ -633,9 +704,16 @@ Transcription now has **three working backends** (Phase 25); pick one in the das
   would add a dependency and a schema layer for nothing. Revisit only if a second table appears.
 - **A db→jsonl exporter** — `migrate-events` is deliberately one-way. Nothing needs the reverse yet, but
   it is the gap that makes a rollback to `"jsonl"` lossy for anything appended since the flip.
-- **A backup of `.executive/config.json`** — it is gitignored, hand-edited, holds the only copy of
-  `discord.ownerId`/`repoSearchRoots`/OCR settings, and **was destroyed once in this session with no way
-  to recover it**. The `execRoot()` guardrail stops the specific cause; it does not create a backup.
+- **A backup of `.executive/config.json`** — **no longer deferred.** Promoted to a real item above
+  ("🔴 Back up `.executive/config.json`") after a 07-27 check found the existing `config.json.pre-sqlite`
+  snapshot is missing the whole `agent` + `advisor` blocks, i.e. worse than no backup because it looks
+  like one.
+- **A real reply signal for nudges** (found by the Phase 42.1 `/scrutinize`) — `answered` currently means
+  "the owner sent *any* message within 30 min", a proxy. Discord delivers the unambiguous version:
+  `message_reference` on a real reply, which `handleMessageCreate` (`src/channel/discord.ts`) drops — it
+  keeps only `content`. Pairing it would also need `Channel.send` to return the message id (today it
+  returns `{ok, error?}`) and the id stored on the `sent` record. Worth doing only if the ratio turns out
+  ambiguous once there is a real sample.
 - **`rules.md` / `planner.md`** — the vision's remaining 4-layer artifacts (editable decision rules /
   long-term goals). Speculative; rules already live as code in `src/planner/rules.ts`.
 - **Wiring approved proposals to real execution** — **partly done (Phase 27):** approving an *executable
