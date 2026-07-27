@@ -1360,6 +1360,70 @@ docs/scopes/           # per-phase specs (the contract handed to the implementer
   correctly (`git reset --hard` was refused) — `git stash` is "ask", by design, and my harness
   answered for the owner. Files: `src/agent/{protocol,loop,session,tools,types}.ts`,
   `src/{config,index}.ts`, `src/channel/{discord,types}.ts`, `src/ui/{page,server}.ts` (+ tests).
+- **Phase 42 — DONE** (architect scope + qwen impl + architect review/fixes/live-validation, this
+  session): **Nudge quality + a readable answer signal.** The planned roadmap was empty, so this came
+  from **reading the real `nudges.jsonl`** (18 records / 5 sent / 3 days of live Phase 36) rather than
+  from a list — the Phase 33 method. It found two defects.
+  **(1) The nudge sentence was built from an INTERNAL LABEL.** `digest.ts:137` sets
+  `summary = "Planner needs your call: " + a.kind` (an internal dedup key) while `detail = a.reason`
+  is the human sentence — and `compose.ts` sent the **summary** as the task (`งานที่ต้องตัดสินใจ:`)
+  and demoted `detail` to a footnote. **Inverted.** Measured consequence: the model reads "needs your
+  call" as a *telephone call*, so **2 of 4 LLM-composed nudges told the owner to phone a code module**
+  (*"คุณต้องโทรหา Planner สำหรับ long_session"*, *"Planner ต้องการการติดต่อกลับจากคุณ"*), the
+  deterministic fallback shipped the raw `ActionKind` (*"Planner needs your call: grinding_on_file —
+  state\builder.ts saved 17 times…"*), and **the one good nudge was the one where the model ignored
+  `summary` and used `detail`.** Fix: pure exported `nudgeSubject(nudge)` (detail when non-empty after
+  trim, else summary, else `""`); `buildPrompt` sends **only** the subject — `summary` never reaches
+  the model when a detail exists, because it provably cannot be trusted to ignore it;
+  `deterministicFallback` returns the subject instead of `summary + " — " + detail`.
+  **`digest.ts` was deliberately NOT changed** — `summary` is the dedup key (`key = source|summary`,
+  plus `needsYouSignature` and `notify.ts`), so rewording it would invalidate every key already in
+  `nudges.jsonl`/`notifications.jsonl` and make 24 h repeat-suppression see everything as new → a
+  one-time nudge burst. The bug was in the presentation layer and was fixed there.
+  **(2) `answered` was too blunt to interpret.** `HANDOFF.md` gates the deferred `rules+llm` dial on
+  the sent-vs-answered ratio, and that ratio was unreadable: `markNudgeAnswered()` fires on **any**
+  owner message and closes the open nudge **regardless of age**, with no latency recorded. Real
+  latencies were **51 s, 2.4 min, 8 min, 43 min, 1 h 55 min** — the last two are the owner happening
+  to chat later, recorded identically to the 51-second reply. The headline "5/5 = 100% answered" was
+  not a measurement. Fix: `answered` gains `latencyMs`, a new `expired` record variant carries
+  `ageMs`, and `ANSWER_WINDOW_MS = 30 min` (chosen from the observed latencies, and equal to the
+  default `minGapMs`, so at most one nudge is ever live inside one window) splits the two. `openNudgeId`
+  now treats **both** `answered` and `expired` as closing — load-bearing, since otherwise an expired
+  nudge stays open forever and every later message appends a duplicate. A constant, not config
+  (consistent with Phase 39's TTLs). Existing `answered` records have no `latencyMs`; they are read,
+  not migrated. 876 passing tests (+19).
+  **Architect defects found + fixed (the delegated run reported "all 18 criteria implemented" and
+  every test green — the review is what caught these):** (1) **the criterion-4 test was vacuous and
+  hid a live bug in the same commit** — it asserted only on the prompt's **first line** instead of the
+  whole prompt, so qwen's own instruction line `ห้ามใช้ชื่อภายในระบบ (เช่น Planner, long_session,
+  grinding_on_file)` **put the exact forbidden identifiers straight back into the prompt** and the
+  suite stayed green; the test now asserts on the entire prompt and the instruction names the
+  *category* (`identifier แบบ snake_case`), never an instance. (2) **The criterion-6 test never
+  exercised `deterministicFallback`** — it re-checked the prompt's first line under a passthrough
+  backend, which is why qwen's own sabotage report showed criteria 7/8 going red for that sabotage but
+  not 6; it now asserts the text the owner actually receives when the gateway is down. (3) A
+  `สรุปรอบคอบ:` context line that was **garbled Thai and duplicated the subject verbatim** whenever a
+  nudge had no detail (the same sentence handed to the model twice) — removed, since `nudgeSubject`
+  already falls back to the summary. (4) Mangled Thai `ชื่่อ` (doubled tone mark). (5)
+  `markNudgeAnswered` read the whole log **twice** (`openNudgeId(readNudgeRecords())` then again for
+  the sent record) on a function that runs on every owner message in both daemons — one read now.
+  **Note the scope contradicted itself and was corrected mid-flight** (the Phase 31 lesson): §3.2 asked
+  for an instruction listing the forbidden identifiers as examples while §6 forbade those strings in
+  the prompt — qwen implemented the pre-correction text, which is exactly defect (1).
+  **Sabotage-checked 5/5 by the architect, not taken on report** — the 4 in the scope plus a 5th
+  (re-inject the identifier examples) written specifically to prove the repaired test bites where the
+  original did not; each failed exactly its criterion, then was restored.
+  **Live-validated against the real 9arm Qwen gateway (3/3):** the exact nudge that produced *"คุณต้อง
+  โทรหา Planner"* now yields *"…ผ่านไป 90 นาทีโดยไม่หยุดพัก ผมแนะนำให้พักสั้นๆ ก่อนนะครับ…"* — no
+  identifier, no phone-call reading, and the sentence is about the thing the rule actually fired on.
+  Plus an offline replay of all three real nudge shapes (both plan rules + an autopilot item) through
+  the prompt **and** the fallback: no leak in either.
+  **Observed residual, deliberately not fixed (new data, next measurement pass):** the prompt label
+  `งานที่ต้องตัดสินใจ:` ("the thing to decide") makes the model glue "ตัดสินใจ" onto a rest nudge
+  (*"งานนี้ต้องตัดสินใจต่อเนื่อง 90 นาที…"*), which reads slightly awkwardly. It leaks nothing and is
+  comprehensible; a neutral label is a one-word change, but it is out of this scope.
+  Spec: `docs/scopes/phase-42-nudge-quality-and-answer-signal.md`. Files: `src/proactive/{compose,
+  proactive,types}.ts` (+ `compose.test.ts` new, `proactive.test.ts`).
 - **Loop complete (manual trigger):** `auto --apply` runs the whole chain in one command; the human
   reviews/merges the `executive/change-<id>` branch.
 

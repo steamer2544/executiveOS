@@ -12,6 +12,7 @@ import {
   runProactiveTick,
   markNudgeAnswered,
   openNudgeId,
+  ANSWER_WINDOW_MS,
 } from "./proactive.js";
 import { composeNudge } from "./compose.js";
 import { readNudgeRecords } from "./log.js";
@@ -138,7 +139,7 @@ function makeInput(overrides: {
 // ─── composeNudge ─────────────────────────────────────────────────────────────
 
 describe("composeNudge", () => {
-  test("with a backend that throws → fallback with summary in text", async () => {
+  test("with a backend that throws → fallback with detail (not summary)", async () => {
     const backend = new FakeBackend();
     backend.shouldThrow = true;
 
@@ -152,8 +153,8 @@ describe("composeNudge", () => {
     const result = await composeNudge(nudge, makeConfig(), () => backend);
 
     expect(result.composedBy).toBe("fallback");
-    expect(result.text).toContain("Test nudge");
-    expect(result.text).toContain("Extra detail");
+    expect(result.text).toBe("Extra detail");
+    expect(result.text).not.toContain("Test nudge");
   });
 
   test("with a backend returning text → llm", async () => {
@@ -233,7 +234,7 @@ describe("runProactiveTick", () => {
     expect(result.skipped).toBeNull();
   });
 
-  test("backend throws → fallback text, still sent", async () => {
+  test("backend throws → fallback text (detail), still sent", async () => {
     const backend = new FakeBackend();
     backend.shouldThrow = true;
 
@@ -241,7 +242,7 @@ describe("runProactiveTick", () => {
     const result = await runProactiveTick(input);
 
     expect(input.channel.messages).toHaveLength(1);
-    expect(input.channel.messages[0]!.text).toContain("Plan deadline approaching");
+    expect(input.channel.messages[0]!.text).toBe("2 days left");
     const records = readNudgeRecords();
     expect(records[0]!).toMatchObject({
       event: "sent",
@@ -352,11 +353,11 @@ describe("markNudgeAnswered", () => {
     );
 
     expect(openNudgeId(readNudgeRecords())).toBe("some-id");
-    markNudgeAnswered();
+    markNudgeAnswered(new Date("2026-07-24T08:05:00Z"));
 
     const records = readNudgeRecords();
     expect(records).toHaveLength(2);
-    expect(records[1]!).toMatchObject({ event: "answered", id: "some-id" });
+    expect(records[1]!).toMatchObject({ event: "answered", id: "some-id", latencyMs: 300000 });
     // Now nothing is open.
     expect(openNudgeId(readNudgeRecords())).toBeNull();
   });
@@ -371,12 +372,12 @@ describe("markNudgeAnswered", () => {
     // Two sent, the first already answered → the second is open.
     writeFileSync(join(TEST_HOME, "nudges.jsonl"),
       JSON.stringify({ event: "sent", id: "a", ts: "2026-07-24T08:00:00Z", key: "k", source: "plan", summary: "s", text: "t", composedBy: "llm" }) + "\n" +
-      JSON.stringify({ event: "answered", id: "a", ts: "2026-07-24T08:05:00Z" }) + "\n" +
+      JSON.stringify({ event: "answered", id: "a", ts: "2026-07-24T08:05:00Z", latencyMs: 300000 }) + "\n" +
       JSON.stringify({ event: "sent", id: "b", ts: "2026-07-24T09:00:00Z", key: "k", source: "plan", summary: "s2", text: "t2", composedBy: "llm" }) + "\n"
     );
 
     expect(openNudgeId(readNudgeRecords())).toBe("b");
-    markNudgeAnswered();
+    markNudgeAnswered(new Date("2026-07-24T09:05:00Z"));
     const answered = readNudgeRecords().filter((r) => r.event === "answered");
     expect(answered.map((r) => (r as { id: string }).id)).toEqual(["a", "b"]);
   });
@@ -408,5 +409,135 @@ describe("readNudgeRecords", () => {
     expect(records[1]!).toMatchObject({ event: "sent", summary: "s2" });
 
     teardownHome();
+  });
+});
+
+// ─── Job 2 — answer signal (criteria 9–16) ────────────────────────────────────
+
+describe("answer signal — markNudgeAnswered with window", () => {
+  beforeEach(() => {
+    setupHome();
+  });
+  afterEach(() => {
+    teardownHome();
+  });
+
+  test("nudge sent 5 minutes ago → answered with correct latencyMs (criterion 9)", () => {
+    writeFileSync(join(TEST_HOME, "nudges.jsonl"),
+      JSON.stringify({ event: "sent", id: "n1", ts: "2026-07-24T08:00:00Z", key: "k", source: "plan", summary: "s", text: "t", composedBy: "llm" }) + "\n"
+    );
+
+    markNudgeAnswered(new Date("2026-07-24T08:05:00Z"));
+
+    const records = readNudgeRecords();
+    expect(records).toHaveLength(2);
+    expect(records[1]!).toMatchObject({ event: "answered", id: "n1", latencyMs: 300000 });
+  });
+
+  test("nudge sent 2 hours ago → expired, no answered record (criterion 10)", () => {
+    writeFileSync(join(TEST_HOME, "nudges.jsonl"),
+      JSON.stringify({ event: "sent", id: "n1", ts: "2026-07-24T08:00:00Z", key: "k", source: "plan", summary: "s", text: "t", composedBy: "llm" }) + "\n"
+    );
+
+    markNudgeAnswered(new Date("2026-07-24T10:00:00Z"));
+
+    const records = readNudgeRecords();
+    expect(records).toHaveLength(2);
+    expect(records[1]!).toMatchObject({ event: "expired", ageMs: 7200000 });
+    const answered = records.filter((r) => r.event === "answered");
+    expect(answered).toHaveLength(0);
+  });
+
+  test("boundary: exactly ANSWER_WINDOW_MS → answered; 1ms past → expired (criterion 11)", () => {
+    // Exactly at the window → answered
+    writeFileSync(join(TEST_HOME, "nudges.jsonl"),
+      JSON.stringify({ event: "sent", id: "n1", ts: "2026-07-24T08:00:00Z", key: "k", source: "plan", summary: "s", text: "t", composedBy: "llm" }) + "\n"
+    );
+    markNudgeAnswered(new Date("2026-07-24T08:30:00Z"));
+    expect(readNudgeRecords()[1]!).toMatchObject({ event: "answered" });
+
+    // One ms past → expired
+    teardownHome();
+    setupHome();
+    writeFileSync(join(TEST_HOME, "nudges.jsonl"),
+      JSON.stringify({ event: "sent", id: "n2", ts: "2026-07-24T08:00:00Z", key: "k", source: "plan", summary: "s", text: "t", composedBy: "llm" }) + "\n"
+    );
+    markNudgeAnswered(new Date("2026-07-24T08:30:00.001Z"));
+    expect(readNudgeRecords()[1]!).toMatchObject({ event: "expired" });
+  });
+
+  test("after expired, second markNudgeAnswered appends nothing (criterion 12)", () => {
+    writeFileSync(join(TEST_HOME, "nudges.jsonl"),
+      JSON.stringify({ event: "sent", id: "n1", ts: "2026-07-24T08:00:00Z", key: "k", source: "plan", summary: "s", text: "t", composedBy: "llm" }) + "\n"
+    );
+
+    // First call → expired
+    markNudgeAnswered(new Date("2026-07-24T10:00:00Z"));
+    expect(readNudgeRecords()).toHaveLength(2);
+
+    // Second call → no-op (openNudgeId treats expired as closed)
+    markNudgeAnswered(new Date("2026-07-24T11:00:00Z"));
+    expect(readNudgeRecords()).toHaveLength(2);
+  });
+
+  test("no open nudge → no-op, no throw (criterion 13)", () => {
+    // Empty log
+    expect(() => markNudgeAnswered(new Date())).not.toThrow();
+    expect(readNudgeRecords()).toHaveLength(0);
+
+    teardownHome();
+    setupHome();
+
+    // All nudges already closed
+    writeFileSync(join(TEST_HOME, "nudges.jsonl"),
+      JSON.stringify({ event: "sent", id: "n1", ts: "2026-07-24T08:00:00Z", key: "k", source: "plan", summary: "s", text: "t", composedBy: "llm" }) + "\n" +
+      JSON.stringify({ event: "answered", id: "n1", ts: "2026-07-24T08:05:00Z", latencyMs: 300000 }) + "\n"
+    );
+    expect(() => markNudgeAnswered(new Date())).not.toThrow();
+    expect(readNudgeRecords()).toHaveLength(2);
+  });
+});
+
+describe("answer signal — backward compatibility & edge cases", () => {
+  beforeEach(() => {
+    setupHome();
+  });
+  afterEach(() => {
+    teardownHome();
+  });
+
+  test("legacy answered record without latencyMs reads without throwing (criterion 14)", () => {
+    writeFileSync(join(TEST_HOME, "nudges.jsonl"),
+      JSON.stringify({ event: "sent", id: "n1", ts: "2026-07-24T08:00:00Z", key: "k", source: "plan", summary: "s", text: "t", composedBy: "llm" }) + "\n" +
+      JSON.stringify({ event: "answered", id: "n1", ts: "2026-07-24T08:05:00Z" }) + "\n"
+    );
+
+    // Should not throw and should treat as closed
+    expect(openNudgeId(readNudgeRecords())).toBeNull();
+  });
+
+  test("unparseable sent ts → answered with latencyMs 0 (criterion 15)", () => {
+    writeFileSync(join(TEST_HOME, "nudges.jsonl"),
+      JSON.stringify({ event: "sent", id: "n1", ts: "not-a-date", key: "k", source: "plan", summary: "s", text: "t", composedBy: "llm" }) + "\n"
+    );
+
+    markNudgeAnswered(new Date("2026-07-24T10:00:00Z"));
+    const records = readNudgeRecords();
+    expect(records).toHaveLength(2);
+    expect(records[1]!).toMatchObject({ event: "answered", latencyMs: 0 });
+  });
+
+  test("sentToday counts only sent records when history has expired (criterion 16)", async () => {
+    const { sentToday } = await import("./rules.js");
+    const now = new Date("2026-07-24T12:00:00Z");
+
+    writeFileSync(join(TEST_HOME, "nudges.jsonl"),
+      JSON.stringify({ event: "sent", id: "n1", ts: "2026-07-24T08:00:00Z", key: "k", source: "plan", summary: "s", text: "t", composedBy: "llm" }) + "\n" +
+      JSON.stringify({ event: "expired", id: "n2", ts: "2026-07-24T09:00:00Z", ageMs: 7200000 }) + "\n" +
+      JSON.stringify({ event: "answered", id: "n3", ts: "2026-07-24T10:00:00Z", latencyMs: 300000 }) + "\n"
+    );
+
+    const history = readNudgeRecords();
+    expect(sentToday(history, now)).toBe(1);
   });
 });

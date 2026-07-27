@@ -55,23 +55,40 @@ export async function composeNudge(
 /**
  * Build the one-shot prompt for the LLM.
  *
- * Gives the nudge summary + detail, a compact line of context from
- * buildState().state (currentTask, currentFile, branch), and asks for
- * one or two sentences in Thai, addressed to the owner, ending in a
- * question they can answer with one line.
+ * Leads with the human-meaningful subject (detail when present, else summary).
+ * Never sends internal identifiers (summary) when a human detail exists.
  */
 function buildPrompt(nudge: Nudge): string {
-  const detailLine = nudge.detail ? `\n\nรายละเอียด: ${nudge.detail}` : "";
-
+  // The subject is the ONLY payload. `summary` is deliberately never sent when a detail
+  // exists — measured live, the model echoed the internal label back to the owner in 2 of
+  // 4 nudges ("คุณต้องโทรหา Planner สำหรับ long_session"), reading "needs your call" as a
+  // telephone call. nudgeSubject already falls back to summary when there is no detail, so
+  // nothing is lost for the autopilot/executor/worker sources.
   return (
-    `งานที่ต้องตัดสินใจ: ${nudge.summary}${detailLine}\n\n` +
+    `งานที่ต้องตัดสินใจ: ${nudgeSubject(nudge)}\n\n` +
     `เขียนข้อความแจ้งเตือน 1-2 ประโยคเป็นภาษาไทย:\n` +
     `- เขียนถึงเจ้าของโดยตรง (เรียก "คุณ", แทนตัวเองว่า "ผม")\n` +
     `- ending in a question they can answer with one line\n` +
     `- NO greetings, NO restating the whole state\n` +
     `- DO NOT invent anything not in the input above\n` +
+    // Describe the CATEGORY, never an instance: naming the identifiers here would put those
+    // exact strings back into the prompt, which is the bug this phase exists to fix.
+    `- ห้ามใช้ชื่อภายในระบบ ชื่อโมดูล หรือชื่อกฎ (identifier แบบ snake_case) — เขียนด้วยภาษาคนธรรมดา\n` +
     `- Keep it short — the owner is reading on a dashboard or hearing it spoken`
   );
+}
+
+/**
+ * The human-meaningful subject of a nudge.
+ *
+ * `summary` is an INTERNAL dedup key (e.g. "Planner needs your call: long_session") — it keys
+ * suppression and notification dedup, so it must stay stable and must never be shown to the owner.
+ * `detail` is the human sentence (PlannerAction.reason). Prefer it.
+ */
+export function nudgeSubject(nudge: Nudge): string {
+  if (nudge.detail && nudge.detail.trim().length > 0) return nudge.detail.trim();
+  if (nudge.summary && nudge.summary.trim().length > 0) return nudge.summary.trim();
+  return "";
 }
 
 /**
@@ -79,5 +96,5 @@ function buildPrompt(nudge: Nudge): string {
  * Not an error path — a requirement.
  */
 function deterministicFallback(nudge: Nudge): string {
-  return `${nudge.summary}${nudge.detail ? " — " + nudge.detail : ""}`;
+  return nudgeSubject(nudge);
 }

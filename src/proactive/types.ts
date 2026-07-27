@@ -21,7 +21,8 @@ export interface Nudge {
 /** One line in .executive/nudges.jsonl. Append-only; never rewritten in place. */
 export type NudgeRecord =
   | { event: "sent"; id: string; ts: string; key: string; source: string; summary: string; text: string; composedBy: "llm" | "fallback" }
-  | { event: "answered"; id: string; ts: string }
+  | { event: "answered"; id: string; ts: string; latencyMs?: number }
+  | { event: "expired"; id: string; ts: string; ageMs: number }
   | { event: "suppressed"; ts: string; key: string; reason: string };
 
 /**

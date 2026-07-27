@@ -7,7 +7,7 @@
 > incident + guardrail, and an agent budget-ladder fix), on top of a live-hardening session on the Discord
 > agent (think-loop fix + retry resilience + message chunking + button feedback + session trust), **Phase 39
 > + 39.1** (state decay/TTL; deadline decay as an opt-in dashboard toggle), **Phase 38** (sandbox
-> `run_command`), and **Phase 36 LIVE** (Discord). **771 passing tests** + two opt-in browser e2e, all green.
+> `run_command`), and **Phase 36 LIVE** (Discord). **876 passing tests** + two opt-in browser e2e, all green.
 > Everything through Phase 41 is **pushed** (`origin/main` = `main`). The agent is
 > **live-confirmed working** end-to-end over Discord. **If a running bot misbehaves after a pull, RESTART
 > it — code isn't hot-reloaded.**
@@ -94,9 +94,36 @@
 > that touched config/fixtures: `git grep -nE "MTUz|sk-|xox[baprs]-|-----BEGIN|Bearer [A-Za-z0-9._-]{20}"
 > $(git rev-list --all)` (expect only the two `agent.test.ts` fixtures).
 >
-> **▶️ NEXT UP — the planned roadmap is EMPTY** (Phase 40 was the last promised item; Phase 41 came from
-> live failures, not a list). Nothing is pending. The open measurement is still **`nudges.jsonl`**
-> (sent vs answered) after Phase 36 has run a couple of weeks — that gates the `rules+llm` nudge dial.
+> **▶️ NEXT UP — the planned roadmap is EMPTY** (Phase 40 was the last promised item; Phase 41 and 42
+> came from live failures and live data, not a list). Nothing is pending.
+>
+> **▶️ PHASE 42 (this session) — read the nudge log, found two defects, fixed both.** Details in the
+> `CLAUDE.md` Phase 42 entry; the load-bearing facts:
+> - **The nudge sentence was built from an internal dedup key.** `digest.ts` sets
+>   `summary = "Planner needs your call: " + a.kind` and `detail = a.reason` (the human sentence), and
+>   `compose.ts` sent the *summary* as the task. The model reads "needs your call" as a **telephone
+>   call** — 2 of 4 live nudges told the owner to phone a code module. Fixed in the presentation layer
+>   (`nudgeSubject`): **`summary` never reaches the model when a detail exists.**
+> - **Do NOT "fix" this in `digest.ts`.** `summary` is the dedup key (`key = source|summary`, plus
+>   `needsYouSignature` / `notify.ts`). Rewording it invalidates every key already written to
+>   `nudges.jsonl` + `notifications.jsonl` → repeat-suppression sees everything as new → a nudge burst.
+> - **The `answered` signal is now readable**, which is what the `rules+llm` dial was waiting on:
+>   `answered` carries `latencyMs`, a new `expired` record carries `ageMs`, and
+>   `ANSWER_WINDOW_MS = 30 min` splits them. `openNudgeId` treats **both** as closing (without that, an
+>   expired nudge stays open forever and every later message appends a duplicate).
+> - **The old "5/5 = 100% answered" was not a measurement** — real latencies were 51 s / 2.4 min /
+>   8 min / 43 min / 1 h 55 min, and the last two are the owner happening to chat later. **The baseline
+>   restarts from here.** Records written before this phase have no `latencyMs`; treat them as unusable
+>   for the ratio, not as 100%.
+> - **A delegated run reported "all 18 criteria implemented", all green — and had shipped a live bug**
+>   that its own test could not see (the criterion-4 test asserted on the prompt's *first line*, so an
+>   instruction line naming the forbidden identifiers put them right back into the prompt). Two of the
+>   new tests were repaired; a 5th sabotage was added to prove the repair bites. **Review the tests, not
+>   just the code — a green suite proves nothing about a test that never looked.**
+>
+> **The open measurement is now the RATIO ITSELF**: leave `ui` running and read `nudges.jsonl` —
+> `answered` (with latency) vs `expired` vs `suppressed`, per source. That still gates the deferred
+> `agent.proactive.trigger: "rules+llm"` dial; do not add a second nudge source before it exists.
 >
 > **✅ Phase 40 shipped AND the runtime is now RUNNING ON SQLITE** (this is a change from what the previous
 > handoff said — the flip happened at the end of the session). `bun:sqlite`, no new dependency, one
@@ -335,8 +362,10 @@ The full loop works and is validated (including **live against the real LLM gate
 | 39 (+39.1) | **State decay / TTL** | only **manually-asserted** signals age out (auto-sensed ones are refreshed by watchers, so they never decay): `BLOCKED_TTL_MS` 24 h, `MANUAL_TASK_TTL_MS` 72 h → falls back to branch/repo inference. Decay only ever *removes* a stale assertion; unparseable `ts` → keep. 39.1: deadline decay is **opt-in + default off** (a deadline is a commitment, not transient state — /scrutinize caught that auto-retiring it reverses Phase 32's nag) |
 | 40 | **SQLite event storage** | `EventBackend` interface + `jsonl`/`sqlite` implementations behind an unchanged `append`/`read`/`tail`; `bun:sqlite`, no new dependency; `seq INTEGER PRIMARY KEY` so seq is the rowid (never renumbered on delete). `seq` allocation deliberately stayed in `seq.ts`/`meta.json` for both backends. `migrate-events [--apply]` is dry-run by default, never touches the `.jsonl` files, and reports a seq-with-different-id as a **conflict** instead of skipping it silently. **The live runtime now runs on sqlite** |
 | — | **Agent budget ladder** | a *second* `max_tokens` failure, distinct from the think-loop: measured **1/8 answered at 8192 vs 4/4 at 32768**, with every failing attempt burning exactly 8192 — so re-sampling at the same ceiling was provably useless. `BUDGET_LADDER = [1,2,4,4]` raises the ceiling per retry instead. Live 6/6 |
+| 41 | **"Make me a file" works** | the gateway's **~125 s wall clock** × 33–48 tok/s ⇒ **~4,000 output tokens is a physical ceiling**, so the budget ladder was inverted into a **context ladder** (`CONTEXT_LADDER = [null,3,1]` + `trimTranscript`); new `save_file` (confined dirs / no executables / no overwrite / NEVER_TRUSTABLE, per-folder approval, 🌿 branch option); large files arrive via `append` chunks with truncated-tool-call feedback; `run_command` had **never worked on Windows** (`sh -c`) → temp `.bat`. Owner-verified live: playable pong + tetris |
+| 42 | **Nudge quality + a readable answer signal** | read the real `nudges.jsonl` (5 sent / 3 days) and found the nudge sentence was composed from the **internal dedup key** — the model read *"needs your call"* as a **phone call** in 2 of 4 live nudges. `nudgeSubject()` sends the human `detail` and **never** `summary` when a detail exists (fixed in the presentation layer — rewording `digest.ts` would invalidate every dedup key already written). `answered` gains `latencyMs`, a new `expired` record gains `ageMs`, `ANSWER_WINDOW_MS = 30 min`; `openNudgeId` treats both as closing. **The sent-vs-answered baseline restarts from here** — the old 5/5 counted replies up to 1 h 55 min later |
 
-**Test count:** 771 passing, 100% offline (mock backends). Several phases **validated live** against the
+**Test count:** 876 passing, 100% offline (mock backends). Several phases **validated live** against the
 9arm Qwen gateway (`work`, `synth`, `infer`, `propose`, the agent); Phase-25 vendor download + browser-wasm
 e2e run live too. **Screen-sensing is fully live** (real capture → real OCR → real suggestions, both engines
 compared on the same image), the **Advisor is live-validated end to end** (Phase 33.1), **Discord is live**
@@ -357,7 +386,7 @@ change gets too big to review"* and it reaches the "Needs you" queue.
 ```bash
 bun install
 bun run typecheck          # tsc --noEmit (strict) — must stay green
-bun test                   # 771 tests, offline
+bun test                   # 876 tests, offline
 bun run test:e2e           # OPT-IN browser-wasm e2e (real Chromium via Playwright; runs under node, auto-skips
                            #   if playwright/model aren't set up — see test/e2e/README.md)
 bun run test:e2e:chat      # OPT-IN chat-UI e2e (markdown render + no-yank scroll; no gateway/token needed)
