@@ -136,6 +136,9 @@ export function buildDigest(opts?: DigestOptions): Digest {
         source: "plan",
         summary: "Planner needs your call: " + a.kind,
         detail: a.reason ?? undefined,
+        // The ONLY source whose summary is a pure identifier sentence — the rule's own
+        // `reason` is already a complete sentence, so the label is the reason alone.
+        label: a.reason ?? "There is a decision waiting on you",
       });
     }
   }
@@ -146,16 +149,21 @@ export function buildDigest(opts?: DigestOptions): Digest {
       source: "autopilot",
       summary: "Autopilot stopped and needs you",
       detail: rawAuto.stoppedReason ?? undefined,
+      // Here `summary` IS human and `detail` is the extra — the label needs both, which is
+      // why the label is set per source instead of a blanket `detail || summary` rule.
+      label: "Autopilot stopped and needs you" + (rawAuto.stoppedReason ? " — " + rawAuto.stoppedReason : ""),
     });
   }
 
   // 3. Executor: parked change with failing tests
   const rawExec = readJson<ExecReport>(execReportPath());
   if (rawExec?.mode === "apply" && rawExec.committed === true && rawExec.testPassed === false) {
+    const parked = "A change is parked on " + (rawExec.branch ?? "unknown branch") + " with FAILING tests";
     pushIfNew({
       source: "executor",
-      summary: "A change is parked on " + (rawExec.branch ?? "unknown branch") + " with FAILING tests",
+      summary: parked,
       detail: rawExec.title ?? undefined,
+      label: parked + (rawExec.title ? " — " + rawExec.title : ""),
     });
   }
 
@@ -166,6 +174,7 @@ export function buildDigest(opts?: DigestOptions): Digest {
       source: "worker",
       summary: "The last Worker run errored",
       detail: rawProposal.error ?? undefined,
+      label: "The last Worker run errored" + (rawProposal.error ? " — " + rawProposal.error : ""),
     });
   }
 
@@ -327,7 +336,9 @@ export function renderDigest(d: Digest): string {
     lines.push("_Nothing needs you right now._");
   } else {
     for (const item of d.needsYou) {
-      lines.push("- **" + item.summary + "**" + (item.detail ? " — " + item.detail : ""));
+      // The label, never the key. `renderDigest` is what the agent's `get_digest` tool hands
+      // to the model, so a key leaked here is a key the model can repeat back to the owner.
+      lines.push("- **" + needsYouLabel(item) + "**");
     }
   }
   lines.push("");
@@ -362,12 +373,46 @@ export function writeDigest(md: string): void {
   renameOverwrite(tmpPath, digestPath());
 }
 
-// ── Signature helper ──────────────────────────────────────────────────────────
+// ── Projections of a NeedsYouItem ─────────────────────────────────────────────
+//
+// A NeedsYouItem has two text fields and they are NOT interchangeable:
+//   `summary` is the INTERNAL KEY — "Planner needs your call: long_session". It keys
+//             repeat-suppression (proactive.ts), the daemon's change signature
+//             (needsYouSignature, below) and the notification diff (notify.ts), so it
+//             must stay byte-stable forever and must never be shown to a human OR a model.
+//   `detail`  is the HUMAN SENTENCE (PlannerAction.reason, stoppedReason, …).
+//
+// The two helpers below are the only sanctioned projections: one for keys, one for eyes.
+
+/**
+ * The human-readable label for a "Needs you" item.
+ *
+ * Use this at EVERY owner-facing or model-facing render site. Phase 42 measured the cost of
+ * leaking the key: the model read "Planner needs your call" as a *telephone call* in 2 of 4
+ * live nudges. It fixed the nudge prompt only, which left the same string reaching the same
+ * model through `get_digest` → renderDigest, plus the dashboard card and the `ui` console.
+ *
+ * Prefers the explicit `label` set by buildDigest. The `detail → summary` fallback is only for
+ * items built elsewhere (older fixtures); it is deliberately NOT the primary rule, because it
+ * is right for exactly one of the four sources: `plan`'s summary is a pure identifier while
+ * autopilot/executor/worker summaries are the human sentence and `detail` is the extra.
+ * Blanket-preferring `detail` there would have dropped "with FAILING tests" and kept the title.
+ */
+export function needsYouLabel(item: { summary?: string; detail?: string; label?: string }): string {
+  if (item.label && item.label.trim().length > 0) return item.label.trim();
+  if (item.detail && item.detail.trim().length > 0) return item.detail.trim();
+  if (item.summary && item.summary.trim().length > 0) return item.summary.trim();
+  return "";
+}
 
 /**
  * A stable, order-independent signature of the "Needs you" queue.
  * Two queues with the same set of {source, summary} pairs produce the same string,
  * regardless of insertion order. Used by the watch daemon to alert only on change.
+ *
+ * Keyed on `summary` DELIBERATELY — see the note above. Never switch this to the label:
+ * every key already written to nudges.jsonl / notifications.jsonl would stop matching and
+ * 24h repeat-suppression would treat the whole queue as new.
  */
 export function needsYouSignature(items: NeedsYouItem[]): string {
   return items

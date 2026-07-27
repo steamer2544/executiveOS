@@ -59,6 +59,7 @@ export async function runProactiveTick(
     source: item.source,
     summary: item.summary,
     detail: item.detail,
+    label: item.label,
   }));
 
   // Build the decision input
@@ -135,29 +136,39 @@ export async function runProactiveTick(
  * A reply only counts as answering a nudge if it arrives within this window.
  *
  * Measured from the real log: observed latencies were 51 s, 2.4 min, 8 min, 43 min and 1 h 55 min —
- * the last two are the owner happening to chat later, not a reply. 30 min also equals the default
- * `minGapMs`, so at most one nudge is ever live inside one window.
+ * the last two are the owner happening to chat later, not a reply.
+ *
+ * This is still a PROXY: it counts "the owner sent any message soon after", not "the owner replied
+ * to this". The unambiguous signal exists — Discord's `message_reference` on a real reply — but the
+ * adapter drops it (`handleMessageCreate` keeps only `content`) and `Channel.send` does not return
+ * the message id, so pairing would need both. Read the ratio with that caveat.
  *
  * A constant, not config — consistent with Phase 39's BLOCKED_TTL_MS / MANUAL_TASK_TTL_MS.
  */
 export const ANSWER_WINDOW_MS = 30 * 60 * 1000;
 
 /**
- * The most recent nudge that has been sent but not yet answered (or expired), or null.
+ * Every nudge that has been sent and not yet closed, oldest→newest.
  * Pure — derived from the log so it survives a restart and is the same answer in
  * every process (the daemon nudges; the dashboard may be where the owner replies).
  */
-export function openNudgeId(history: NudgeRecord[]): string | null {
+export function openNudges(history: NudgeRecord[]): Array<{ id: string; ts: string }> {
   const closed = new Set(
     history
       .filter((r) => r.event === "answered" || r.event === "expired")
       .map((r) => r.id)
   );
-  for (let i = history.length - 1; i >= 0; i--) {
-    const r = history[i]!;
-    if (r.event === "sent" && !closed.has(r.id)) return r.id;
-  }
-  return null;
+  return history
+    .filter((r): r is Extract<NudgeRecord, { event: "sent" }> => r.event === "sent" && !closed.has(r.id))
+    .map((r) => ({ id: r.id, ts: r.ts }));
+}
+
+/**
+ * The most recent nudge that has been sent but not yet answered (or expired), or null.
+ */
+export function openNudgeId(history: NudgeRecord[]): string | null {
+  const open = openNudges(history);
+  return open.length > 0 ? open[open.length - 1]!.id : null;
 }
 
 /**
@@ -165,8 +176,18 @@ export function openNudgeId(history: NudgeRecord[]): string | null {
  * the open nudge. Sent-vs-answered per source is the whole point of the log — it is
  * the evidence for whether the rules are interrupting at good moments.
  *
- * A reply within ANSWER_WINDOW_MS → { event: "answered", latencyMs }.
- * A reply after ANSWER_WINDOW_MS → { event: "expired", ageMs }.
+ * ONE message closes EVERY open nudge, and can answer at most one of them:
+ *   - the newest open nudge, if it is within ANSWER_WINDOW_MS → { "answered", latencyMs }
+ *   - every other open nudge, and the newest one when it is older → { "expired", ageMs }
+ *
+ * Closing all of them is what makes the log readable. Before, only the newest was closed, so a
+ * nudge the owner simply ignored kept NO record at all until they happened to send another N
+ * messages — and `answered / (answered + expired)` read 100% while half the nudges were ignored,
+ * which is the exact overcount this signal exists to stop. Now `answered + expired == sent` for
+ * everything the owner has seen, so the ratio is a count, not a join.
+ *
+ * At most one `answered` per message also removes the hidden dependency on `minGapMs >= 30 min`:
+ * two nudges live inside one window can no longer both be booked as replies.
  *
  * No-op when nothing is open. Never throws.
  */
@@ -176,24 +197,30 @@ export function markNudgeAnswered(now?: Date): void {
   // Read the log ONCE. Two reads would let the file change between them, and this runs on
   // every owner message in both the daemon and the dashboard.
   const history = readNudgeRecords();
-  const id = openNudgeId(history);
-  if (!id) return;
+  const open = openNudges(history);
+  if (open.length === 0) return;
 
-  const sentRecord = history.find((r) => r.event === "sent" && r.id === id);
+  const records: NudgeRecord[] = [];
+  const newestIndex = open.length - 1;
 
-  let sentTs: number | null = null;
-  if (sentRecord && sentRecord.ts) {
-    const parsed = new Date(sentRecord.ts).getTime();
-    if (!isNaN(parsed)) sentTs = parsed;
-  }
+  open.forEach((nudge, i) => {
+    const parsed = nudge.ts ? new Date(nudge.ts).getTime() : NaN;
+    // Unparseable/missing ts → we do not know the age. Record the fact (this message did
+    // reach it) but never invent a number: `latencyMs` is optional precisely so a record can
+    // say "answered, age unknown" instead of the flattering "answered in 0 ms".
+    const elapsed = isNaN(parsed) ? null : Math.max(0, now_.getTime() - parsed);
 
-  // Unparseable or missing ts → latency 0, which lands in the "answered" branch below.
-  // Uncertain → make the weaker claim rather than inventing an age (Phase 39's decay rule).
-  const elapsed = sentTs !== null ? Math.max(0, now_.getTime() - sentTs) : 0;
+    const answerable = i === newestIndex && (elapsed === null || elapsed <= ANSWER_WINDOW_MS);
+    if (answerable) {
+      records.push(
+        elapsed === null
+          ? { event: "answered", id: nudge.id, ts: now_.toISOString() }
+          : { event: "answered", id: nudge.id, ts: now_.toISOString(), latencyMs: elapsed }
+      );
+    } else {
+      records.push({ event: "expired", id: nudge.id, ts: now_.toISOString(), ageMs: elapsed ?? 0 });
+    }
+  });
 
-  if (elapsed <= ANSWER_WINDOW_MS) {
-    appendNudgeRecords([{ event: "answered", id, ts: now_.toISOString(), latencyMs: elapsed }]);
-  } else {
-    appendNudgeRecords([{ event: "expired", id, ts: now_.toISOString(), ageMs: elapsed }]);
-  }
+  appendNudgeRecords(records);
 }

@@ -5,7 +5,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node
 import { randomUUID } from "node:crypto";
 import { test, expect } from "bun:test";
 import { statePath, planPath, autoReportPath, execReportPath, proposalPath, digestPath, inferredPath, screenInferredPath, execRoot } from "../paths.js";
-import { buildDigest, renderDigest, needsYouSignature } from "./digest.js";
+import { buildDigest, renderDigest, needsYouSignature, needsYouLabel } from "./digest.js";
 import type { NeedsYouItem } from "./types.js";
 import type { State } from "../state/types.js";
 import type { Plan } from "../planner/types.js";
@@ -245,12 +245,24 @@ test("Plan with ask disposition → needsYou", () => {
     expect(digest.recommended.disposition).toBe("ask");
     expect(digest.needsYou.length).toBe(1);
     expect(digest.needsYou[0]!.source).toBe("plan");
+    // `summary` is the dedup KEY and must stay byte-stable — every key already written to
+    // notifications.jsonl / nudges.jsonl depends on it.
     expect(digest.needsYou[0]!.summary).toBe("Planner needs your call: resolve_block");
     expect(digest.needsYou[0]!.detail).toBe("blocked on external API");
+    expect(digest.needsYou[0]!.label).toBe("blocked on external API");
 
+    // …but the RENDERED digest is what `get_digest` hands the model, so the key must not
+    // appear in it: that is how "Planner needs your call" became a telephone call in 2 of 4
+    // live nudges. Assert on the whole document, not just the Needs-you line.
     const md = renderDigest(digest);
     expect(md).toContain("Needs you");
-    expect(md).toContain("Planner needs your call: resolve_block");
+    // The key phrase must not appear ANYWHERE in the document.
+    expect(md).not.toContain("Planner needs your call");
+    // The bare kind still appears under "Recommended action" — that is the plan's identity and
+    // is deliberately kept — so scope the identifier check to the Needs-you section itself.
+    const needsSection = md.split("## Needs you")[1]!.split("\n## ")[0]!;
+    expect(needsSection).toContain("blocked on external API");
+    expect(needsSection).not.toContain("resolve_block");
   } finally {
     cleanup(dir);
     unsetHome();
@@ -299,6 +311,10 @@ test("Autopilot needsHuman → needsYou", () => {
     expect(digest.needsYou[0]!.source).toBe("autopilot");
     expect(digest.needsYou[0]!.summary).toBe("Autopilot stopped and needs you");
     expect(digest.needsYou[0]!.detail).toBe("changeset failed validation");
+    // The label keeps BOTH halves — here the summary is the human sentence and the detail is
+    // the extra, the opposite of the `plan` source. Preferring `detail` blindly would nudge
+    // the owner with "changeset failed validation" and no mention of the autopilot stopping.
+    expect(digest.needsYou[0]!.label).toBe("Autopilot stopped and needs you — changeset failed validation");
   } finally {
     cleanup(dir);
     unsetHome();
@@ -322,6 +338,10 @@ test("Parked change (failing tests) → needsYou", () => {
     expect(digest.needsYou[0]!.summary).toContain("executive/change-y");
     expect(digest.needsYou[0]!.summary).toContain("FAILING tests");
     expect(digest.needsYou[0]!.detail).toBe("Add login endpoint");
+    // "FAILING tests" is the reason this is in the queue at all — it must survive into the
+    // label, not be replaced by the changeset title.
+    expect(digest.needsYou[0]!.label).toContain("FAILING tests");
+    expect(digest.needsYou[0]!.label).toContain("Add login endpoint");
   } finally {
     cleanup(dir);
     unsetHome();
@@ -342,6 +362,7 @@ test("Worker error → needsYou", () => {
     expect(digest.needsYou[0]!.source).toBe("worker");
     expect(digest.needsYou[0]!.summary).toBe("The last Worker run errored");
     expect(digest.needsYou[0]!.detail).toBe("boom");
+    expect(digest.needsYou[0]!.label).toBe("The last Worker run errored — boom");
   } finally {
     cleanup(dir);
     unsetHome();
@@ -637,6 +658,30 @@ test("Fallback: actions empty but topAction is ask → still surfaces", () => {
     cleanup(dir);
     unsetHome();
   }
+});
+
+// ── needsYouLabel: the one projection every render site must use ──────────────
+
+test("needsYouLabel: prefers label, then detail, then summary, else empty", () => {
+  expect(needsYouLabel({ summary: "KEY", detail: "detail", label: "label" })).toBe("label");
+  expect(needsYouLabel({ summary: "KEY", detail: "detail" })).toBe("detail");
+  expect(needsYouLabel({ summary: "KEY" })).toBe("KEY");
+  expect(needsYouLabel({ summary: "KEY", detail: "   ", label: "  " })).toBe("KEY");
+  expect(needsYouLabel({})).toBe("");
+});
+
+test("needsYouLabel and needsYouSignature are DIFFERENT projections of the same item", () => {
+  // The signature must stay keyed on `summary`: every key already written to nudges.jsonl and
+  // notifications.jsonl depends on it, so switching it to the label would make 24h
+  // repeat-suppression treat the whole queue as new — one nudge burst, and an unreadable log.
+  const item: NeedsYouItem = {
+    source: "plan",
+    summary: "Planner needs your call: long_session",
+    detail: "90 minutes with no break",
+    label: "90 minutes with no break",
+  };
+  expect(needsYouSignature([item])).toBe("plan|Planner needs your call: long_session");
+  expect(needsYouLabel(item)).toBe("90 minutes with no break");
 });
 
 // ── needsYouSignature tests ───────────────────────────────────────────────────

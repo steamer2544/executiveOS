@@ -75,6 +75,22 @@ describe("nudgeSubject", () => {
     expect(nudgeSubject(nudge)).toBe("Autopilot stopped and needs you");
   });
 
+  test("prefers the digest-supplied label over both summary and detail", () => {
+    // Post-Phase-42 review: `detail || summary` is the right rule for the `plan` source ONLY.
+    // For executor/autopilot/worker the SUMMARY is the human sentence and `detail` is the
+    // extra, so preferring detail dropped the part that matters ("with FAILING tests") and
+    // kept the changeset title. buildDigest now supplies an explicit label per source.
+    const nudge = {
+      key: "executor|parked",
+      source: "executor" as const,
+      summary: "A change is parked on executive/change-7 with FAILING tests",
+      detail: "Add retry to fetch",
+      label: "A change is parked on executive/change-7 with FAILING tests — Add retry to fetch",
+    };
+    expect(nudgeSubject(nudge)).toContain("FAILING tests");
+    expect(nudgeSubject(nudge)).toContain("Add retry to fetch");
+  });
+
   test("returns empty string when both summary and detail are empty (criterion 3)", () => {
     const nudge = {
       key: "plan|test",

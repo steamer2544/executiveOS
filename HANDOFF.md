@@ -10,7 +10,7 @@
 > budget-ladder fix), a live-hardening session on the Discord agent (think-loop fix + retry resilience +
 > message chunking + button feedback + session trust), **Phase 39 + 39.1** (state decay/TTL; deadline
 > decay as an opt-in dashboard toggle), **Phase 38** (sandbox `run_command`), and **Phase 36 LIVE**
-> (Discord). **876 passing tests** + two opt-in browser e2e, all green.
+> (Discord). **882 passing tests** + two opt-in browser e2e, all green.
 > Everything through **Phase 42** is **pushed** (`origin/main` = `main`, `e00dc9b`). The agent is
 > **live-confirmed working** end-to-end over Discord. **If a running bot misbehaves after a pull, RESTART
 > it — code isn't hot-reloaded.**
@@ -124,9 +124,32 @@
 >   new tests were repaired; a 5th sabotage was added to prove the repair bites. **Review the tests, not
 >   just the code — a green suite proves nothing about a test that never looked.**
 >
+> **▶️ PHASE 42.1 — the cold re-review of 42, which found three things (all fixed).** Full account in
+> the `CLAUDE.md` Phase 42.1 entry. What a future session needs:
+> - **Phase 42 fixed 1 of 4 owner-facing doors.** `get_digest` → `renderDigest` was still handing the
+>   model `"Planner needs your call: <kind>"` — the same string, the same model, through the interface
+>   the owner actually uses — plus the dashboard card and the `ui` console. There is now **one shared
+>   projection, `needsYouLabel()` in `digest.ts`**, used by all four render sites and `nudgeSubject`.
+>   **Use it at any new render site.** `summary` stays the key and is unchanged on disk.
+> - **`detail || summary` was right for 1 source out of 4.** Only `plan` has an identifier for a
+>   summary; autopilot/executor/worker have the human sentence there and the extra in `detail`, so
+>   preferring `detail` drops *"with FAILING tests"* and keeps the changeset title. `NeedsYouItem.label`
+>   is now set **per source** in `buildDigest` — set it explicitly if you add a fifth source.
+> - **The ratio still over-reported.** `markNudgeAnswered` closed only the newest open nudge, so an
+>   ignored nudge kept **no closing record** and `answered/(answered+expired)` read **100%** with half
+>   the nudges ignored (probed: `sent A, sent B, answered B`). One message now closes **every** open
+>   nudge and answers **at most one**, so `answered + expired == sent`.
+> - An unparseable `sent.ts` no longer fabricates `latencyMs: 0` (that was the *flattering* claim, in
+>   the one distribution that must not flatter). The field is optional — omitted means "age unknown".
+>
 > **The open measurement is now the RATIO ITSELF**: leave `ui` running and read `nudges.jsonl` —
 > `answered` (with latency) vs `expired` vs `suppressed`, per source. That still gates the deferred
 > `agent.proactive.trigger: "rules+llm"` dial; do not add a second nudge source before it exists.
+> **Read it with one caveat: it is a PROXY** — it counts "the owner sent any message soon after", not
+> "the owner replied to this". The unambiguous signal exists and is not wired up: Discord's
+> `message_reference` on a real reply, which `handleMessageCreate` drops (it keeps only `content`) and
+> which would also need `Channel.send` to return the message id. That is the obvious next improvement
+> if the ratio turns out ambiguous.
 >
 > **✅ Phase 40 shipped AND the runtime is now RUNNING ON SQLITE** (this is a change from what the previous
 > handoff said — the flip happened at the end of the session). `bun:sqlite`, no new dependency, one
@@ -367,8 +390,9 @@ The full loop works and is validated (including **live against the real LLM gate
 | — | **Agent budget ladder** | a *second* `max_tokens` failure, distinct from the think-loop: measured **1/8 answered at 8192 vs 4/4 at 32768**, with every failing attempt burning exactly 8192 — so re-sampling at the same ceiling was provably useless. `BUDGET_LADDER = [1,2,4,4]` raises the ceiling per retry instead. Live 6/6 |
 | 41 | **"Make me a file" works** | the gateway's **~125 s wall clock** × 33–48 tok/s ⇒ **~4,000 output tokens is a physical ceiling**, so the budget ladder was inverted into a **context ladder** (`CONTEXT_LADDER = [null,3,1]` + `trimTranscript`); new `save_file` (confined dirs / no executables / no overwrite / NEVER_TRUSTABLE, per-folder approval, 🌿 branch option); large files arrive via `append` chunks with truncated-tool-call feedback; `run_command` had **never worked on Windows** (`sh -c`) → temp `.bat`. Owner-verified live: playable pong + tetris |
 | 42 | **Nudge quality + a readable answer signal** | read the real `nudges.jsonl` (5 sent / 3 days) and found the nudge sentence was composed from the **internal dedup key** — the model read *"needs your call"* as a **phone call** in 2 of 4 live nudges. `nudgeSubject()` sends the human `detail` and **never** `summary` when a detail exists (fixed in the presentation layer — rewording `digest.ts` would invalidate every dedup key already written). `answered` gains `latencyMs`, a new `expired` record gains `ageMs`, `ANSWER_WINDOW_MS = 30 min`; `openNudgeId` treats both as closing. **The sent-vs-answered baseline restarts from here** — the old 5/5 counted replies up to 1 h 55 min later |
+| 42.1 | **Cold re-review of 42** | `/scrutinize` of the phase just shipped. Phase 42 had fixed **1 of 4** owner-facing doors — `get_digest` → `renderDigest` still handed the model the internal key, as did the dashboard card and the `ui` console — and its `detail || summary` rule was right for **1 source of 4** (autopilot/executor/worker keep the human sentence in `summary`, so it dropped *"with FAILING tests"*). One shared `needsYouLabel()` + an explicit per-source `NeedsYouItem.label`. And the ratio still over-reported: only the newest open nudge was closed, so an ignored one kept **no record** and `answered/(answered+expired)` read **100%** — one message now closes every open nudge and answers at most one |
 
-**Test count:** 876 passing, 100% offline (mock backends). Several phases **validated live** against the
+**Test count:** 882 passing, 100% offline (mock backends). Several phases **validated live** against the
 9arm Qwen gateway (`work`, `synth`, `infer`, `propose`, the agent); Phase-25 vendor download + browser-wasm
 e2e run live too. **Screen-sensing is fully live** (real capture → real OCR → real suggestions, both engines
 compared on the same image), the **Advisor is live-validated end to end** (Phase 33.1), **Discord is live**
@@ -389,7 +413,7 @@ change gets too big to review"* and it reaches the "Needs you" queue.
 ```bash
 bun install
 bun run typecheck          # tsc --noEmit (strict) — must stay green
-bun test                   # 876 tests, offline
+bun test                   # 882 tests, offline
 bun run test:e2e           # OPT-IN browser-wasm e2e (real Chromium via Playwright; runs under node, auto-skips
                            #   if playwright/model aren't set up — see test/e2e/README.md)
 bun run test:e2e:chat      # OPT-IN chat-UI e2e (markdown render + no-yank scroll; no gateway/token needed)

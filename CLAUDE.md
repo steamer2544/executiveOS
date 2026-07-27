@@ -1424,6 +1424,54 @@ docs/scopes/           # per-phase specs (the contract handed to the implementer
   comprehensible; a neutral label is a one-word change, but it is out of this scope.
   Spec: `docs/scopes/phase-42-nudge-quality-and-answer-signal.md`. Files: `src/proactive/{compose,
   proactive,types}.ts` (+ `compose.test.ts` new, `proactive.test.ts`).
+- **Phase 42.1 — DONE** (architect, `/scrutinize` of Phase 42 + fixes, this session): **the cold
+  re-review of the phase just shipped** (the Phase 34.2 method, which HANDOFF says to budget a pass
+  for). Phase 42 was traced end-to-end as an outsider; the design call it rests on **held** (`summary`
+  really is the dedup key — `proactive.ts` `key = source|summary`, `needsYouSignature`, `notify.ts` —
+  so fixing it in the presentation layer was right), but three things did not.
+  **(1) It fixed 1 of 4 owner-facing doors, and left the biggest one open.** The measured harm was a
+  *model* reading `"Planner needs your call: long_session"` as a telephone call. `get_digest`
+  (`src/agent/tools.ts:383`) returns `renderDigest(buildDigest())`, and `renderDigest` printed
+  `- **<summary>** — <detail>` — so **the same string reached the same model through the chat door**,
+  which is the interface the owner actually uses. Same leak in the dashboard card (`page.ts`, bolded)
+  and the `ui` console (`index.ts`, which printed **only** the key, never the detail). `nudgeSubject`
+  was referenced from exactly one file.
+  **(2) The rule it generalised was right for one source out of four.** `detail || summary` fits
+  `plan` (summary is a pure identifier, `detail` is the rule's own sentence) and is **backwards** for
+  the other three: autopilot/executor/worker put the human sentence in `summary` and the extra in
+  `detail`, so preferring `detail` drops *"A change is parked on X with **FAILING tests**"* and keeps
+  the changeset title. Phase 42 shipped that regression into the nudge path for 3 of 4 sources —
+  invisible because live nudges have all been `plan` items. Fixed by making the projection explicit:
+  `NeedsYouItem.label` is set **per source** in `buildDigest`, and one shared `needsYouLabel()` (next
+  to `needsYouSignature` — *"one projection for keys, one for eyes"*) is used by all four render
+  sites plus `nudgeSubject`. `summary` is untouched, so no key on disk changes.
+  **(3) The "readable ratio" still over-reported, in exactly the scenario it was built to expose.**
+  `markNudgeAnswered` closed only the **newest** open nudge, so a nudge the owner simply ignored kept
+  **no closing record at all**. Probed against the real code: `sent A@10:00 (ignored), sent B@11:00,
+  owner messages @11:05` → records `answered B` only → `answered/(answered+expired)` = **100%** while
+  half the nudges were ignored — the same overcount as the retired "5/5". Now **one message closes
+  EVERY open nudge and can answer at most one** (newest, inside the window; all others `expired`), so
+  `answered + expired == sent` and the ratio is a count, not a join. That also removes the hidden
+  dependency on `minGapMs >= 30 min` that the `ANSWER_WINDOW_MS` docstring leaned on — two nudges
+  inside one window can no longer both be booked as replies.
+  **Plus:** an unparseable `sent.ts` recorded `latencyMs: 0` under a comment claiming *"uncertain →
+  make the weaker claim"* — "answered instantly" is the **strongest** claim and injects an ideal point
+  into the very distribution this log exists to make honest; `latencyMs` is optional precisely so a
+  record can say *answered, age unknown*, and it is now omitted (criterion 15's assertion was
+  codifying the fabrication, so it was inverted). The `ANSWER_WINDOW_MS` docstring now states plainly
+  that this is a **proxy** — the unambiguous signal is Discord's `message_reference` on a real reply,
+  which `handleMessageCreate` drops (it keeps only `content`) and which would also need
+  `Channel.send` to return the message id. Left as the named next step, not done.
+  882 passing tests (+6). **Sabotage-checked 6/6** (key-first label · `renderDigest` back to `summary`
+  · close-only-newest · answer-every-open · fabricate `latencyMs: 0` · executor ships no label) —
+  each failed exactly the tests written to prevent it, then was restored. **Live-validated** in an
+  isolated `EXECUTIVE_HOME`: a real `system.blocked` → `plan` → `report` now renders
+  `- **blocked: waiting on the Stripe API key**` with **zero** occurrences of the internal key in the
+  whole document; the dashboard's inline script still parses (GOTCHA §8). **Deliberately kept:** the
+  bare `resolve_block` under "Recommended action" — that is the plan's identity, not a sentence-shaped
+  key, so the identifier assertion is scoped to the Needs-you section and explains why.
+  Files: `src/report/{digest,types,digest.test}.ts`, `src/proactive/{compose,proactive,types,
+  compose.test,proactive.test}.ts`, `src/ui/page.ts`, `src/index.ts`.
 - **Loop complete (manual trigger):** `auto --apply` runs the whole chain in one command; the human
   reviews/merges the `executive/change-<id>` branch.
 

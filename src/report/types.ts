@@ -4,11 +4,19 @@
 // the Planner recommends, here's what the Autopilot last did, and here's
 // exactly what needs YOU."
 
-/** One item the human must decide/act on. */
+/**
+ * One item the human must decide/act on.
+ *
+ * `summary` and `label` are NOT interchangeable — see the note above `needsYouLabel`
+ * in digest.ts. `summary` is the stable dedup KEY (repeat-suppression, needsYouSignature,
+ * notify.ts); `label` is the sentence a human or a model may read.
+ */
 export interface NeedsYouItem {
   source: "plan" | "autopilot" | "executor" | "worker"; // where it came from
-  summary: string;   // one-line, human-readable
+  summary: string;   // the KEY — stable forever, may contain internal identifiers
   detail?: string;   // optional extra context (reason, branch, etc.)
+  /** The owner-facing sentence. Set at construction; render sites must use it (via needsYouLabel). */
+  label?: string;
 }
 
 /**

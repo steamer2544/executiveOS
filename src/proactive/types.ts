@@ -14,8 +14,11 @@ export interface Nudge {
   /** Stable dedup key. `${source}|${summary}` — the same keying notify.ts uses. */
   key: string;
   source: NeedsYouItem["source"];
+  /** The INTERNAL key text. Logged (it keys repeat-suppression); never sent to the model. */
   summary: string;
   detail?: string;
+  /** The owner-facing sentence from the digest. This is what the composer sends. */
+  label?: string;
 }
 
 /** One line in .executive/nudges.jsonl. Append-only; never rewritten in place. */

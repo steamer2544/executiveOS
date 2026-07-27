@@ -22,7 +22,7 @@ import { runSynth, writeSynthReport } from "./synth/synth.js";
 import { changeSetPath, autoReportPath } from "./paths.js";
 import { runAuto, writeAutoReport } from "./auto/auto.js";
 import { shouldRunAutopilot, freshGuardState } from "./auto/guard.js";
-import { buildDigest, renderDigest, writeDigest } from "./report/digest.js";
+import { buildDigest, renderDigest, writeDigest, needsYouLabel } from "./report/digest.js";
 import { digestPath } from "./paths.js";
 import { readNotifications } from "./report/notify.js";
 import { runDigestTick, createDigestTickState, type DigestTickResult } from "./report/tick.js";
@@ -118,7 +118,8 @@ function printDigestTick(result: DigestTickResult): void {
   if (result.digest.needsYou.length > 0) {
     process.stdout.write("⚠️  Needs you (" + result.digest.needsYou.length + "):\n");
     for (const item of result.digest.needsYou) {
-      process.stdout.write("   - " + item.summary + "\n");
+      // The label, not the key — this line used to print ONLY "Planner needs your call: <kind>".
+      process.stdout.write("   - " + needsYouLabel(item) + "\n");
     }
   } else if (result.cleared) {
     process.stdout.write("✓ Needs-you queue cleared.\n");

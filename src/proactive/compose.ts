@@ -11,6 +11,7 @@ import type { Config } from "../config.js";
 import type { Nudge, ComposedNudge } from "./types.js";
 import type { ChatBackend } from "../agent/types.js";
 import { createChatBackend } from "../agent/protocol.js";
+import { needsYouLabel } from "../report/digest.js";
 
 /**
  * Compose a nudge sentence for the given nudge item.
@@ -81,14 +82,13 @@ function buildPrompt(nudge: Nudge): string {
 /**
  * The human-meaningful subject of a nudge.
  *
- * `summary` is an INTERNAL dedup key (e.g. "Planner needs your call: long_session") — it keys
- * suppression and notification dedup, so it must stay stable and must never be shown to the owner.
- * `detail` is the human sentence (PlannerAction.reason). Prefer it.
+ * One projection, shared with the digest / dashboard / console render sites, so the four
+ * owner-facing surfaces cannot drift apart again. `summary` is an INTERNAL dedup key (e.g.
+ * "Planner needs your call: long_session") — it keys suppression and notification dedup, so it
+ * must stay byte-stable and must never be shown to the owner or handed to the model.
  */
 export function nudgeSubject(nudge: Nudge): string {
-  if (nudge.detail && nudge.detail.trim().length > 0) return nudge.detail.trim();
-  if (nudge.summary && nudge.summary.trim().length > 0) return nudge.summary.trim();
-  return "";
+  return needsYouLabel(nudge);
 }
 
 /**

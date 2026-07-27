@@ -355,7 +355,7 @@ async function refresh() {
 
     const needs = dg.needsYou || [];
     $("needs").innerHTML = needs.length
-      ? needs.map(i => \`<li><div class="src">\${esc(i.source)}</div><div><b>\${esc(i.summary)}</b></div>\${i.detail?\`<div class="muted">\${esc(i.detail)}</div>\`:""}</li>\`).join("")
+      ? needs.map(i => \`<li><div class="src">\${esc(i.source)}</div><div><b>\${esc(i.label || i.detail || i.summary)}</b></div></li>\`).join("")
       : "<li class='empty'>Nothing needs you right now. ✓</li>";
 
     const sug = dg.suggestions || [];

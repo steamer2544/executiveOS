@@ -516,7 +516,7 @@ describe("answer signal — backward compatibility & edge cases", () => {
     expect(openNudgeId(readNudgeRecords())).toBeNull();
   });
 
-  test("unparseable sent ts → answered with latencyMs 0 (criterion 15)", () => {
+  test("unparseable sent ts → answered with NO latencyMs, not a fabricated 0 (criterion 15)", () => {
     writeFileSync(join(TEST_HOME, "nudges.jsonl"),
       JSON.stringify({ event: "sent", id: "n1", ts: "not-a-date", key: "k", source: "plan", summary: "s", text: "t", composedBy: "llm" }) + "\n"
     );
@@ -524,7 +524,11 @@ describe("answer signal — backward compatibility & edge cases", () => {
     markNudgeAnswered(new Date("2026-07-24T10:00:00Z"));
     const records = readNudgeRecords();
     expect(records).toHaveLength(2);
-    expect(records[1]!).toMatchObject({ event: "answered", latencyMs: 0 });
+    expect(records[1]!).toMatchObject({ event: "answered", id: "n1" });
+    // `latencyMs: 0` would be the FLATTERING claim — an instant reply — injected straight into
+    // the latency distribution this log exists to make honest. The field is optional so the
+    // record can say "answered, age unknown".
+    expect(records[1]!).not.toHaveProperty("latencyMs");
   });
 
   test("sentToday counts only sent records when history has expired (criterion 16)", async () => {
@@ -539,5 +543,66 @@ describe("answer signal — backward compatibility & edge cases", () => {
 
     const history = readNudgeRecords();
     expect(sentToday(history, now)).toBe(1);
+  });
+});
+
+// ─── Post-Phase-42 review: the ratio must be a count, not a join ──────────────
+//
+// Before this, markNudgeAnswered closed only the NEWEST open nudge, so a nudge the owner
+// simply ignored kept no closing record at all — and answered/(answered+expired) read 100%
+// in exactly the scenario the signal exists to expose.
+
+describe("answer signal — every open nudge is closed", () => {
+  beforeEach(() => { setupHome(); });
+  afterEach(() => { teardownHome(); });
+
+  function sentLine(id: string, ts: string): string {
+    return JSON.stringify({ event: "sent", id, ts, key: "k-" + id, source: "plan", summary: "s", text: "t", composedBy: "llm" }) + "\n";
+  }
+
+  test("an ignored older nudge is closed as expired in the SAME call that answers the newest", () => {
+    // A sent 10:00 and ignored; B sent 11:00; the owner messages at 11:05.
+    writeFileSync(join(TEST_HOME, "nudges.jsonl"),
+      sentLine("A", "2026-07-24T10:00:00Z") + sentLine("B", "2026-07-24T11:00:00Z"));
+
+    markNudgeAnswered(new Date("2026-07-24T11:05:00Z"));
+
+    const records = readNudgeRecords();
+    const answered = records.filter((r) => r.event === "answered");
+    const expired = records.filter((r) => r.event === "expired");
+
+    expect(answered).toHaveLength(1);
+    expect(answered[0]!).toMatchObject({ id: "B", latencyMs: 300000 });
+    expect(expired).toHaveLength(1);
+    expect(expired[0]!).toMatchObject({ id: "A", ageMs: 3900000 });
+
+    // The whole point: closed == sent, so the ratio needs no join against open `sent` rows.
+    expect(answered.length + expired.length).toBe(records.filter((r) => r.event === "sent").length);
+    expect(openNudgeId(records)).toBeNull();
+  });
+
+  test("one message answers at most ONE nudge, even when two are inside the window", () => {
+    // A lowered minGapMs can put two nudges inside ANSWER_WINDOW_MS. Booking both as replies
+    // would re-inflate the ratio, so the older one expires regardless of its age.
+    writeFileSync(join(TEST_HOME, "nudges.jsonl"),
+      sentLine("A", "2026-07-24T11:00:00Z") + sentLine("B", "2026-07-24T11:10:00Z"));
+
+    markNudgeAnswered(new Date("2026-07-24T11:15:00Z"));
+
+    const records = readNudgeRecords();
+    expect(records.filter((r) => r.event === "answered")).toHaveLength(1);
+    expect(records.filter((r) => r.event === "answered")[0]!).toMatchObject({ id: "B" });
+    // A was only 15 min old — still expired, because one message is one reply.
+    expect(records.filter((r) => r.event === "expired")[0]!).toMatchObject({ id: "A", ageMs: 900000 });
+  });
+
+  test("a second message after everything is closed appends nothing", () => {
+    writeFileSync(join(TEST_HOME, "nudges.jsonl"),
+      sentLine("A", "2026-07-24T10:00:00Z") + sentLine("B", "2026-07-24T11:00:00Z"));
+
+    markNudgeAnswered(new Date("2026-07-24T11:05:00Z"));
+    expect(readNudgeRecords()).toHaveLength(4);
+    markNudgeAnswered(new Date("2026-07-24T11:30:00Z"));
+    expect(readNudgeRecords()).toHaveLength(4);
   });
 });
