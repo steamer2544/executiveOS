@@ -251,12 +251,15 @@ implementation.)
 
 ---
 
-## 9. Open questions for the owner
+## 9. Open questions for the owner — **ANSWERED 2026-07-27, both as the scope proposed**
 
-These change the work materially and are the owner's call, not the implementer's:
+These changed the work materially and were the owner's call, not the implementer's. Both are now
+settled; **nothing in §6 changes as a result** — the scope's defaults were the answers.
 
 1. **Does the chat card belong on this page at all?** The owner's day-to-day interface is Discord.
    Removing it would free 465px and simplify the fold — but it is also the only place the browser mic
    works. *This scope keeps it* (guardrail 5: nothing is removed).
+   → **OWNER: keep it.** `chatCard` stays, at position 3 per §6.1.
 2. **Is `VISIBLE_PROPOSALS = 3` right?** Three is chosen so the queue cannot outweigh the answer; the
    real number depends on how often the owner acts on more than the top few.
+   → **OWNER: 3 is right.** Implement §6.2 as written.

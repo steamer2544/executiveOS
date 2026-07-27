@@ -1,8 +1,10 @@
 # ExecutiveOS — Handoff & Plan
 
 > **Purpose:** a single doc to resume this project cold if context/memory is lost. Pairs with
-> `CLAUDE.md` (the authoritative phase-by-phase log), `GOTCHA.md` (traps & non-obvious failure modes —
-> read before touching PowerShell/state/tests/LLM), and `README.md` (user-facing overview).
+> `CLAUDE.md` (the standing rules + a one-row-per-phase index), **`docs/phase-log.md` (the authoritative
+> phase-by-phase log, split out of `CLAUDE.md` on 2026-07-27 — new entries go THERE)**, `GOTCHA.md`
+> (traps & non-obvious failure modes — read before touching PowerShell/state/tests/LLM), and
+> `README.md` (user-facing overview).
 > Last updated after the **Candidate B + Phase 45 scoping session** (OCR language picked from the window
 > title; the dashboard measured and scoped), on top of the **Phase 43 + 44 session** (config backup on
 > every write; the working-pattern
@@ -15,19 +17,27 @@
 > message chunking + button feedback + session trust), **Phase 39 + 39.1** (state decay/TTL; deadline
 > decay as an opt-in dashboard toggle), **Phase 38** (sandbox `run_command`), and **Phase 36 LIVE**
 > (Discord). **931 passing tests** + two opt-in browser e2e, all green.
-> Everything through **Phase 45's scope** is committed on `main` (`17bb60e`); **10 commits are NOT yet
+> Everything through **Phase 45's scope** is committed on `main`; **11 commits are NOT yet
 > pushed** as of this session's end. The agent is
 > **live-confirmed working** end-to-end over Discord. **If a running bot misbehaves after a pull, RESTART
 > it — code isn't hot-reloaded.**
 >
-> **▶️ START HERE NEXT SESSION — Phase 45 (dashboard IA) is scoped and ready to implement.**
-> `docs/scopes/phase-45-dashboard-ia.md` (`17bb60e`). Read the scope, not a summary; §6 of this doc has
-> the measurements. Do it **yourself, not delegated** — it is a judgment task and `page.ts` carries the
-> GOTCHA §8 backslash trap that stays green under `bun test`. Two questions in §9 of the scope are the
-> **owner's call and were never answered**: (a) does the chat card belong on this page now that Discord
-> is the daily interface (removing it frees 465px, but it is the only place the browser mic works — the
-> scope keeps it), and (b) is `VISIBLE_PROPOSALS = 3` the right bound? **Ask before implementing those
-> two**; everything else in the scope is decided.
+> **▶️ START HERE NEXT SESSION — Phase 45 (dashboard IA) is scoped, fully decided, and ready to
+> implement.** `docs/scopes/phase-45-dashboard-ia.md`. Read the scope, not a summary; §6 of *this* doc
+> has the measurements. Do it **yourself, not delegated** — it is a judgment task and `page.ts` carries
+> the GOTCHA §8 backslash trap that stays green under `bun test`. **The two open questions in §9 were
+> ANSWERED by the owner on 2026-07-27, both as the scope proposed:** the chat card **stays** (position 3
+> per §6.1), and **`VISIBLE_PROPOSALS = 3` is right** (§6.2 as written). Nothing in §6 changes; there is
+> nothing left to ask.
+>
+> **▶️ `CLAUDE.md` was split (2026-07-27).** It had reached 163,798 chars and Claude Code was warning
+> that it exceeds the **150k auto-load limit**, i.e. the phase log — the thing a cold session most needs
+> — was the part at risk of being silently truncated. The detailed log moved **verbatim** to
+> **`docs/phase-log.md`** (158k chars; the move was byte-verified against `git show HEAD:CLAUDE.md`), and
+> `CLAUDE.md` is now **15k**: core principle, dev workflow, guardrails, tech stack, layout, a
+> one-row-per-phase index table, and the commands. **Write new phase entries in `docs/phase-log.md` and
+> add one row to the table.** Keeping `CLAUDE.md` small is now a standing constraint, not a tidy-up —
+> it is auto-loaded into every session *and* every delegated `claude-9arm` run.
 >
 > **▶️ CANDIDATE B (this session, `d8e2673`): the OCR language list is picked from the window title.**
 > `resolveOcrLanguages()` + `hasThai()` in `src/screen/ocr.ts`. Thai in the live foreground title →
@@ -417,7 +427,8 @@ Main loop: **Observe → Understand → Predict → Act → Observe again.**
 ## 2. Current status — DONE through Phase 40 (the planned roadmap is complete)
 
 The full loop works and is validated (including **live against the real LLM gateway**). Phases (see
-`CLAUDE.md` for the detailed entry on each — it is the authoritative log; this table is a map):
+**`docs/phase-log.md`** for the detailed entry on each — it is the authoritative log; this table and the
+shorter one in `CLAUDE.md` are maps):
 
 | # | Phase | What it added |
 |---|-------|---------------|
@@ -535,7 +546,7 @@ Full command list is in `README.md` / `CLAUDE.md` and `printUsage()` in `src/ind
 **Dev workflow (division of labor):** the architect (Claude) writes a **scope** in `docs/scopes/`, hands it
 to **claude9arm** (a cheaper Qwen worker) to implement, then the architect **reviews + runs every acceptance
 criterion for real** (never trusts the self-report), fixes defects, and commits. Every phase = one commit +
-a `CLAUDE.md` phase entry.
+a **`docs/phase-log.md`** entry + one row in the `CLAUDE.md` index table.
 
 - Delegate with `claude-9arm -p "<self-contained prompt>" --allowedTools Bash Read Edit Write Glob Grep`
   (there is a `qwen-agent` skill for this). The prompt must be **standalone** — qwen has none of the
@@ -552,13 +563,18 @@ a `CLAUDE.md` phase entry.
   only the handful of files the job touches into a scratch dir and delegate without `--add-dir` at all;
   or temporarily point the run at a directory that has no `CLAUDE.md`. Until one is verified, **assume a
   delegated run will die at the report stage** and plan to review its files rather than its report.
+  **Update 2026-07-27: `CLAUDE.md` is now 15k chars, not 160k** (the log moved to `docs/phase-log.md`,
+  which is *not* auto-loaded). That removes one contributor to the 99 k figure — but **it is untested,
+  and 15k chars ≈ 5k tokens does not by itself explain 99 k**, so do not treat the trap as solved. The
+  bigger measured culprit is still **raw `bun test` output** (750+ `(pass)` lines ≈ 20–30 k tokens per
+  run, several runs per job — see the next bullet). If a delegated run now survives, record it here.
 - Keep the rest of the prompt discipline regardless: an explicit **"do NOT read CLAUDE.md / HANDOFF.md /
   GOTCHA.md — everything you need is in the spec"**, plus "work file by file, grep rather than reading
   whole files".
 - **⚠️ …and forbid raw `bun test` output — that is the real context killer.** Phase 40's Job 1 died to the
   same `ContextWindowExceededError` *despite* running from outside the repo with the docs explicitly
   banned. The suite prints **750+ `(pass)` lines ≈ 20–30 k tokens per run**, and an implementer runs it
-  several times (plus once per sabotage step). `CLAUDE.md` is only ~30 k; a few test runs dwarf it. Put
+  several times (plus once per sabotage step) — dwarfing even the old 160 k-char `CLAUDE.md`. Put
   **"NEVER print full test output — always `bun test 2>&1 | tail -20`"** in every delegation prompt, and
   cap the final report ("under 20 lines"). Job 2 got that instruction and survived to report.
 - **A run that dies at the report stage has usually still done the work.** Both Phase 40 jobs wrote every
@@ -794,9 +810,10 @@ Measured 2026-07-27, `127.0.0.1:4317`, real data, 1536×864. **Page height 4,766
   worker\worker.test.ts; task: none; tests passing; not blocked; active."* — at 13px in `--muted`,
   above a page that repeats the same facts 3,600px lower.
 
-**Two open questions are the owner's call** (§9 of the scope): whether the chat card belongs on this
-page at all now that Discord is the daily interface (removing it frees 465px, but it is the only place
-the browser mic works — the scope keeps it), and whether `VISIBLE_PROPOSALS = 3` is the right bound.
+**The two open questions were answered by the owner on 2026-07-27, both as the scope proposed** (§9 of
+the scope, now recorded there): the **chat card stays** on the page — Discord is the daily interface,
+but the dashboard is the only place the browser mic works — and **`VISIBLE_PROPOSALS = 3` is the right
+bound**. §6 of the scope is unchanged by the answers; there is nothing left to ask.
 
 **Do not delegate this one.** It is a judgment task, and `page.ts` is the file with the GOTCHA §8
 backslash trap that stays green under `bun test`.
@@ -807,14 +824,14 @@ the wrong card. Measure the rendered page.
 
 ### Needs the owner — small, carried over, none of it blocking
 
-1. **Push.** 10 commits sit on local `main`, unpushed (`origin/main` is at `e00dc9b`).
+1. **Push.** 11 commits sit on local `main`, unpushed (`origin/main` is at `e00dc9b`).
 2. **Create the first config backup.** Phase 43 engages on the **next** config write, and Candidate B
    edited `config.json` by hand (not through `writeConfigFile`), so **`config-genesis.json` still does
    not exist**. Toggle anything in the dashboard Autonomy card once and it appears.
 3. **Delete `.executive/config.json.pre-sqlite`** — the fake backup missing the whole `agent` and
    `advisor` blocks. A real backup exists now; keeping this one invites restoring it by mistake.
-4. **Answer the two Phase 45 questions** in §9 of `docs/scopes/phase-45-dashboard-ia.md` before that
-   phase is implemented.
+4. ~~Answer the two Phase 45 questions~~ — **DONE 2026-07-27**: keep the chat card,
+   `VISIBLE_PROPOSALS = 3`. Recorded in §9 of `docs/scopes/phase-45-dashboard-ia.md`.
 5. **Consider clearing the advisor queue.** 8 proposals are pending and some are the pre-Phase-33
    generic kind ("Consider archiving unused browser tabs") that the grounding work exists to stop.
    They are what makes `proposalsCard` 43% of the page.
@@ -899,6 +916,8 @@ src/
                    #   notifications.jsonl, nudges.jsonl, conversation.jsonl, inferred, advisor.json,
                    #   vendor/ + models/ (browser-wasm transformers.js + Whisper model, served from 127.0.0.1)
 docs/scopes/       # per-phase specs
-CLAUDE.md          # authoritative phase log + workflow + guardrails
+docs/phase-log.md  # AUTHORITATIVE phase-by-phase log (split out of CLAUDE.md) — new entries go here
+CLAUDE.md          # standing rules: core principle, workflow, guardrails + a one-row-per-phase index
+                   #   keep it SMALL — auto-loaded into every session and every delegated run
 README.md          # user-facing overview
 ```
