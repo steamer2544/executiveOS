@@ -3,7 +3,9 @@
 > **Purpose:** a single doc to resume this project cold if context/memory is lost. Pairs with
 > `CLAUDE.md` (the authoritative phase-by-phase log), `GOTCHA.md` (traps & non-obvious failure modes —
 > read before touching PowerShell/state/tests/LLM), and `README.md` (user-facing overview).
-> Last updated after the **Phase 43 + 44 session** (config backup on every write; the working-pattern
+> Last updated after the **Candidate B + Phase 45 scoping session** (OCR language picked from the window
+> title; the dashboard measured and scoped), on top of the **Phase 43 + 44 session** (config backup on
+> every write; the working-pattern
 > numbers surfaced to the owner — and a delegation trap that invalidates the documented workaround, see
 > §3), on top of **Phase 42/42.1** (read the live nudge log; fixed nudges composed from an internal dedup
 > key, and made the sent-vs-answered signal readable), **Phase 41** ("make me a
@@ -13,12 +15,33 @@
 > message chunking + button feedback + session trust), **Phase 39 + 39.1** (state decay/TTL; deadline
 > decay as an opt-in dashboard toggle), **Phase 38** (sandbox `run_command`), and **Phase 36 LIVE**
 > (Discord). **931 passing tests** + two opt-in browser e2e, all green.
-> Everything through **Phase 44** is committed on `main` (`f8adad4`); **not yet pushed** as of this
-> session's end. The agent is
+> Everything through **Phase 45's scope** is committed on `main` (`17bb60e`); **10 commits are NOT yet
+> pushed** as of this session's end. The agent is
 > **live-confirmed working** end-to-end over Discord. **If a running bot misbehaves after a pull, RESTART
 > it — code isn't hot-reloaded.**
 >
-> **▶️ PHASE 43 + 44 (this session, committed `4ef1fa8` + `f8adad4`).** Both were delegated; **neither
+> **▶️ START HERE NEXT SESSION — Phase 45 (dashboard IA) is scoped and ready to implement.**
+> `docs/scopes/phase-45-dashboard-ia.md` (`17bb60e`). Read the scope, not a summary; §6 of this doc has
+> the measurements. Do it **yourself, not delegated** — it is a judgment task and `page.ts` carries the
+> GOTCHA §8 backslash trap that stays green under `bun test`. Two questions in §9 of the scope are the
+> **owner's call and were never answered**: (a) does the chat card belong on this page now that Discord
+> is the daily interface (removing it frees 465px, but it is the only place the browser mic works — the
+> scope keeps it), and (b) is `VISIBLE_PROPOSALS = 3` the right bound? **Ask before implementing those
+> two**; everything else in the scope is decided.
+>
+> **▶️ CANDIDATE B (this session, `d8e2673`): the OCR language list is picked from the window title.**
+> `resolveOcrLanguages()` + `hasThai()` in `src/screen/ocr.ts`. Thai in the live foreground title →
+> `tha+eng`, otherwise `eng`, unknown title → `tha+eng` (uncertainty must not DROP a script). The lookup
+> is a thunk and only the tesseract engine pays for it. **The load-bearing decision was the config
+> default:** `loadConfig` filled `languages` with `"tha+eng"` unconditionally and the live config had it
+> on disk, so "non-empty = manual override" would have made the feature a no-op on the only machine that
+> runs it — the default is now the sentinel `"auto"`, and the owner's live config was switched (backup:
+> `.executive/config-precandidate-b.json`). **Measured caveat:** the hallucination this fixes does *not*
+> reproduce on a clean synthetic fixture; the 59-garbage-char figure is from a real screenshot. Also
+> found: **a `<<'EOF'` bash heredoc in the Bash tool eats backslashes** (GOTCHA §8) — write scripts with
+> the Write tool instead, and verify a patch with `repr()`, not with the script's own success message.
+>
+> **▶️ PHASE 43 + 44 (previous session, committed `4ef1fa8` + `f8adad4`).** Both were delegated; **neither
 > delegated run survived to report**, so every acceptance criterion and every sabotage was run by the
 > architect. Read the two `CLAUDE.md` entries for the full account; what a future session must not lose:
 > - **`config.json` is now backed up on every write** — one choke point (`writeConfigFile`) feeding
@@ -734,33 +757,67 @@ atomic temp+rename path in `src/fs-atomic.ts` — copy the previous contents to
 block the write. Rotation matters: a single `.bak` overwritten by the next bad write is how the
 existing snapshot became useless.
 
-### ⏭️ Candidate C — `/scrutinize` the dashboard's visual design
-**Not yet scoped — write a scope doc first, then run the normal workflow.** The dashboard is the face
-of the product and has never had a design pass; it grew a card per phase. What a reviewer starts from,
-measured 2026-07-27:
+### ⏭️ Candidate C → **Phase 45 — SCOPED, ready to implement** (`docs/scopes/phase-45-dashboard-ia.md`, `17bb60e`)
 
-- `src/ui/page.ts` is **988 lines**, and the page is **one big template literal** (inline CSS + inline
-  JS, self-contained by design — no external resources, served on 127.0.0.1). **Read `GOTCHA.md` §8
-  before editing it:** every regex backslash inside that literal is eaten at emit time, and `bun test`
-  stays green while the whole inline script dies with `Invalid regular expression`. The opt-in
-  `bun run test:e2e:chat` (real Chromium, no gateway needed) is what catches that class of breakage —
-  run it after any page edit.
-- **12 cards in one 920px single-column grid**, and the DOM order is the finding: `chat`, `listen`,
-  **`settings` (~80 lines tall)**, **`autonomy`**, **`fileOutput`**, `proposals` all come *before*
-  `Now`, `Recommended action` and `Needs you`. The owner scrolls past ~190 lines of configuration to
-  reach "what needs me" — which is the entire point of the product. Information architecture is the
-  first thing to question, ahead of any styling.
-- Theming is **9 CSS custom properties** (`--bg --card --fg --muted --line --accent --act --ask
-  --danger`) plus exactly **one** `@media (prefers-color-scheme: light)` override. There are **no
-  width breakpoints** — only two `flex-wrap` spots — so narrow windows are untested.
-- Constraints that must survive any redesign: no external fonts/CSS/JS (the page must keep working
-  offline and must not phone out), the `🔴 Listening…` / `🔴 reading screen` indicators stay
-  **visible** (Phase 23/29 ethics, non-negotiable), and `autopilot.apply` stays **off** the page
-  (Phase 34 — arming it is a deliberate `config.json` edit, and this page is unauthenticated).
+**Read the scope, not this summary, before starting.** It carries the measurements, the acceptance
+criteria and the sabotage list. What matters here is that the scope was written **after measuring the
+owner's running dashboard with Playwright**, and the measurement **contradicted what this section used
+to claim**. The old text is preserved at the bottom as a lesson.
 
-Do the intent pass properly here: the honest question is not "which colours" but **"what should this
-page show when the owner opens it for five seconds?"** — Phase 35 was built because the dashboard was
-pull-only and went unused, and the answer may be that most of these cards belong behind a toggle.
+Measured 2026-07-27, `127.0.0.1:4317`, real data, 1536×864. **Page height 4,766px = 5.5 screens.**
+
+| card | top | height | share |
+|------|----:|-------:|------:|
+| chatCard | 119 | 465 | 10% |
+| listenCard | 600 | 222 | 5% |
+| settingsCard | 838 | **84** | 2% |
+| autonomyCard | 937 | 307 | 6% |
+| fileOutputCard | 1260 | 322 | 7% |
+| **proposalsCard** | 1597 | **2039** | **43%** |
+| Now | 3652 | 400 | 8% |
+| Recommended action | 4068 | 88 | 2% |
+| Needs you | 4172 | 96 | 2% |
+| Suggestions | 4284 | 131 | 3% |
+| Tell it something | 4431 | 209 | 4% |
+| Last Autopilot run | 4656 | 88 | 2% |
+
+- **The old diagnosis was wrong.** It blamed configuration and called the settings card "~80 lines
+  tall". It is **84px (2%)** — its body is already collapsed by default. All three config cards
+  together are 713px (15%), not the problem.
+- **The problem is one unbounded card.** `proposalsCard` renders every pending proposal with no cap:
+  8 of them came to **2,039px, 43% of the page**.
+- **The answer occupied 3.9% and was empty.** `needsYou` = 0 items, `recommended` = null — 184px of a
+  4,766px page spent saying *nothing*, while `Now` (which holds the Phase 44 working-pattern line) sat
+  **4.2 screens down**.
+- **420px overflows horizontally** (document 457px). There are no width breakpoints at all.
+- The header already answers the five-second question in one line — *"On branch main, editing
+  worker\worker.test.ts; task: none; tests passing; not blocked; active."* — at 13px in `--muted`,
+  above a page that repeats the same facts 3,600px lower.
+
+**Two open questions are the owner's call** (§9 of the scope): whether the chat card belongs on this
+page at all now that Discord is the daily interface (removing it frees 465px, but it is the only place
+the browser mic works — the scope keeps it), and whether `VISIBLE_PROPOSALS = 3` is the right bound.
+
+**Do not delegate this one.** It is a judgment task, and `page.ts` is the file with the GOTCHA §8
+backslash trap that stays green under `bun test`.
+
+*Preserved as a lesson:* the original section read *"the owner scrolls past ~190 lines of configuration
+to reach 'what needs me'"* — a source-line count, dressed as a user-facing measurement, that pointed at
+the wrong card. Measure the rendered page.
+
+### Needs the owner — small, carried over, none of it blocking
+
+1. **Push.** 10 commits sit on local `main`, unpushed (`origin/main` is at `e00dc9b`).
+2. **Create the first config backup.** Phase 43 engages on the **next** config write, and Candidate B
+   edited `config.json` by hand (not through `writeConfigFile`), so **`config-genesis.json` still does
+   not exist**. Toggle anything in the dashboard Autonomy card once and it appears.
+3. **Delete `.executive/config.json.pre-sqlite`** — the fake backup missing the whole `agent` and
+   `advisor` blocks. A real backup exists now; keeping this one invites restoring it by mistake.
+4. **Answer the two Phase 45 questions** in §9 of `docs/scopes/phase-45-dashboard-ia.md` before that
+   phase is implemented.
+5. **Consider clearing the advisor queue.** 8 proposals are pending and some are the pre-Phase-33
+   generic kind ("Consider archiving unused browser tabs") that the grounding work exists to stop.
+   They are what makes `proposalsCard` 43% of the page.
 
 ### Needs the owner (to go live — code is complete)
 Transcription now has **three working backends** (Phase 25); pick one in the dashboard **Settings** card:
