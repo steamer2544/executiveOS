@@ -185,9 +185,16 @@
   a purely English screen OCRs to lines like `๓๐๒[35๐5[พ๓๐ร๓พยิ...`. *Measured on one real screenshot:*
   `-l eng` → 0 Thai chars / 8 English words; `-l tha+eng` → 59 (garbage) Thai chars / 7 English words —
   so `tha` also costs a little English accuracy. It is **not** a resolution problem (native 1536×960 and
-  the 1280px downscale produce the same garbage). *Fix:* the noise is tolerable (the LLM still read the
-  screen correctly), and `config.screen.ocr.languages` is settable — use `eng` when working in English.
-  A smarter future option: pick the language list from the Layer 1 window title. (Phase 31)
+  the 1280px downscale produce the same garbage). *Fix (Candidate B):* `config.screen.ocr.languages`
+  now defaults to **`"auto"`** — `resolveOcrLanguages()` picks the list per screenshot from the Layer 1
+  **window title**, which is trustworthy precisely because it does not come from OCR (`GetWindowTextW`).
+  Thai in the title → `tha+eng`; otherwise → `eng`; unknown title → `tha+eng` (uncertain must not DROP
+  Thai — noise is survivable, a dropped script is not). Any other non-empty value stays a manual
+  override. *Caveat on reproducing the numbers:* the effect scales with how noisy the image is. A
+  synthetic clean black-on-white page shows **no difference at all** (33 English words either way); a
+  synthetic UI-like page (small anti-aliased text, low contrast, toolbar glyphs) reproduces the
+  direction but far smaller — 0 → 6 garbage Thai chars, 97 → 96 English words. The 59-char figure above
+  is from a **real** screenshot; don't expect a clean fixture to demonstrate it. (Phase 31 · Candidate B)
 - **WinRT async needs an STA apartment.** *Symptom:* `Windows.Media.Ocr` / `StorageFile` calls throw
   `AggregateException` at `$task.Wait(-1)`. *Cause:* a bare spawned `powershell` is MTA for WinRT
   purposes. *Fix:* spawn `powershell -Sta`, and await `IAsyncOperation<T>` via the
@@ -432,3 +439,13 @@
   must not throw) therefore catches only the subset of this bug that breaks **syntax** (e.g. `/\(/` →
   `/(/`). **The silent-corruption case has no automated guard yet** — that is a named, unclaimed
   follow-up. Until it exists, the rule stands: **write no backslash in this file at all.** (Phase 44)
+- **The same trap, one layer out: a `<<'EOF'` bash heredoc in the Claude Code Bash tool eats backslashes
+  too.** *Symptom:* a Python patch script written as `s.replace(old, 'const RE = /[\\u0E00-\\u0E7F]/;')`
+  ran, printed "replaced", and changed **nothing** — because the heredoc delivered `\u0E00`, which Python
+  then read as the literal Thai character, so the script replaced the old text with a byte-identical copy.
+  Earlier in the same session a Windows path `"C:\\Users\\…"` in a heredoc'd `.ts` file reached Tesseract
+  as `C:Usersyiw20…`. *Cause:* the heredoc content is not delivered verbatim, despite the quoted
+  delimiter. *Fix:* when a script or fixture contains a backslash, **write it with the Write tool and run
+  the file** — never pipe it through a heredoc. Forward slashes are safe for paths. Verify a patch changed
+  what you think by printing `repr()` of the line afterwards, not by trusting the script's own success
+  message. (Candidate B)

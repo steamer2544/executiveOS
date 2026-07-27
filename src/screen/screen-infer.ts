@@ -4,7 +4,8 @@
 import type { Config } from "../config.js";
 import type { Suggestion } from "../report/types.js";
 import { captureScreen } from "./screenshot.js";
-import { ocrImage } from "./ocr.js";
+import { ocrImage, resolveOcrLanguages } from "./ocr.js";
+import { foregroundWindow } from "./capture.js";
 import { visionComplete, extractOpenAiText } from "./vision.js";
 import { llmMaxTokens, llmTimeoutMs } from "../config.js";
 import { readFileSync, unlinkSync } from "node:fs";
@@ -33,6 +34,8 @@ export interface ScreenInferDeps {
   /** Ask the project's existing text LLM (mock|anthropic, reusing config.worker) to turn
    *  OCR'd screen text into suggestions. Tests inject a mock so no network/PowerShell runs. */
   textInfer?: (config: Config, text: string) => Promise<Suggestion[]>;
+  /** Read the active window (title + app). Used ONLY to pick the OCR language list. */
+  window?: () => import("./capture.js").ForegroundWindow | null;
 }
 
 /**
@@ -56,6 +59,7 @@ export async function runScreenInference(
   const ocr = deps?.ocr ?? ocrImage;
   const vision = deps?.vision ?? visionComplete;
   const textInfer = deps?.textInfer ?? defaultTextInfer;
+  const getWindow = deps?.window ?? foregroundWindow;
 
   // Track screenshot path for cleanup.
   let shotPath: string | null = null;
@@ -71,9 +75,17 @@ export async function runScreenInference(
 
       if (shot) {
         // Engine selection lives in config (default "winrt"); the OCR module resolves the rest.
+        // Only Tesseract takes a language list, and only it hallucinates Thai on an English
+        // screen — so the guess is scoped to that engine, and the window is read lazily (it is
+        // a spawnSync) only when the configured value is "auto".
+        const engine = config.screen?.ocr?.engine === "tesseract" ? "tesseract" : "winrt";
+        const languages =
+          engine === "tesseract"
+            ? resolveOcrLanguages(config.screen?.ocr?.languages, () => getWindow()?.title ?? null)
+            : config.screen?.ocr?.languages;
         const text = ocr(shot.path, null, {
           engine: config.screen?.ocr?.engine,
-          languages: config.screen?.ocr?.languages,
+          languages,
           tesseractPath: config.screen?.ocr?.tesseractPath,
         });
         const minChars = config.screen?.ocr?.minChars ?? 40;

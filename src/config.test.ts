@@ -122,7 +122,9 @@ describe("screen.ocr engine config", () => {
     writeConfig({ ...base, screen: { ocr: { enabled: true } } });
     const c = loadConfig();
     expect(c.screen!.ocr!.engine).toBe("winrt");
-    expect(c.screen!.ocr!.languages).toBe("tha+eng");
+    // "auto" = pick the list per screenshot from the window title. A blanket "tha+eng" default
+    // is what made Tesseract hallucinate Thai on an all-English screen.
+    expect(c.screen!.ocr!.languages).toBe("auto");
     expect(c.screen!.ocr!.tesseractPath).toBe(null);
   });
 

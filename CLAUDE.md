@@ -1554,6 +1554,37 @@ docs/scopes/           # per-phase specs (the contract handed to the implementer
   event log: `report` now renders `- **Working pattern:** last commit 41m ago · 7 edit(s) since`. Spec:
   `docs/scopes/phase-44-surface-patterns.md`. Files: `src/report/{digest,types,digest.test}.ts`,
   `src/ui/page.ts`.
+- **Candidate B — DONE** (architect impl + self-review + sabotage-check + live, this session): **OCR
+  language picked from the window title.** Phase 31 left Layer 2 sending `-l tha+eng` on *every*
+  screenshot, which makes Tesseract **hallucinate Thai on an all-English screen** (measured on one real
+  screenshot: `eng` → 0 Thai chars / 8 English words; `tha+eng` → 59 garbage Thai chars / 7 English
+  words — the wrong list both adds noise AND costs English accuracy; not a resolution artifact).
+  The signal used to fix it is the **Layer 1 window title**, trustworthy precisely because it does not
+  come from OCR — `capture.ts` reads it via `GetWindowTextW`, so Thai arrives intact. New pure exported
+  `hasThai()` + `resolveOcrLanguages(configured, getTitle)` in `src/screen/ocr.ts`: Thai in the title →
+  `tha+eng`, otherwise → `eng`, **unknown/blank title → `tha+eng`** (uncertain must not DROP a script —
+  noise is survivable, missing Thai is not). `getTitle` is a **thunk** so the spawnSync window lookup
+  is paid for only when it can change the answer. `screen-infer.ts` gains a `window` dep seam and calls
+  it **only for the tesseract engine** (WinRT takes no `-l` and has no Thai pack — reading the window
+  there would be a pointless spawnSync every tick); `runTesseract` resolves defensively too, so a
+  caller passing `"auto"` straight through can never reach tesseract as `-l auto`. Deterministic, NO
+  LLM, no new event/CLI. **The config default had to change, and that is the load-bearing decision:**
+  `loadConfig` filled `languages` with `"tha+eng"` unconditionally, and the owner's live config had
+  that value **written to disk** — so a "non-empty = manual override" rule would have made the feature
+  a no-op on the only machine that runs it. Default is now the sentinel **`"auto"`** (also matched
+  case-insensitively, and by empty/absent); any other non-empty value is a manual override that always
+  wins, in both directions. The owner's live `config.json` was switched to `"auto"` (backup at
+  `.executive/config-precandidate-b.json`). 931 passing tests (+21). **Sabotage-checked 5/5** (guess
+  always `tha+eng` · manual override ignored · unknown title → `eng` · winrt also reads the window ·
+  Thai range widened to swallow Lao) — each failed exactly the tests written to prevent it, then was
+  restored. **Live-validated:** on the owner's real screen (`"typ design - ค้นหาด้วย Google - Brave"`)
+  the resolver picks `tha+eng` and a real end-to-end `runScreenInference` (real capture, real
+  Tesseract, LLM stubbed) passed `-l tha+eng` and read 686 Thai chars. **Honest caveat, measured and
+  recorded in `GOTCHA.md` §2:** the hallucination does **not** reproduce on a clean synthetic fixture
+  (black-on-white text → identical 33 English words either way); a UI-like synthetic page reproduces
+  the direction but far smaller (0 → 6 garbage Thai chars, 97 → 96 English words). The 59-char figure
+  is from a real screenshot — a clean fixture will not demonstrate it. Files: `src/screen/{ocr,
+  ocr.test,screen-infer,screen-infer.test}.ts`, `src/{config,config.test}.ts`, `src/ui/page.ts`.
 - **Loop complete (manual trigger):** `auto --apply` runs the whole chain in one command; the human
   reviews/merges the `executive/change-<id>` branch.
 

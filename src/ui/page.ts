@@ -175,7 +175,7 @@ export function renderPage(): string {
             </select>
           </div>
           <div id="scrOcrTessFields" style="display:none">
-            <div class="field"><input id="scrOcrLanguages" type="text" placeholder="Languages (default tha+eng)" /></div>
+            <div class="field"><input id="scrOcrLanguages" type="text" placeholder="Languages — auto = guess from window title (or e.g. tha+eng, eng)" /></div>
             <div class="field"><input id="scrOcrTessPath" type="text" placeholder="tesseract.exe path (blank = auto-detect)" /></div>
           </div>
           <div id="scrVisionFields" style="display:none;margin-top:8px">

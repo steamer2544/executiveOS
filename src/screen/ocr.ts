@@ -42,8 +42,55 @@ const OCR_PS1 = [
 /** Options for selecting the OCR engine. */
 export interface OcrOptions {
   engine?: "winrt" | "tesseract";
-  languages?: string;       // tesseract, e.g. "tha+eng"
+  languages?: string;       // tesseract, e.g. "tha+eng"; "auto" → guess (see resolveOcrLanguages)
   tesseractPath?: string | null;
+}
+
+/** Thai block, U+0E00–U+0E7F. */
+const THAI_RE = /[\u0E00-\u0E7F]/;
+
+/** True when the string contains at least one Thai character. */
+export function hasThai(s: string | null | undefined): boolean {
+  return typeof s === "string" && THAI_RE.test(s);
+}
+
+/** The configured value that means "decide for me" (also: empty/absent). */
+const AUTO = "auto";
+
+/**
+ * Resolve the Tesseract `-l` language list for one screenshot.
+ *
+ * WHY this exists: passing `tha+eng` at all times makes Tesseract HALLUCINATE Thai on an
+ * all-English screen. Measured on one real screenshot: `-l eng` → 0 Thai chars / 8 English
+ * words; `-l tha+eng` → 59 garbage Thai chars / 7 English words — so the wrong list both adds
+ * noise AND costs English accuracy. It is not a resolution artifact (native 1536×960 is the
+ * same). See GOTCHA.md §2.
+ *
+ * The signal used to decide is the Layer 1 foreground window TITLE, which is trustworthy
+ * precisely because it does not come from OCR: `capture.ts` reads it via `GetWindowTextW`, so
+ * Thai arrives intact. `getTitle` is a thunk so the caller pays for the (spawnSync) lookup only
+ * when the answer can change the outcome — a manual setting never reads the window at all.
+ *
+ * @param configured — `config.screen.ocr.languages`. Anything non-empty other than "auto" is a
+ *                     MANUAL OVERRIDE and always wins.
+ * @param getTitle   — returns the active window title, or null when unknown.
+ */
+export function resolveOcrLanguages(
+  configured: string | null | undefined,
+  getTitle: () => string | null,
+): string {
+  const manual = typeof configured === "string" ? configured.trim() : "";
+  if (manual.length > 0 && manual.toLowerCase() !== AUTO) {
+    return manual;
+  }
+
+  const title = getTitle();
+  // Unknown title → keep the old behaviour. Guessing "eng" would DROP Thai outright, whereas
+  // "tha+eng" only adds noise the reader can survive: uncertain → do not throw information away.
+  if (title === null || title.trim().length === 0) {
+    return "tha+eng";
+  }
+  return hasThai(title) ? "tha+eng" : "eng";
 }
 
 /**
@@ -174,7 +221,10 @@ function runTesseract(path: string, opts?: OcrOptions): string {
 
   // Normalize the image path — both WinRT and Tesseract dislike mixed separators.
   const imagePath = normalize(path);
-  const languages = opts?.languages ?? "tha+eng";
+  // Defensive: a caller that passes "auto" (or nothing) straight through must never reach
+  // tesseract as `-l auto`. Resolving with a null title yields the old "tha+eng" default; the
+  // window-title guess is made by the caller, which is the layer that knows the title.
+  const languages = resolveOcrLanguages(opts?.languages, () => null);
 
   try {
     const result = Bun.spawnSync(

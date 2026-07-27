@@ -208,7 +208,13 @@ export interface Config {
        *  - "tesseract" — local tesseract.exe + tha.traineddata. Reads Thai (and Thai/English mixed).
        */
       engine?: OcrEngine;
-      languages?: string;          // tesseract only, e.g. "tha+eng". Default "tha+eng".
+      /**
+       * Tesseract `-l` list. Default "auto": pick per screenshot from the Layer 1 window title
+       * (Thai in the title → "tha+eng", otherwise "eng"), because a blanket "tha+eng" makes
+       * Tesseract hallucinate Thai on an all-English screen. Any other non-empty value (e.g.
+       * "tha+eng", "eng", "jpn") is a manual override and always wins. Ignored by "winrt".
+       */
+      languages?: string;
       tesseractPath?: string | null; // null → auto-detect the exe. Default null.
     };
     /** Layer 3: screenshot → multimodal vision LLM (qwen-vl-max) on the owner's gateway. Opt-in escalation. */
@@ -576,7 +582,7 @@ export function loadConfig(): Config {
       // An unknown engine string must never throw and must never silently enable Tesseract —
       // anything that isn't the exact literal falls back to today's behaviour.
       parsed.screen.ocr.engine = parsed.screen.ocr.engine === "tesseract" ? "tesseract" : "winrt";
-      parsed.screen.ocr.languages = parsed.screen.ocr.languages ?? "tha+eng";
+      parsed.screen.ocr.languages = parsed.screen.ocr.languages ?? "auto";
       parsed.screen.ocr.tesseractPath = parsed.screen.ocr.tesseractPath ?? null;
     }
     if (parsed.screen.vision) {

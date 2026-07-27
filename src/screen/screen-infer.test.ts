@@ -327,3 +327,78 @@ describe("runScreenInference", () => {
     });
   });
 });
+
+// Candidate B — the OCR language list is picked from the Layer 1 window title, which is
+// trustworthy because it comes from GetWindowTextW rather than from OCR itself.
+describe("runScreenInference — OCR language selection", () => {
+  const shot = { path: "x.jpg", bytes: 1000, format: "jpeg" as const };
+  const longText = "a".repeat(50);
+
+  /** Run one OCR pass and report the OcrOptions the OCR engine was handed. */
+  async function languagesUsed(
+    ocrCfg: Record<string, unknown>,
+    window: (() => { title: string; app: string } | null) | undefined,
+  ): Promise<string | undefined> {
+    let seen: string | undefined;
+    const config = makeConfig({
+      screen: { ocr: { enabled: true, minChars: 40, ...ocrCfg }, vision: { enabled: false } },
+    });
+    await runScreenInference(config, {
+      capture: () => shot,
+      ocr: (_p, _l, opts) => { seen = opts?.languages; return longText; },
+      textInfer: async () => [],
+      window,
+    });
+    return seen;
+  }
+
+  test("tesseract + auto + Thai window title → tha+eng", async () => {
+    const got = await languagesUsed(
+      { engine: "tesseract", languages: "auto" },
+      () => ({ title: "แชท OPM Dev — LINE", app: "LINE" }),
+    );
+    expect(got).toBe("tha+eng");
+  });
+
+  test("tesseract + auto + English window title → eng", async () => {
+    const got = await languagesUsed(
+      { engine: "tesseract", languages: "auto" },
+      () => ({ title: "builder.ts - executive - Visual Studio Code", app: "Code" }),
+    );
+    expect(got).toBe("eng");
+  });
+
+  test("a manual list beats the window title", async () => {
+    const got = await languagesUsed(
+      { engine: "tesseract", languages: "tha+eng" },
+      () => ({ title: "builder.ts - executive - Visual Studio Code", app: "Code" }),
+    );
+    expect(got).toBe("tha+eng");
+  });
+
+  test("no window available → tha+eng (uncertain must not drop Thai)", async () => {
+    const got = await languagesUsed({ engine: "tesseract", languages: "auto" }, () => null);
+    expect(got).toBe("tha+eng");
+  });
+
+  // WinRT takes no -l list and has no Thai pack at all: reading the window there would be a
+  // pointless spawnSync on every single OCR tick.
+  test("the winrt engine never reads the window", async () => {
+    let calls = 0;
+    const got = await languagesUsed(
+      { engine: "winrt", languages: "auto" },
+      () => { calls++; return { title: "แชท OPM Dev", app: "LINE" }; },
+    );
+    expect(calls).toBe(0);
+    expect(got).toBe("auto"); // passed through untouched; ocrImage ignores it on winrt
+  });
+
+  test("a manual list on tesseract does not read the window either", async () => {
+    let calls = 0;
+    await languagesUsed(
+      { engine: "tesseract", languages: "eng" },
+      () => { calls++; return { title: "แชท OPM Dev", app: "LINE" }; },
+    );
+    expect(calls).toBe(0);
+  });
+});

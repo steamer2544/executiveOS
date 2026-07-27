@@ -4,7 +4,7 @@
 import { describe, test, expect } from "bun:test";
 import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
-import { ocrImage, normalizeThaiOcr, resolveTesseractPath } from "./ocr.js";
+import { ocrImage, normalizeThaiOcr, resolveTesseractPath, resolveOcrLanguages, hasThai } from "./ocr.js";
 
 // Thai sara-am as Tesseract emits it: ก + U+0E4D (nikhahit) + U+0E32 (sara aa).
 const DECOMPOSED = "กํา"; // กํา
@@ -111,5 +111,92 @@ describe("resolveTesseractPath — configured path warning", () => {
       process.stderr.write = orig;
     }
     expect(seen.join("")).toBe("");
+  });
+});
+
+describe("hasThai", () => {
+  test("true for a Thai title", () => {
+    expect(hasThai("แชท OPM Dev — LINE")).toBe(true);
+  });
+
+  test("false for an all-English title", () => {
+    expect(hasThai("builder.ts - executive - Visual Studio Code")).toBe(false);
+  });
+
+  test("false for null/undefined/empty (never throws on a missing title)", () => {
+    expect(hasThai(null)).toBe(false);
+    expect(hasThai(undefined)).toBe(false);
+    expect(hasThai("")).toBe(false);
+  });
+
+  // Neighbouring scripts must not be mistaken for Thai: Lao (U+0E80+) sits directly after the
+  // Thai block, and Khmer looks similar to a casual range check.
+  test("false for Lao and Khmer text", () => {
+    expect(hasThai("ສະບາຍດີ")).toBe(false);
+    expect(hasThai("សួស្តី")).toBe(false);
+  });
+
+  test("true when a single Thai character hides inside an otherwise English title", () => {
+    expect(hasThai("Untitled - ก - Notepad")).toBe(true);
+  });
+});
+
+describe("resolveOcrLanguages", () => {
+  const NO_TITLE = () => null;
+
+  test("auto + Thai window title → tha+eng", () => {
+    expect(resolveOcrLanguages("auto", () => "แชท OPM Dev — LINE")).toBe("tha+eng");
+  });
+
+  // The whole point of the feature: a blanket tha+eng hallucinates Thai on an English screen.
+  test("auto + English window title → eng", () => {
+    expect(resolveOcrLanguages("auto", () => "builder.ts - executive - Visual Studio Code")).toBe("eng");
+  });
+
+  test("an empty/absent setting behaves like auto", () => {
+    expect(resolveOcrLanguages(undefined, () => "ตรวจสอบ handoff")).toBe("tha+eng");
+    expect(resolveOcrLanguages(null, () => "GitHub - Chromium")).toBe("eng");
+    expect(resolveOcrLanguages("", () => "GitHub - Chromium")).toBe("eng");
+    expect(resolveOcrLanguages("   ", () => "GitHub - Chromium")).toBe("eng");
+  });
+
+  test('"AUTO" in any casing is still auto, not a language named AUTO', () => {
+    expect(resolveOcrLanguages("AUTO", () => "GitHub - Chromium")).toBe("eng");
+    expect(resolveOcrLanguages(" Auto ", () => "GitHub - Chromium")).toBe("eng");
+  });
+
+  // Manual override is the escape hatch: it must beat the guess in BOTH directions, including
+  // the case where the guess would have agreed.
+  test("a manual list always wins over the guess", () => {
+    expect(resolveOcrLanguages("tha+eng", () => "builder.ts - Visual Studio Code")).toBe("tha+eng");
+    expect(resolveOcrLanguages("eng", () => "แชท OPM Dev — LINE")).toBe("eng");
+    expect(resolveOcrLanguages("jpn", () => "แชท OPM Dev — LINE")).toBe("jpn");
+  });
+
+  test("a manual list is trimmed", () => {
+    expect(resolveOcrLanguages("  tha+eng  ", NO_TITLE)).toBe("tha+eng");
+  });
+
+  // The title lookup is a spawnSync (PowerShell). A manual setting must not pay for it.
+  test("does not read the window at all when the setting is manual", () => {
+    let calls = 0;
+    const getTitle = () => { calls++; return "แชท OPM Dev"; };
+    expect(resolveOcrLanguages("eng", getTitle)).toBe("eng");
+    expect(calls).toBe(0);
+  });
+
+  test("reads the window exactly once when the setting is auto", () => {
+    let calls = 0;
+    const getTitle = () => { calls++; return "GitHub - Chromium"; };
+    resolveOcrLanguages("auto", getTitle);
+    expect(calls).toBe(1);
+  });
+
+  // Uncertain → keep the old behaviour. Guessing "eng" would DROP Thai; "tha+eng" only adds
+  // noise, which the downstream reader survives.
+  test("an unknown or blank title falls back to tha+eng, not eng", () => {
+    expect(resolveOcrLanguages("auto", NO_TITLE)).toBe("tha+eng");
+    expect(resolveOcrLanguages("auto", () => "")).toBe("tha+eng");
+    expect(resolveOcrLanguages("auto", () => "   ")).toBe("tha+eng");
   });
 });
