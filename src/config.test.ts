@@ -4,7 +4,7 @@
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import { mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { randomUUID } from "node:crypto";
-import { loadConfig, updateTranscribeConfig, updateScreenConfig, updateAutonomyConfig, readAutonomyConfig, defaultConfig, readFileOutputConfig, updateFileOutputConfig } from "./config.js";
+import { loadConfig, updateTranscribeConfig, updateScreenConfig, updateAutonomyConfig, readAutonomyConfig, defaultConfig, readFileOutputConfig, updateFileOutputConfig, stripBom } from "./config.js";
 import { configPath } from "./paths.js";
 
 const DIR = "/tmp/executive-test-config-" + randomUUID();
@@ -250,6 +250,57 @@ describe("readAutonomyConfig / updateAutonomyConfig", () => {
     const c = loadConfig();
     expect(c.advisor!.cooldownMs).toBe(999);
     expect(c.advisor!.maxOpen).toBe(3);
+  });
+});
+
+// A hand-edited config.json is the documented way to arm autopilot.apply, and Windows
+// editors add BOMs. Without stripping it, the runtime refuses to start against a file
+// that looks valid in the editor. (Hit for real while live-testing Phase 46.)
+describe("loadConfig tolerates a UTF-8 BOM", () => {
+  beforeEach(() => { process.env.EXECUTIVE_HOME = DIR; });
+  afterEach(() => { try { rmSync(DIR, { recursive: true, force: true }); } catch {} delete process.env.EXECUTIVE_HOME; });
+
+  it("parses a config saved with a BOM, and the values survive", () => {
+    mkdirSync(DIR, { recursive: true });
+    const json = JSON.stringify({ advisor: { enabled: true, maxOpen: 5 } }, null, 2);
+    writeFileSync(configPath(), "﻿" + json, "utf-8");
+    const c = loadConfig();
+    expect(c.advisor!.enabled).toBe(true);
+    expect(c.advisor!.maxOpen).toBe(5);
+  });
+
+  it("stripBom leaves a normal string untouched", () => {
+    expect(stripBom("{}")).toBe("{}");
+    expect(stripBom("﻿{}")).toBe("{}");
+    expect(stripBom("")).toBe("");
+  });
+});
+
+// Phase 46: proposal expiry. `null` is a meaningful value (expiry off), so the merge must
+// distinguish it from `undefined` (field absent → take the default) — a plain `??` would
+// silently turn "off" back on at every load.
+describe("advisor.proposalTtlDays merge", () => {
+  beforeEach(() => { process.env.EXECUTIVE_HOME = DIR; });
+  afterEach(() => { try { rmSync(DIR, { recursive: true, force: true }); } catch {} delete process.env.EXECUTIVE_HOME; });
+
+  it("defaults to 3 days when the field is absent", () => {
+    writeConfig({ advisor: { enabled: true } } as ReturnType<typeof defaultConfig>);
+    expect(loadConfig().advisor!.proposalTtlDays).toBe(3);
+  });
+
+  it("a config written before this feature existed still gets the default", () => {
+    writeConfig({ advisor: { enabled: false, cooldownMs: 600000, maxOpen: 8 } } as ReturnType<typeof defaultConfig>);
+    expect(loadConfig().advisor!.proposalTtlDays).toBe(3);
+  });
+
+  it("keeps an explicit null — expiry off must survive a reload", () => {
+    writeConfig({ advisor: { enabled: true, proposalTtlDays: null } } as ReturnType<typeof defaultConfig>);
+    expect(loadConfig().advisor!.proposalTtlDays).toBeNull();
+  });
+
+  it("keeps a custom number", () => {
+    writeConfig({ advisor: { enabled: true, proposalTtlDays: 14 } } as ReturnType<typeof defaultConfig>);
+    expect(loadConfig().advisor!.proposalTtlDays).toBe(14);
   });
 });
 

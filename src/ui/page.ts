@@ -119,14 +119,13 @@ export function renderPage(): string {
 <main>
 <div class="col" id="colAnswer">
 
-  <section class="card" id="statusCard">
-    <h2>Where you are</h2>
-    <div id="now"></div>
-  </section>
-
   <!-- The one card that answers "what needs me?". Recommended action, Needs you and
        Suggestions were three separate cards saying nothing 3,600px apart (Phase 45);
-       merged, and collapsed to a single line when all three are empty. -->
+       merged, and collapsed to a single line when all three are empty.
+       It is FIRST, above "Where you are" (Phase 45.1): measured on real data, the state
+       card is 423px, so with it on top the answer's last ~117px fell below the fold —
+       the exact failure this phase exists to fix, one card along. The answer is the
+       payoff and its position must not depend on how big the context card grows. -->
   <section class="card" id="answerCard">
     <h2 id="answerHeading">What needs you</h2>
     <div id="answerEmpty" class="muted" style="display:none">Nothing needs you right now. ✓</div>
@@ -144,6 +143,11 @@ export function renderPage(): string {
         <ul class="needs" id="suggestions"></ul>
       </div>
     </div>
+  </section>
+
+  <section class="card" id="statusCard">
+    <h2>Where you are</h2>
+    <div id="now"></div>
   </section>
 
   <section class="card" id="chatCard" style="display:none">
@@ -555,7 +559,10 @@ async function askProposals() {
   try {
     const r = await fetch("/api/propose", { method:"POST" }); const j = await r.json();
     if (!j.ok) throw new Error(j.error||"failed");
-    toast(j.added ? ("added " + j.added + " proposal(s)") : "nothing new right now");
+    // "nothing new right now" was a lie when the queue was full — it had not even asked.
+    toast(j.added ? ("added " + j.added + " proposal(s)")
+      : j.skipped ? j.skipped
+      : "nothing new right now");
     await loadProposals();
   } catch (e) { toast("error: " + e.message); }
   finally { b.disabled = false; b.textContent = "Ask for proposals"; }

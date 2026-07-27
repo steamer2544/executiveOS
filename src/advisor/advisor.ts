@@ -7,13 +7,20 @@ import type { Context } from "../state/types.js";
 import type { Config } from "../config.js";
 import type { Advisor, AdvisorOptions, Proposal, ProposalDraft } from "./types.js";
 import { createAdvisor } from "./factory.js";
-import { readStore, writeStore, addDrafts, decide, pendingTitles } from "./store.js";
+import {
+  readStore, writeStore, addDrafts, decide, pendingTitles,
+  expireStale, pendingCount, PROPOSAL_TTL_DAYS,
+} from "./store.js";
 import { appendNotifications } from "../report/notify.js";
 
 export interface AdvisorRunResult {
   added: Proposal[];
+  /** Proposals retired by age on this run (Phase 46). */
+  expired: Proposal[];
   backend: string;
   error: string | null;
+  /** Set when no LLM call was made at all, with the reason (Phase 46). */
+  skipped: string | null;
 }
 
 // ─── Code filter (Phase 27) ───────────────────────────────────────────────────
@@ -61,14 +68,40 @@ export function sanitizeExecutable(draft: ProposalDraft): { executable: boolean;
 export async function runAdvisor(context: Context, opts: AdvisorOptions): Promise<AdvisorRunResult> {
   const advisor: Advisor = opts.advisorOverride ?? createAdvisor(opts.config);
   const maxOpen = opts.config.advisor?.maxOpen ?? 8;
+  // `null` means "expiry off" and `undefined` means "field absent, use the default" — a
+  // plain `??` collapses the two and quietly re-enables what the owner switched off.
+  const ttlRaw = opts.config.advisor?.proposalTtlDays;
+  const ttlDays = ttlRaw === undefined ? PROPOSAL_TTL_DAYS : (ttlRaw ?? 0);
   const store = readStore();
+
+  // Retire stale proposals FIRST, so the capacity check below sees the slots they free.
+  const expired = expireStale(store, ttlDays);
+
+  // Then refuse to spend a gateway call we cannot use. `addDrafts` caps pending at
+  // `maxOpen` and breaks on the first draft once it is reached — so a full queue made
+  // every run a no-op that still paid for the LLM. Measured on the live runtime: an
+  // Advisor enabled with a 10-minute cooldown against a queue saturated at 8 burned
+  // ~144 calls a day for 3.5 days and wrote nothing. Report it instead of hiding it.
+  if (pendingCount(store) >= maxOpen) {
+    if (expired.length > 0) writeStore(store);
+    return {
+      added: [], expired, backend: advisor.name, error: null,
+      skipped: "queue full (" + maxOpen + " pending) — triage some before asking for more",
+    };
+  }
+
   try {
     const drafts = await advisor.propose(context, pendingTitles(store));
     const added = addDrafts(store, drafts, advisor.name, maxOpen);
-    if (added.length > 0) writeStore(store);
-    return { added, backend: advisor.name, error: null };
+    if (added.length > 0 || expired.length > 0) writeStore(store);
+    return { added, expired, backend: advisor.name, error: null, skipped: null };
   } catch (err) {
-    return { added: [], backend: advisor.name, error: (err as Error).message };
+    // An expiry already computed is still worth persisting — the queue should unblock
+    // even when the gateway is down.
+    if (expired.length > 0) {
+      try { writeStore(store); } catch { /* never let bookkeeping mask the real error */ }
+    }
+    return { added: [], expired, backend: advisor.name, error: (err as Error).message, skipped: null };
   }
 }
 

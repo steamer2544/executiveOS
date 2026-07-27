@@ -310,7 +310,15 @@ export function startUiServer(opts: UiServerOptions) {
           const built = buildState();
           writeState(built);
           const result = await runAdvisor(built.context, { config: loadConfig() });
-          return Response.json({ ok: result.error === null, added: result.added.length, error: result.error });
+          return Response.json({
+            ok: result.error === null,
+            added: result.added.length,
+            expired: result.expired.length,
+            // The page must be able to say "queue full" rather than "nothing new right now",
+            // which is what made a permanently saturated queue look like a quiet day.
+            skipped: result.skipped,
+            error: result.error,
+          });
         } catch (err) {
           return Response.json({ ok: false, error: (err as Error).message }, { status: 500 });
         }

@@ -5,7 +5,9 @@
 import type { Context } from "../state/types.js";
 import type { Config } from "../config.js";
 
-export type ProposalStatus = "pending" | "approved" | "rejected";
+/** `expired` (Phase 46): the owner never triaged it and it aged out. The record is kept —
+ *  what was proposed stays inspectable — but it no longer occupies a slot in the queue. */
+export type ProposalStatus = "pending" | "approved" | "rejected" | "expired";
 
 /** One proposal in the owner's decision queue. */
 export interface Proposal {

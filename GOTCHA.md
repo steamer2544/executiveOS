@@ -334,6 +334,16 @@
   one-liner arrives mangled (`C:Usersyiw20…`), so a file "doesn't exist" and the code looks broken.
   *Cause:* JS string escapes (`\U`, `\A`, …) inside the interpolated source. *This is a test-harness bug,
   not a product bug.* *Fix:* pass Windows paths via `process.env`, never interpolated into the `-e` string.
+- **PowerShell 5.1's `Set-Content -Encoding utf8` writes a BOM, and `JSON.parse` rejects it.**
+  *Symptom:* a harness wrote a valid `config.json` and the runtime died with `Config file contains
+  malformed JSON`, pointing at a file that looks perfectly fine in any editor. *Cause:* `-Encoding utf8`
+  means **UTF-8 *with* BOM** in 5.1 (only `pwsh` 6+ defaults to BOM-less), and `JSON.parse` will not
+  accept a leading U+FEFF. *Fix, both halves:* in a harness write with
+  `[System.IO.File]::WriteAllText($p, $s, (New-Object System.Text.UTF8Encoding $false))`; and in the
+  product `loadConfig` now calls `stripBom()` — **this one is a real product footgun, not just a test
+  artifact**, because `config.json` is *designed* to be hand-edited (arming `autopilot.apply` is
+  deliberately a manual edit) and plenty of Windows editors add a BOM, so the whole runtime would
+  refuse to start. (Phase 46)
   (Phase 27 scare + Phase 29)
 - **Fixtures that reference non-existent file paths break once a real existence check lands.** e.g. the
   Phase-7 synth State-fallback fixture used fake `src/*.ts` paths; Phase 30's filter dropped them. *Fix:*

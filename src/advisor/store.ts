@@ -112,7 +112,15 @@ export function addDrafts(
   maxOpen: number,
   now: string = new Date().toISOString()
 ): Proposal[] {
-  const seen = new Set(store.items.filter((i) => i.status !== "rejected").map((i) => i.title.toLowerCase()));
+  // Title dedup deliberately does NOT count rejected or expired items: a decision the
+  // owner declined, or a suggestion that aged out untriaged, must be allowed to come back
+  // when it becomes relevant again. Without the `expired` exemption, retiring a proposal
+  // would silently blacklist its title forever — the opposite of unblocking the queue.
+  const seen = new Set(
+    store.items
+      .filter((i) => i.status !== "rejected" && i.status !== "expired")
+      .map((i) => i.title.toLowerCase())
+  );
   // Intent dedup is scoped to the open queue (see isRepeatIntent) and grows as we add.
   const openTitles = store.items.filter((i) => i.status === "pending").map((i) => i.title);
   let pendingCount = store.items.filter((i) => i.status === "pending").length;
@@ -167,6 +175,50 @@ export function decide(
 /** Pending proposals, newest first. */
 export function pending(store: AdvisorStore): Proposal[] {
   return store.items.filter((i) => i.status === "pending").slice().reverse();
+}
+
+/** How many proposals are awaiting the owner. Compared against `advisor.maxOpen`. */
+export function pendingCount(store: AdvisorStore): number {
+  return store.items.reduce((n, i) => (i.status === "pending" ? n + 1 : n), 0);
+}
+
+// ── Expiry (Phase 46) ────────────────────────────────────────────────────────
+// The queue had no way out but a human click, so it saturated at `maxOpen` and STAYED
+// there: measured on the live runtime, 8 pending for 3.5 days, every one of them a
+// pre-Phase-33 generic suggestion, while `addDrafts` broke on the first draft of every
+// run. Bad old proposals were permanently blocking good grounded ones.
+//
+// This follows the Phase 39 rule exactly: decay only ever REMOVES a stale assertion the
+// owner never acted on, never invents or changes one, and an unparseable `createdAt` is
+// left alone (uncertain → keep). A proposal is a suggestion about *now* — "take a break",
+// "commit before this gets too big" — so unlike a deadline it does not survive being
+// ignored, which is why this is on by default rather than an opt-in toggle.
+
+/** Default age at which an untriaged proposal is retired. Config may override. */
+export const PROPOSAL_TTL_DAYS = 3;
+
+/**
+ * Retire pending proposals older than `ttlDays`. Pure apart from mutating `store`;
+ * returns the retired items. `ttlDays <= 0` (or non-finite) disables expiry entirely.
+ */
+export function expireStale(
+  store: AdvisorStore,
+  ttlDays: number = PROPOSAL_TTL_DAYS,
+  now: Date = new Date()
+): Proposal[] {
+  if (!Number.isFinite(ttlDays) || ttlDays <= 0) return [];
+  const cutoff = now.getTime() - ttlDays * 24 * 60 * 60 * 1000;
+  const retired: Proposal[] = [];
+  for (const p of store.items) {
+    if (p.status !== "pending") continue;
+    const created = Date.parse(p.createdAt);
+    if (!Number.isFinite(created)) continue;   // uncertain → keep
+    if (created >= cutoff) continue;
+    p.status = "expired";
+    p.decidedAt = now.toISOString();
+    retired.push(p);
+  }
+  return retired;
 }
 
 export type { ProposalStatus };

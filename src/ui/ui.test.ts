@@ -382,8 +382,10 @@ describe("renderPage — Phase 45 information architecture", () => {
 
   it("orders the answer before the queue and the configuration (criterion 1/2)", () => {
     const at = (id: string) => body.indexOf('id="' + id + '"');
-    expect(at("statusCard")).toBeLessThan(at("answerCard"));
-    expect(at("answerCard")).toBeLessThan(at("chatCard"));
+    // Phase 45.1: the ANSWER is first. Measured on real data, "Where you are" is 423px,
+    // which pushed the answer's last block below the fold when it sat on top.
+    expect(at("answerCard")).toBeLessThan(at("statusCard"));
+    expect(at("statusCard")).toBeLessThan(at("chatCard"));
     expect(at("chatCard")).toBeLessThan(at("proposalsCard"));
     // every configuration card comes after the queue
     for (const id of ["listenCard", "autonomyCard", "fileOutputCard", "settingsCard"]) {
@@ -392,7 +394,7 @@ describe("renderPage — Phase 45 information architecture", () => {
   });
 
   it("merges Needs you / Recommended / Suggestions into one card with a one-line empty state (criterion 5)", () => {
-    const answer = body.slice(body.indexOf('id="answerCard"'), body.indexOf('id="chatCard"'));
+    const answer = body.slice(body.indexOf('id="answerCard"'), body.indexOf('id="statusCard"'));
     expect(answer).toContain('id="needsBlock"');
     expect(answer).toContain('id="recBlock"');
     expect(answer).toContain('id="suggestCard"');

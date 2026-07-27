@@ -5,7 +5,7 @@ import { rmSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { MockAdvisor } from "./mock.js";
 import { parseDrafts, extractText, salvageTruncatedArray, explainPatterns, hasGrounding, windowHistory, buildUserMessage, buildRequestBody } from "./anthropic.js";
-import { readStore, writeStore, addDrafts, decide, pending, pendingTitles } from "./store.js";
+import { readStore, writeStore, addDrafts, decide, pending, pendingTitles, expireStale, pendingCount, PROPOSAL_TTL_DAYS } from "./store.js";
 import { runAdvisor, decideProposal } from "./advisor.js";
 import type { Context } from "../state/types.js";
 import type { Config } from "../config.js";
@@ -221,6 +221,169 @@ describe("runAdvisor + decideProposal", () => {
     expect(p?.status).toBe("approved");
     expect(p?.note).toBe("yes please");
     expect(await decideProposal("nope", "approve")).toBeNull();
+  });
+});
+
+// ─── Phase 46: a full queue must not keep paying for LLM calls it cannot use ──
+// Found by reading the live runtime, not by review: advisor.enabled=true with a 10-minute
+// cooldown against a queue saturated at maxOpen=8 had burned ~144 gateway calls a day for
+// 3.5 days and written nothing, because addDrafts breaks on the first draft once
+// pendingCount >= maxOpen. The 8 items holding it shut were pre-Phase-33 generic ones.
+
+describe("advisor queue saturation + expiry (Phase 46)", () => {
+  const DIR = "/tmp/executive-test-advisor-ttl-" + randomUUID();
+  beforeEach(() => { process.env.EXECUTIVE_HOME = DIR; });
+  afterEach(() => { try { rmSync(DIR, { recursive: true, force: true }); } catch {} delete process.env.EXECUTIVE_HOME; });
+
+  const daysAgo = (n: number) => new Date(Date.now() - n * 24 * 60 * 60 * 1000).toISOString();
+
+  function storeWith(count: number, createdAt: string): AdvisorStore {
+    return {
+      items: Array.from({ length: count }, (_, i) => ({
+        id: "id" + i, createdAt, category: "work", title: "T" + i,
+        detail: "d", action: "a", status: "pending" as const,
+      })),
+    };
+  }
+
+  /** Records whether the LLM was reached at all. */
+  function spyAdvisor() {
+    const calls: number[] = [];
+    return {
+      calls,
+      advisor: {
+        name: "spy",
+        async propose(): Promise<ProposalDraft[]> {
+          calls.push(1);
+          return [{ category: "work", title: "fresh idea", detail: "d", action: "a", evidence: "branch is main" }];
+        },
+      },
+    };
+  }
+
+  it("expireStale retires pending proposals past the TTL and keeps the record", () => {
+    const s = storeWith(1, daysAgo(5));
+    const out = expireStale(s, 3);
+    expect(out.length).toBe(1);
+    expect(s.items[0]!.status).toBe("expired");
+    expect(s.items[0]!.decidedAt).toBeDefined();
+    expect(s.items.length).toBe(1);            // kept, never deleted
+    expect(pendingCount(s)).toBe(0);           // but no longer occupies a slot
+  });
+
+  it("leaves a fresh proposal, a decided one, and an unparseable date alone", () => {
+    const fresh = storeWith(1, daysAgo(1));
+    expect(expireStale(fresh, 3)).toEqual([]);
+    expect(fresh.items[0]!.status).toBe("pending");
+
+    const decided = storeWith(1, daysAgo(9));
+    decided.items[0]!.status = "approved";
+    expect(expireStale(decided, 3)).toEqual([]);
+    expect(decided.items[0]!.status).toBe("approved");
+
+    // Uncertain → keep (the Phase 39 rule).
+    const bad = storeWith(1, "not a date");
+    expect(expireStale(bad, 3)).toEqual([]);
+    expect(bad.items[0]!.status).toBe("pending");
+  });
+
+  it("a TTL of 0, a negative TTL or NaN disables expiry entirely", () => {
+    for (const ttl of [0, -1, Number.NaN]) {
+      const s = storeWith(1, daysAgo(400));
+      expect(expireStale(s, ttl)).toEqual([]);
+      expect(s.items[0]!.status).toBe("pending");
+    }
+  });
+
+  it("expires exactly at the boundary, not before it", () => {
+    const now = new Date("2026-07-27T12:00:00.000Z");
+    const justUnder = { items: [{ ...storeWith(1, "2026-07-24T12:00:00.001Z").items[0]! }] };
+    expect(expireStale(justUnder, 3, now)).toEqual([]);      // 1ms younger than the TTL
+    const justOver = { items: [{ ...storeWith(1, "2026-07-24T11:59:59.999Z").items[0]! }] };
+    expect(expireStale(justOver, 3, now).length).toBe(1);    // 1ms older
+  });
+
+  it("does NOT call the LLM when the queue is full, and says why", async () => {
+    writeStore(storeWith(8, daysAgo(1)));                    // full, none stale
+    const spy = spyAdvisor();
+    const r = await runAdvisor(ctx(), {
+      config: { worker: { backend: "mock" }, advisor: { maxOpen: 8, proposalTtlDays: 3 } } as Config,
+      advisorOverride: spy.advisor,
+    });
+    expect(spy.calls.length).toBe(0);                        // the whole point
+    expect(r.skipped).toContain("queue full");
+    expect(r.error).toBeNull();
+    expect(r.added).toEqual([]);
+    expect(pendingCount(readStore())).toBe(8);               // untouched
+  });
+
+  it("expiry runs FIRST, so a full-but-stale queue unblocks itself in one pass", async () => {
+    writeStore(storeWith(8, daysAgo(10)));                   // full AND all stale
+    const spy = spyAdvisor();
+    const r = await runAdvisor(ctx(), {
+      config: { worker: { backend: "mock" }, advisor: { maxOpen: 8, proposalTtlDays: 3 } } as Config,
+      advisorOverride: spy.advisor,
+    });
+    expect(r.expired.length).toBe(8);
+    expect(spy.calls.length).toBe(1);                        // slots freed → it asked
+    expect(r.skipped).toBeNull();
+    expect(r.added.map((p) => p.title)).toEqual(["fresh idea"]);
+    // and the expiry is persisted, not just reported
+    const onDisk = readStore();
+    expect(onDisk.items.filter((i) => i.status === "expired").length).toBe(8);
+    expect(pendingCount(onDisk)).toBe(1);
+  });
+
+  it("persists the expiry even when the gateway call then fails", async () => {
+    writeStore(storeWith(8, daysAgo(10)));
+    const r = await runAdvisor(ctx(), {
+      config: { worker: { backend: "mock" }, advisor: { maxOpen: 8, proposalTtlDays: 3 } } as Config,
+      advisorOverride: { name: "boom", async propose(): Promise<ProposalDraft[]> { throw new Error("net down"); } },
+    });
+    expect(r.error).toBe("net down");
+    expect(r.expired.length).toBe(8);
+    // The queue must unblock even when the LLM is unreachable.
+    expect(pendingCount(readStore())).toBe(0);
+  });
+
+  it("falls back to PROPOSAL_TTL_DAYS when the config omits it", async () => {
+    // Older than the default, younger than any value a caller passed explicitly.
+    writeStore(storeWith(8, daysAgo(PROPOSAL_TTL_DAYS + 1)));
+    const spy = spyAdvisor();
+    const r = await runAdvisor(ctx(), {
+      config: { worker: { backend: "mock" }, advisor: { maxOpen: 8 } } as Config,  // no proposalTtlDays
+      advisorOverride: spy.advisor,
+    });
+    expect(r.expired.length).toBe(8);
+    expect(spy.calls.length).toBe(1);
+  });
+
+  it("a configured null disables expiry, so a full stale queue is skipped not drained", async () => {
+    writeStore(storeWith(8, daysAgo(400)));
+    const spy = spyAdvisor();
+    const r = await runAdvisor(ctx(), {
+      config: { worker: { backend: "mock" }, advisor: { maxOpen: 8, proposalTtlDays: null } } as Config,
+      advisorOverride: spy.advisor,
+    });
+    expect(r.expired).toEqual([]);
+    expect(spy.calls.length).toBe(0);
+    expect(r.skipped).toContain("queue full");
+    expect(pendingCount(readStore())).toBe(8);
+  });
+
+  it("an expired title can be proposed again; a rejected one too, an approved one not", () => {
+    const s: AdvisorStore = { items: [] };
+    addDrafts(s, [{ category: "work", title: "Same idea", detail: "d", action: "a" }], "mock", 8);
+    expireStale(s, 3, new Date(Date.now() + 10 * 24 * 60 * 60 * 1000));
+    expect(s.items[0]!.status).toBe("expired");
+    // Retiring a proposal must not blacklist its title forever — that would be the
+    // opposite of unblocking the queue.
+    expect(addDrafts(s, [{ category: "work", title: "Same idea", detail: "d", action: "a" }], "mock", 8).length).toBe(1);
+
+    const approved: AdvisorStore = { items: [] };
+    addDrafts(approved, [{ category: "work", title: "Done thing", detail: "d", action: "a" }], "mock", 8);
+    decide(approved, approved.items[0]!.id, "approve");
+    expect(addDrafts(approved, [{ category: "work", title: "Done thing", detail: "d", action: "a" }], "mock", 8).length).toBe(0);
   });
 });
 

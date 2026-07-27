@@ -16,7 +16,7 @@
 > budget-ladder fix), a live-hardening session on the Discord agent (think-loop fix + retry resilience +
 > message chunking + button feedback + session trust), **Phase 39 + 39.1** (state decay/TTL; deadline
 > decay as an opt-in dashboard toggle), **Phase 38** (sandbox `run_command`), and **Phase 36 LIVE**
-> (Discord). **940 passing tests** + three opt-in browser e2e, all green.
+> (Discord). **956 passing tests** + three opt-in browser e2e, all green.
 > Everything through **Phase 45** is committed AND pushed as of this session's end. The agent is
 > **live-confirmed working** end-to-end over Discord. **If a running bot misbehaves after a pull, RESTART
 > it — code isn't hot-reloaded.**
@@ -30,11 +30,30 @@
 > and an overflow criterion of mine that was **vacuous because a file path is not an unbreakable
 > string** (fixing it exposed a real 1,057px overflow). Both are now in `GOTCHA.md` §4.
 >
-> **▶️ START HERE NEXT SESSION — there is no scoped phase waiting.** The queue below is the honest
-> answer: item 0 (restart `ui`), the owner's small list in §6, and then **the nudge measurement**, which
-> is the only thing with a real decision hanging off it. Per the Phase 33 method, the next phase should
-> come from **reading live data**, not from a list — `nudges.jsonl`, or the dashboard now that its
-> layout no longer hides what it knows.
+> **✅ PHASE 45.1 + 46 ARE DONE** (this session, after reading the live runtime — the Phase 33 method
+> paid off twice).
+> - **45.1: Phase 45 failed two of its own criteria on the owner's real data.** Measuring a *copy* of
+>   the live `.executive/` showed the page at 1,815px and `statusCard` at 119 as claimed, but the
+>   answer card ran **558→981 against an 864 fold** and the queue was **947 against a `<900` bound** —
+>   because the synthetic fixture used ~62-char evidence lines where real ones are **44–196**, and the
+>   real `Now` card is **423px**. The answer is now **first**; the fixture uses real field lengths;
+>   criterion 4a is re-baselined to a >2× reduction with the derivation written into the test.
+>   **Lesson worth keeping: a fixture you invented will flatter you. Measure the real thing.**
+> - **46: the Advisor had been a no-op loop for 3.5 days** — `enabled`, 10-min cooldown, `maxOpen: 8`,
+>   **pending exactly 8**, so `addDrafts` broke on the first draft of every run while `runAdvisor`
+>   called the gateway *first*: ~144 wasted calls/day, ~500 total. The items holding it shut were the
+>   pre-Phase-33 generic kind. Fixed with a capacity gate before the call, `expireStale` → a new
+>   `expired` status (default 3 days, record kept), and `skipped` surfaced at all four call sites.
+>   **Live proof of the diagnosis: the moment the queue was cleared, 3 checkably-grounded proposals
+>   appeared** (one citing screen-sense — Brave searches for `ไซส์ A4 และขอบของราชการ` plus Word Page
+>   Setup dialogs). Phase 33's grounding had been working all along with nowhere to put its output.
+>
+> **▶️ START HERE NEXT SESSION — there is no scoped phase waiting, and that is the honest answer.**
+> Item 0 below (restart `ui`) is a habit, not a task. The one thing with a real decision hanging off it
+> is still **the nudge measurement** — and this session established that it has barely started (see the
+> updated numbers below). Per the Phase 33 method the next phase should come from **reading live data**,
+> not from a list. Two places worth reading first: `nudges.jsonl`, and the freshly-refilled advisor
+> queue now that grounded proposals can actually reach it.
 >
 > **▶️ `CLAUDE.md` was split (2026-07-27).** It had reached 163,798 chars and Claude Code was warning
 > that it exceeds the **150k auto-load limit**, i.e. the phase log — the thing a cold session most needs
@@ -189,14 +208,27 @@
 > 5. **Then wait and read `nudges.jsonl`.** That measurement still gates the `rules+llm` dial and cannot
 >    be rushed — see the caveats immediately below, which change how to read it.
 >
-> **📊 The nudge baseline, as actually measured on 2026-07-27** (not a plan — the current file):
-> `sent 6 · answered 5 · expired 1 · suppressed 8`. **All 5 `answered` records predate Phase 42 and
-> carry no `latencyMs`** — they are the old blunt signal and are unusable for the ratio. The usable
-> sample is **n = 1** (one `expired`, 41.9 min). The clock genuinely starts now.
-> **And "per source" is vacuous:** every nudge ever sent is `source: "plan"` (`long_session` ×3,
-> `grinding_on_file` ×2, `checkpoint_work` ×1) — autopilot/executor/worker have never fired one. When
-> the sample is big enough, **group by the rule kind inside `key`, not by `source`**, or the breakdown
-> will have exactly one bucket.
+> **📊 The nudge baseline, re-read at the END of the 2026-07-27 session** (the current file, not a plan):
+> `sent 6 · answered 5 · expired 1 · suppressed 14`. **All 5 `answered` records predate Phase 42 and
+> carry no `latencyMs`** — the old blunt signal, unusable for the ratio. Usable sample: **n = 1** (one
+> `expired`, 41.9 min).
+>
+> **This session established something the previous handoff could not know: ZERO nudges have been sent
+> since Phase 42 landed.** Phase 42 is `e00dc9b`, committed **09:36 +07**; the last `sent` record is
+> **09:07 +07** — 29 minutes earlier. So the `checkpoint_work` identifier visible in that nudge's text
+> is **pre-fix data, not a live bug** (the `expired` record 13 min later *is* post-fix, which dates a
+> daemon restart between the two). But it also means **Phase 42 and 42.1 have never been observed
+> working live.** Everything logged since is `suppressed`. Do not read the log as evidence either way
+> until a nudge actually fires post-fix.
+>
+> **Why it fires so rarely, measured:** 24h repeat-suppression is keyed per rule and only **three**
+> rules have ever fired (`long_session` ×3, `grinding_on_file` ×2, `checkpoint_work` ×1), so the ceiling
+> is roughly **one nudge per rule per day** and the observed rate is **6 in 4 days = 1.5/day**.
+> `maxPerDay: 6` has never once bound. If the ratio needs a bigger sample sooner, the lever is the rule
+> set or the suppression window — **not** the daily budget.
+> **And "per source" is vacuous:** every nudge ever sent is `source: "plan"` — autopilot/executor/worker
+> have never fired one. When the sample is big enough, **group by the rule kind inside `key`, not by
+> `source`**, or the breakdown will have exactly one bucket.
 >
 > **▶️ PHASE 42 (this session) — read the nudge log, found two defects, fixed both.** Details in the
 > `CLAUDE.md` Phase 42 entry; the load-bearing facts:
@@ -843,9 +875,13 @@ the wrong card. Measure the rendered page.
    `advisor` blocks. A real backup exists now; keeping this one invites restoring it by mistake.
 4. ~~Answer the two Phase 45 questions~~ — **DONE 2026-07-27**: keep the chat card,
    `VISIBLE_PROPOSALS = 3`. Recorded in §9 of `docs/scopes/phase-45-dashboard-ia.md`.
-5. **Consider clearing the advisor queue.** 8 proposals are pending and some are the pre-Phase-33
-   generic kind ("Consider archiving unused browser tabs") that the grounding work exists to stop.
-   They are what makes `proposalsCard` 43% of the page.
+5. ~~Consider clearing the advisor queue~~ — **DONE 2026-07-27, and it turned out to be a real bug,
+   not housekeeping (Phase 46).** The 8 pending items were not merely stale: they had **saturated
+   `maxOpen`**, so `addDrafts` broke on the first draft of every run while `runAdvisor` called the
+   gateway anyway — ~144 wasted calls/day for 3.5 days. All 8 were dismissed through the real `decide`
+   path (records kept: 23 rejected / 34 approved), and the queue now expires untriaged proposals after
+   3 days on its own. **Within minutes of clearing it the daemon enqueued 3 well-grounded proposals** —
+   which is the proof that the queue, not the Advisor, was the broken part.
 
 ### Needs the owner (to go live — code is complete)
 Transcription now has **three working backends** (Phase 25); pick one in the dashboard **Settings** card:

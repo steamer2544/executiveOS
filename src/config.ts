@@ -104,6 +104,12 @@ export interface Config {
     enabled?: boolean;        // if true, the watch daemon periodically asks the LLM to PROPOSE actions. Default false.
     cooldownMs?: number;      // minimum ms between two advisor calls in the daemon. Default 600000 (10 min).
     maxOpen?: number;         // cap on pending proposals in the queue. Default 8.
+    /** Phase 46: retire an untriaged pending proposal older than this many days, so the
+     *  queue cannot saturate at `maxOpen` and stay there (it did — 8 pending for 3.5 days,
+     *  during which every run paid for an LLM call and could add nothing). Default 3.
+     *  `null` or <= 0 disables expiry. Same rule as Phase 39's decay: it only ever removes
+     *  a stale suggestion the owner never acted on, and the record is kept as `expired`. */
+    proposalTtlDays?: number | null;
     applyOnApprove?: boolean; // if true, approving an EXECUTABLE proposal commits to an isolated branch
                               // immediately (still never merges). Default false → approve leaves a
                               // reviewed dry-run changeset for the owner to `execute --apply`.
@@ -306,6 +312,7 @@ export function defaultConfig(): Config {
       enabled: false,
       cooldownMs: 600000,
       maxOpen: 8,
+      proposalTtlDays: 3,
       applyOnApprove: false,
     },
     agent: {
@@ -354,6 +361,17 @@ export function defaultConfig(): Config {
 }
 
 /**
+ * Remove a leading UTF-8 BOM. `config.json` is DESIGNED to be hand-edited (arming
+ * `autopilot.apply` is deliberately a manual edit), and several Windows editors — plus
+ * PowerShell's own `Set-Content -Encoding utf8` — prepend one. `JSON.parse` rejects it,
+ * so without this the whole runtime refuses to start, reporting "malformed JSON" against
+ * a file that looks perfectly valid in the editor.
+ */
+export function stripBom(s: string): string {
+  return s.charCodeAt(0) === 0xfeff ? s.slice(1) : s;
+}
+
+/**
  * Read config.json. Merges missing watch fields with defaults so a
  * Phase 1 config (no `watch` key) still works.
  * Throws a clear error if the file is missing or if JSON is malformed.
@@ -374,7 +392,7 @@ export function loadConfig(): Config {
 
   let parsed: Config;
   try {
-    parsed = JSON.parse(raw) as Config;
+    parsed = JSON.parse(stripBom(raw)) as Config;
   } catch {
     throw new Error("Config file contains malformed JSON: " + cfgPath);
   }
@@ -506,6 +524,11 @@ export function loadConfig(): Config {
   parsed.advisor.enabled = parsed.advisor.enabled ?? defaults.advisor!.enabled!;
   parsed.advisor.cooldownMs = parsed.advisor.cooldownMs ?? defaults.advisor!.cooldownMs!;
   parsed.advisor.maxOpen = parsed.advisor.maxOpen ?? defaults.advisor!.maxOpen!;
+  // `null` is a MEANINGFUL value here (expiry off), so only `undefined` takes the default.
+  parsed.advisor.proposalTtlDays =
+    parsed.advisor.proposalTtlDays === undefined
+      ? defaults.advisor!.proposalTtlDays!
+      : parsed.advisor.proposalTtlDays;
   parsed.advisor.applyOnApprove = parsed.advisor.applyOnApprove ?? defaults.advisor!.applyOnApprove!;
 
   // Merge missing agent fields with defaults (absent block = the agent is off).

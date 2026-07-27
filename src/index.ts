@@ -42,7 +42,7 @@ import type { Channel, InboundMessage } from "./channel/types.js";
 import { createDiscordChannel } from "./channel/discord.js";
 import { runProactiveTick, markNudgeAnswered } from "./proactive/proactive.js";
 import { createProactiveState, type ProactiveState } from "./proactive/types.js";
-import { readStore, pending } from "./advisor/store.js";
+import { readStore, pending, pendingCount } from "./advisor/store.js";
 import { runScreenInference } from "./screen/screen-infer.js";
 import { screenInferredPath } from "./paths.js";
 import { setScreenActivity } from "./ui/server.js";
@@ -582,8 +582,14 @@ async function main(): Promise<void> {
                 lastAdvisorAt = nowMs;
                 runAdvisor(built.context, { config })
                   .then((result) => {
+                    if (result.expired.length > 0) {
+                      process.stdout.write("Advisor: retired " + result.expired.length + " stale proposal(s)\n");
+                    }
                     if (result.added.length > 0) {
                       process.stdout.write("Advisor: +" + result.added.length + " proposal(s) — review in `ui`\n");
+                    } else if (result.skipped) {
+                      // Say why. A silent no-op here is how the queue sat full for 3.5 days.
+                      process.stdout.write("Advisor: skipped — " + result.skipped + "\n");
                     }
                   })
                   .catch((e) => process.stderr.write("Advisor failed: " + (e as Error).message + "\n"))
@@ -1090,7 +1096,13 @@ async function main(): Promise<void> {
           process.stdout.write("advisor error: " + result.error + "\n");
           process.exit(1);
         }
-        if (result.added.length === 0) {
+        if (result.expired.length > 0) {
+          process.stdout.write("Retired " + result.expired.length + " stale proposal(s) (untriaged, past the TTL).\n");
+        }
+        if (result.skipped) {
+          // Not an error — but not "nothing to suggest" either. Name the real reason.
+          process.stdout.write("Skipped: " + result.skipped + "\n");
+        } else if (result.added.length === 0) {
           process.stdout.write("No new proposals right now.\n");
         } else {
           process.stdout.write("Added " + result.added.length + " proposal(s):\n");
@@ -1098,7 +1110,11 @@ async function main(): Promise<void> {
             process.stdout.write("  • [" + p.category + "] " + p.title + "\n");
           }
         }
-        process.stdout.write("Review + approve them in `proposals` or the dashboard (`ui`).\n");
+        // Only point at the queue when there is actually something in it — after an
+        // expiry run that emptied it, "review them" referred to nothing.
+        if (pendingCount(readStore()) > 0) {
+          process.stdout.write("Review + approve them in `proposals` or the dashboard (`ui`).\n");
+        }
         process.exit(0);
       } catch (err) {
         process.stderr.write("Error: " + (err as Error).message + "\n");
@@ -1274,8 +1290,13 @@ async function main(): Promise<void> {
               const built = buildState();
               runAdvisor(built.context, { config: cfg })
                 .then((result) => {
+                  if (result.expired.length > 0) {
+                    process.stdout.write("Advisor: retired " + result.expired.length + " stale proposal(s)\n");
+                  }
                   if (result.added.length > 0) {
                     process.stdout.write("Advisor: +" + result.added.length + " proposal(s) — review in the dashboard\n");
+                  } else if (result.skipped) {
+                    process.stdout.write("Advisor: skipped — " + result.skipped + "\n");
                   }
                 })
                 .catch((e) => process.stderr.write("Advisor failed: " + (e as Error).message + "\n"))
