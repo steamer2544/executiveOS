@@ -8,6 +8,7 @@
     "test": "bun test",
     "test:e2e": "node test/e2e/browser-wasm.e2e.mjs",
     "test:e2e:chat": "node test/e2e/chat-ui.e2e.mjs",
+    "test:e2e:ia": "node test/e2e/dashboard-ia.e2e.mjs",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {

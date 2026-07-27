@@ -67,9 +67,9 @@ headless `claude-9arm` was dying with `ContextWindowExceededError` at 99k input 
 work* — see the delegation notes in `HANDOFF.md` §3). **Append new phase entries to `docs/phase-log.md`,
 not here.** The table below is only the map.
 
-Current state: **DONE through Phase 44 + Candidate B**; Phase 45 (dashboard IA) is scoped and ready.
-931 passing tests + two opt-in browser e2e. The live runtime is on the **sqlite** event backend, Discord
-is live, screen-sensing Layer 2 is live. Details and the current queue are in `HANDOFF.md`.
+Current state: **DONE through Phase 45.** 940 passing tests + **three** opt-in browser e2e
+(`test:e2e`, `test:e2e:chat`, `test:e2e:ia`). The live runtime is on the **sqlite** event backend,
+Discord is live, screen-sensing Layer 2 is live. Details and the current queue are in `HANDOFF.md`.
 
 | # | Phase | What it added |
 |---|-------|---------------|
@@ -120,6 +120,7 @@ is live, screen-sensing Layer 2 is live. Details and the current queue are in `H
 | 42 (+42.1) | **Nudge quality** | the nudge sentence was built from an **internal dedup key** (the model read "needs your call" as a phone call). One shared `needsYouLabel()` for all four render sites; a readable `answered`/`expired` signal |
 | 43 | **Config backup on every write** | one `writeConfigFile()` choke point → a `config-genesis.json` written once and never rotated + 10 rotating snapshots. Never throws, no restore command on purpose |
 | 44 | **Working pattern surfaced** | `formatPatterns()` renders the numbers the Planner and Advisor already reason over, in **human units**, as a digest line + a Now-card row |
+| 45 | **Dashboard information architecture** | the page was 4,766px (5.5 screens) with **one unbounded card at 43%** and the answer — empty — at 3.9%, measured with Playwright, not guessed. Answer first (`Where you are` → a merged `answerCard` that collapses to one line when there is nothing to say), the proposal queue bounded at 3 (**count, never detail** — the evidence line survives), config collapsed with state in the header, two width breakpoints. `top 3652→119`, page `4766→1739`, queue `2039→870`. The `🔴` indicator stays **outside** the collapsible body |
 | — | Candidate B | the Tesseract language list is picked from the **window title** (Thai in title → `tha+eng`, else `eng`, unknown → `tha+eng`). The load-bearing part was making the config default the sentinel `"auto"` |
 
 - **Auto-sensing (Phase 15–17):** running `watch`/`ui` senses **project + task + branch + files +

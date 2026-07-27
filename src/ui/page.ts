@@ -24,11 +24,30 @@ export function renderPage(): string {
   header .sub { color:var(--muted); font-size:13px; }
   .dot { width:9px; height:9px; border-radius:50%; background:var(--act); box-shadow:0 0 0 3px color-mix(in srgb, var(--act) 25%, transparent); }
   main { max-width:920px; margin:0 auto; padding:22px; display:grid; gap:16px; }
-  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:16px 18px; }
+  /* Two column wrappers (Phase 45). Single-column below 1180px: they stack, so the
+     DOM order IS the reading order — answer first, queue and config after. */
+  .col { display:grid; gap:16px; align-content:start; min-width:0; }
+  /* min-width:0 + overflow-wrap here is the MEASURED guard against a long unbreakable
+     token widening the whole document (verified: removing this pair takes the wide
+     layout to 1462px at a 1280px viewport). The min-width:0 on .col and the minmax(0,…)
+     on the grid track below are defence in depth — each alone also holds. */
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:16px 18px; min-width:0; overflow-wrap:break-word; }
   .card h2 { margin:0 0 12px; font-size:13px; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); }
+  .card h3 { margin:0 0 8px; font-size:12px; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); font-weight:650; }
+  /* A card heading may carry a state summary so a collapsed card still tells you where it stands. */
+  .hsum { text-transform:none; letter-spacing:0; font-weight:400; }
+  .ablock + .ablock { margin-top:16px; }
+  /* A card saying only "nothing needs you" should cost one line, borders included. */
+  .card.tight { padding-top:14px; padding-bottom:14px; }
   .row { display:flex; justify-content:space-between; gap:12px; padding:5px 0; border-bottom:1px dashed var(--line); }
   .row:last-child { border-bottom:0; }
   .row .k { color:var(--muted); } .row .v { text-align:right; font-weight:550; }
+  /* A flex child defaults to min-width:auto, i.e. it refuses to shrink below its
+     min-content width — so one unbreakable token (a path, a URL, a branch name) drags
+     the whole page wider and the document scrolls sideways. These two lines are what
+     stop that; "anywhere" (not "break-word") is required because only it also shrinks
+     the min-content contribution the grid track is sized from. */
+  .row .k, .row .v { min-width:0; overflow-wrap:anywhere; }
   .pill { display:inline-block; padding:2px 9px; border-radius:999px; font-size:12px; font-weight:650; }
   .pill.act { background:color-mix(in srgb, var(--act) 20%, transparent); color:var(--act); }
   .pill.ask { background:color-mix(in srgb, var(--ask) 20%, transparent); color:var(--ask); }
@@ -45,22 +64,45 @@ export function renderPage(): string {
   button.danger { background:var(--danger); color:#fff; }
   button:active { transform:translateY(1px); }
   .muted { color:var(--muted); } .mono { font-family:ui-monospace, Menlo, Consolas, monospace; }
-  .prop { border:1px solid var(--line); border-radius:10px; padding:12px 14px; margin-bottom:10px; }
+  /* Denser chrome, same content: the queue has to fit three FULL proposals — title,
+     detail, evidence, both fields, both buttons — inside the bound, so the pixels come
+     out of padding and gaps, never out of what the owner needs to read. */
+  .prop { border:1px solid var(--line); border-radius:10px; padding:10px 12px; margin-bottom:8px; }
+  .prop input { padding:6px 10px; }
+  .prop .acts button { padding:6px 12px; }
   .prop .cat { font-size:10.5px; text-transform:uppercase; letter-spacing:.06em; color:var(--accent); font-weight:700; }
   .prop .badge { font-size:10.5px; padding:2px 8px; border-radius:999px; margin-left:8px; }
   .prop .badge.exec { background:var(--accent); color:#fff; }
   .prop .badge.record { background:transparent; border:1px solid var(--line); color:var(--muted); }
-  .prop .title { font-weight:650; margin:2px 0 4px; }
-  .prop .detail { color:var(--muted); margin-bottom:8px; }
+  .prop .title { font-weight:650; margin:0 0 4px; }
+  .prop .detail { color:var(--muted); margin-bottom:6px; }
   /* The observation a proposal rests on — lets the owner check it, not just trust it. */
-  .prop .evidence { color:var(--muted); font-size:12px; font-style:italic; margin-bottom:8px; opacity:.85; }
+  .prop .evidence { color:var(--muted); font-size:12px; font-style:italic; margin-bottom:6px; opacity:.85; }
   .auto-row { display:flex; gap:10px; align-items:flex-start; padding:7px 0; font-size:13px; cursor:pointer; }
   .auto-row input { margin-top:2px; flex:none; }
-  .prop input { margin-bottom:8px; }
+  /* Action + note share one row: two stacked full-width inputs cost ~36px per proposal,
+     which is what pushed three cards past the budget. The DETAIL is untouched. */
+  .prop .field { margin-bottom:6px; }
+  .prop input { margin-bottom:0; }
   .prop .acts { display:flex; gap:8px; }
   .prop .empty { color:var(--muted); }
   #toast { position:fixed; bottom:18px; left:50%; transform:translateX(-50%); background:var(--card); border:1px solid var(--line); padding:9px 16px; border-radius:9px; opacity:0; transition:opacity .2s; pointer-events:none; }
   #toast.show { opacity:1; }
+  /* Wide: the answer column beside the queue/config column, so neither pushes the other
+     off-screen. minmax(0,…) rather than a bare fr, because a bare fr floors the track at
+     its MIN-CONTENT width — belt and braces with the .card rule above. */
+  @media (min-width:1180px) {
+    main { grid-template-columns:minmax(0,1.35fr) minmax(0,1fr); max-width:1240px; align-items:start; }
+  }
+  /* Narrow: the page must not scroll horizontally. */
+  @media (max-width:480px) {
+    main { padding:12px; }
+    header { flex-wrap:wrap; padding:12px 14px; }
+    .field { flex-wrap:wrap; }
+    .field > * { min-width:0; }
+    input[type=text], input[type=date], select { min-width:0; max-width:100%; }
+    .row { flex-wrap:wrap; }
+  }
 </style>
 </head>
 <body>
@@ -75,6 +117,35 @@ export function renderPage(): string {
 </header>
 
 <main>
+<div class="col" id="colAnswer">
+
+  <section class="card" id="statusCard">
+    <h2>Where you are</h2>
+    <div id="now"></div>
+  </section>
+
+  <!-- The one card that answers "what needs me?". Recommended action, Needs you and
+       Suggestions were three separate cards saying nothing 3,600px apart (Phase 45);
+       merged, and collapsed to a single line when all three are empty. -->
+  <section class="card" id="answerCard">
+    <h2 id="answerHeading">What needs you</h2>
+    <div id="answerEmpty" class="muted" style="display:none">Nothing needs you right now. ✓</div>
+    <div id="answerBody">
+      <div class="ablock" id="needsBlock">
+        <h3>Needs you</h3>
+        <ul class="needs" id="needs"></ul>
+      </div>
+      <div class="ablock" id="recBlock">
+        <h3>Recommended action</h3>
+        <div id="recommended"></div>
+      </div>
+      <div class="ablock" id="suggestCard" style="display:none">
+        <h3>Suggestions · unconfirmed (from the LLM)</h3>
+        <ul class="needs" id="suggestions"></ul>
+      </div>
+    </div>
+  </section>
+
   <section class="card" id="chatCard" style="display:none">
     <h2 style="display:flex;justify-content:space-between;align-items:center">
       <span>คุยกับผม</span>
@@ -95,30 +166,79 @@ export function renderPage(): string {
     <div id="chatBusy" class="muted" style="font-size:12.5px;margin-top:6px"></div>
   </section>
 
-  <section class="card" id="listenCard">
+</div>
+<div class="col" id="colQueue">
+
+  <section class="card" id="proposalsCard">
     <h2 style="display:flex;justify-content:space-between;align-items:center">
-      <span>Listening</span>
-      <button class="btn" id="micBtn" onclick="toggleListen()">Start listening</button>
+      <span>Decisions for you</span>
+      <button class="btn ghost" id="askBtn" onclick="askProposals()">Ask for proposals</button>
     </h2>
-    <div id="listenStatus" class="muted">Off. This listens to <b>you</b> (your dictated notes) — nothing is recorded without this being visibly on.</div>
-    <div id="listenInterim" class="mono" style="margin-top:8px;min-height:1.2em;color:var(--accent)"></div>
-    <div style="margin-top:8px;display:flex;gap:8px;align-items:center">
-      <span class="muted" style="font-size:12.5px">Language</span>
-      <select id="lang" onchange="onLangChange()">
-        <option value="">Auto (best for Thai↔English)</option>
-        <option value="th">ไทย</option>
-        <option value="en">English</option>
-      </select>
-      <span class="muted" style="font-size:11.5px">applies to all modes</span>
+    <div id="proposals"></div>
+  </section>
+
+  <section class="card" id="tellCard">
+    <h2>Tell it something</h2>
+    <div class="controls">
+      <div class="field">
+        <input id="blockReason" type="text" placeholder="What are you blocked on? (e.g. waiting on vendor API key)" />
+        <button class="danger" onclick="emitBlock()">Mark blocked</button>
+        <button class="ghost" onclick="emitUnblock()">Unblock</button>
+      </div>
+      <div class="field">
+        <input id="deadline" type="date" />
+        <button onclick="emitDeadline()">Set deadline</button>
+      </div>
+      <div class="field">
+        <input id="task" type="text" placeholder="Current task (overrides the branch-inferred one)" />
+        <button onclick="emitTask()">Set task</button>
+      </div>
     </div>
-    <div id="listenSchedule" class="muted" style="margin-top:6px;font-size:12.5px"></div>
-    <div class="muted" style="margin-top:4px;font-size:12.5px">Tip: hold <b>Space</b> to talk (walkie-talkie), release to stop.</div>
+  </section>
+
+  <section class="card" id="autopilotCard">
+    <h2>Last Autopilot run</h2>
+    <div id="autopilot"></div>
+  </section>
+
+  <!-- Collapsed by default (Phase 45). GUARDRAIL: the 🔴 indicator lives in the HEADER,
+       outside #listenBody, so collapsing can never hide the fact that the mic is live. -->
+  <section class="card" id="listenCard">
+    <h2 style="display:flex;justify-content:space-between;align-items:center;gap:8px">
+      <span style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <span>Listening</span>
+        <span id="listenLive" class="hsum" style="display:none;color:var(--danger);font-weight:700">🔴 Listening…</span>
+        <span id="listenSummary" class="hsum muted"></span>
+      </span>
+      <span style="display:flex;gap:8px;align-items:center">
+        <button class="btn" id="micBtn" onclick="toggleListen()">Start listening</button>
+        <button class="ghost" id="listenToggle" onclick="toggleCard('listenBody', this)">Show</button>
+      </span>
+    </h2>
+    <div id="listenBody" style="display:none">
+      <div id="listenStatus" class="muted">Off. This listens to <b>you</b> (your dictated notes) — nothing is recorded without this being visibly on.</div>
+      <div id="listenInterim" class="mono" style="margin-top:8px;min-height:1.2em;color:var(--accent)"></div>
+      <div style="margin-top:8px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <span class="muted" style="font-size:12.5px">Language</span>
+        <select id="lang" onchange="onLangChange()">
+          <option value="">Auto (best for Thai↔English)</option>
+          <option value="th">ไทย</option>
+          <option value="en">English</option>
+        </select>
+        <span class="muted" style="font-size:11.5px">applies to all modes</span>
+      </div>
+      <div id="listenSchedule" class="muted" style="margin-top:6px;font-size:12.5px"></div>
+      <div class="muted" style="margin-top:4px;font-size:12.5px">Tip: hold <b>Space</b> to talk (walkie-talkie), release to stop.</div>
+    </div>
   </section>
 
   <section class="card" id="settingsCard">
-    <h2 style="display:flex;justify-content:space-between;align-items:center">
-      <span>Transcription settings</span>
-      <button class="ghost" onclick="$('settingsBody').style.display = $('settingsBody').style.display==='none'?'block':'none'">Toggle</button>
+    <h2 style="display:flex;justify-content:space-between;align-items:center;gap:8px">
+      <span style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <span>Transcription settings</span>
+        <span id="settingsSummary" class="hsum muted"></span>
+      </span>
+      <button class="ghost" id="settingsToggle" onclick="toggleCard('settingsBody', this)">Show</button>
     </h2>
     <div id="settingsBody" style="display:none">
       <div class="controls">
@@ -198,7 +318,14 @@ export function renderPage(): string {
   </section>
 
   <section class="card" id="autonomyCard">
-    <h2>Autonomy</h2>
+    <h2 style="display:flex;justify-content:space-between;align-items:center;gap:8px">
+      <span style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <span>Autonomy</span>
+        <span id="autonomySummary" class="hsum muted"></span>
+      </span>
+      <button class="ghost" id="autonomyToggle" onclick="toggleCard('autonomyBody', this)">Show</button>
+    </h2>
+    <div id="autonomyBody" style="display:none">
     <div class="muted" style="font-size:12px;margin-bottom:10px">
       What runs on its own while this dashboard is open. All off by default; each takes effect
       on the next tick, no restart.
@@ -226,10 +353,18 @@ export function renderPage(): string {
       Off = it keeps nagging until you close it out or clear it. No LLM, no repo change.</span>
     </label>
     <div id="applyState" class="muted" style="font-size:12px;margin-top:8px"></div>
+    </div>
   </section>
 
   <section class="card" id="fileOutputCard">
-    <h2>File output (save_file)</h2>
+    <h2 style="display:flex;justify-content:space-between;align-items:center;gap:8px">
+      <span style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <span>File output (save_file)</span>
+        <span id="foSummary" class="hsum muted"></span>
+      </span>
+      <button class="ghost" id="foToggle" onclick="toggleCard('fileOutputBody', this)">Show</button>
+    </h2>
+    <div id="fileOutputBody" style="display:none">
     <div class="muted" style="font-size:12px;margin-bottom:10px">
       Folders the agent may save a finished file into — your Desktop, a scratch folder. This is
       the only agent write with <b>no git undo</b>: a repo change lands on an isolated branch you
@@ -252,59 +387,10 @@ export function renderPage(): string {
     </label>
     <button class="btn" onclick="saveFileOutput()" style="margin-top:8px">Save</button>
     <span id="foStatus" class="muted" style="font-size:12px;margin-left:8px"></span>
-  </section>
-
-  <section class="card" id="proposalsCard">
-    <h2 style="display:flex;justify-content:space-between;align-items:center">
-      <span>Decisions for you</span>
-      <button class="btn ghost" id="askBtn" onclick="askProposals()">Ask for proposals</button>
-    </h2>
-    <div id="proposals"></div>
-  </section>
-
-  <section class="card">
-    <h2>Now</h2>
-    <div id="now"></div>
-  </section>
-
-  <section class="card">
-    <h2>Recommended action</h2>
-    <div id="recommended"></div>
-  </section>
-
-  <section class="card">
-    <h2>Needs you</h2>
-    <ul class="needs" id="needs"></ul>
-  </section>
-
-  <section class="card" id="suggestCard" style="display:none">
-    <h2>Suggestions · unconfirmed (from the LLM)</h2>
-    <ul class="needs" id="suggestions"></ul>
-  </section>
-
-  <section class="card">
-    <h2>Tell it something</h2>
-    <div class="controls">
-      <div class="field">
-        <input id="blockReason" type="text" placeholder="What are you blocked on? (e.g. waiting on vendor API key)" />
-        <button class="danger" onclick="emitBlock()">Mark blocked</button>
-        <button class="ghost" onclick="emitUnblock()">Unblock</button>
-      </div>
-      <div class="field">
-        <input id="deadline" type="date" />
-        <button onclick="emitDeadline()">Set deadline</button>
-      </div>
-      <div class="field">
-        <input id="task" type="text" placeholder="Current task (overrides the branch-inferred one)" />
-        <button onclick="emitTask()">Set task</button>
-      </div>
     </div>
   </section>
 
-  <section class="card">
-    <h2>Last Autopilot run</h2>
-    <div id="autopilot"></div>
-  </section>
+</div>
 </main>
 
 <div id="toast"></div>
@@ -315,6 +401,20 @@ const esc = (s) => String(s ?? "").replace(/[&<>]/g, c => ({"&":"&amp;","<":"&lt
 const dash = (v) => (v === null || v === undefined || v === "") ? "<span class='muted'>—</span>" : esc(v);
 
 function toast(msg) { const t = $("toast"); t.textContent = msg; t.classList.add("show"); setTimeout(()=>t.classList.remove("show"), 1600); }
+
+// Disclosure for the config cards (Phase 45). Collapsed on every load by design —
+// persisting it would be a config write, and this page's whole point is the first screen.
+function toggleCard(bodyId, btn) {
+  const b = $(bodyId); if (!b) return;
+  const open = b.style.display !== "none";
+  b.style.display = open ? "none" : "block";
+  if (btn) btn.textContent = open ? "Show" : "Hide";
+}
+function openCard(bodyId, btnId) {
+  const b = $(bodyId); if (!b || b.style.display !== "none") return;
+  b.style.display = "block";
+  const btn = $(btnId); if (btn) btn.textContent = "Hide";
+}
 
 function repoList(repos, activeRepo) {
   if (!repos || repos.length <= 1) return "";
@@ -350,25 +450,40 @@ async function refresh() {
       : "<span class='muted'>No state yet.</span>";
 
     const rec = dg.recommended;
-    $("recommended").innerHTML = rec.available && rec.topActionKind
+    const recHas = !!(rec.available && rec.topActionKind);
+    $("recommended").innerHTML = recHas
       ? \`<div><span class="pill \${rec.disposition==='act'?'act':'ask'}">\${esc((rec.disposition||'').toUpperCase())}</span> <b>\${esc(rec.topActionKind)}</b></div>
          <div class="muted" style="margin-top:6px">\${esc(rec.reason||"")}</div>
          <div class="muted mono" style="margin-top:4px">confidence \${rec.confidence!=null?Math.round(rec.confidence*100)+"%":"—"} · \${rec.actionCount} action(s)</div>\`
       : "<span class='muted'>No plan yet.</span>";
 
     const needs = dg.needsYou || [];
-    $("needs").innerHTML = needs.length
-      ? needs.map(i => \`<li><div class="src">\${esc(i.source)}</div><div><b>\${esc(i.label || i.detail || i.summary)}</b></div></li>\`).join("")
-      : "<li class='empty'>Nothing needs you right now. ✓</li>";
+    $("needs").innerHTML = needs.map(i =>
+      \`<li><div class="src">\${esc(i.source)}</div><div><b>\${esc(i.label || i.detail || i.summary)}</b></div></li>\`).join("");
 
     const sug = dg.suggestions || [];
-    $("suggestCard").style.display = sug.length ? "block" : "none";
     window.__suggest = sug;
     $("suggestions").innerHTML = sug.map((s, i) =>
       \`<li style="display:flex;gap:10px;align-items:center;justify-content:space-between">
          <span>\${esc(s.text)}</span>
          <button class="btn" onclick="confirmSuggestion(\${i})">Confirm</button>
        </li>\`).join("");
+
+    // One card, and it says nothing at length when there is nothing to say: three cards
+    // spending ~280px to report an empty queue is what pushed the real answer off-screen.
+    const needsHas = needs.length > 0, sugHas = sug.length > 0;
+    const anything = needsHas || recHas || sugHas;
+    $("answerHeading").style.display = anything ? "" : "none";
+    $("answerBody").style.display = anything ? "" : "none";
+    $("answerEmpty").style.display = anything ? "none" : "";
+    $("answerCard").classList.toggle("tight", !anything);
+    $("needsBlock").style.display = needsHas ? "" : "none";
+    $("recBlock").style.display = recHas ? "" : "none";
+    $("suggestCard").style.display = sugHas ? "" : "none";
+    // .ablock spacing is between siblings, and a hidden sibling still counts — so the
+    // first VISIBLE block must drop its top margin or the card gains a phantom gap.
+    $("recBlock").style.marginTop = needsHas ? "" : "0";
+    $("suggestCard").style.marginTop = (needsHas || recHas) ? "" : "0";
 
     const a = dg.lastAutopilot;
     $("autopilot").innerHTML = a.available ? rows([
@@ -387,23 +502,38 @@ async function emit(type, data) {
     toast("saved ✓"); await refresh();
   } catch (e) { toast("error: " + e.message); }
 }
+// The queue is unbounded server-side (maxOpen), and rendering all of it made this card
+// 43% of the page — the things that can WAIT outweighing the things that need you.
+// Bound the COUNT, never the detail: the "because:" evidence line is what makes a
+// proposal checkable rather than trusted, so a visible card keeps all of it.
+const VISIBLE_PROPOSALS = 3;
+let propsExpanded = false;
+function expandProposals() { propsExpanded = true; loadProposals(); }
+
 async function loadProposals() {
   try {
     const r = await fetch("/api/proposals"); const d = await r.json();
-    const items = d.proposals || [];
-    $("proposals").innerHTML = items.length ? items.map(p => \`
+    const all = d.proposals || [];
+    const hidden = propsExpanded ? 0 : Math.max(0, all.length - VISIBLE_PROPOSALS);
+    const items = hidden ? all.slice(0, VISIBLE_PROPOSALS) : all;
+    const more = hidden
+      ? \`<button class="ghost" onclick="expandProposals()">+ \${hidden} more proposals</button>\`
+      : "";
+    $("proposals").innerHTML = (items.length ? items.map(p => \`
       <div class="prop" id="prop-\${p.id}">
         <div class="cat">\${esc(p.category)}\${p.executable ? '<span class="badge exec">⚙ will create a branch</span>' : '<span class="badge record">records your decision</span>'}</div>
         <div class="title">\${esc(p.title)}</div>
         <div class="detail">\${esc(p.detail)}</div>
         \${p.evidence ? \`<div class="evidence">because: \${esc(p.evidence)}</div>\` : ""}
-        <input type="text" id="act-\${p.id}" value="\${esc(p.action)}" />
-        <input type="text" id="note-\${p.id}" placeholder="Add a note (optional)…" />
+        <div class="field">
+          <input type="text" id="act-\${p.id}" value="\${esc(p.action)}" />
+          <input type="text" id="note-\${p.id}" placeholder="Add a note (optional)…" />
+        </div>
         <div class="acts">
           <button class="btn" onclick="decideProp('\${p.id}','approve')">Approve</button>
           <button class="btn ghost" onclick="decideProp('\${p.id}','reject')">Dismiss</button>
         </div>
-      </div>\`).join("") : "<div class='prop empty'>No open proposals. Hit “Ask for proposals” and I’ll suggest a few.</div>";
+      </div>\`).join("") : "<div class='prop empty'>No open proposals. Hit “Ask for proposals” and I’ll suggest a few.</div>") + more;
   } catch (e) { /* leave as-is */ }
 }
 async function decideProp(id, decision) {
@@ -525,6 +655,7 @@ function onModeChange() {
   const m = $("modeSel").value;
   $("apiFields").style.display = m === "whisper-api" ? "block" : "none";
   $("wasmFields").style.display = m === "browser-wasm" ? "block" : "none";
+  $("settingsSummary").textContent = "— " + m;
   if (m === "browser-wasm") refreshDlStatus();
 }
 function applyPreset(name) {
@@ -633,6 +764,12 @@ function setListenUI() {
     : 'Off. This listens to <b>you</b> (your dictated notes) — nothing is recorded without this being visibly on.';
   const sched = capture.enabled ? ("Auto-on during work hours " + capture.from + "–" + capture.to + (withinHours() ? " (now)" : "")) : "Auto-schedule off (manual only).";
   $("listenSchedule").textContent = canListen() ? sched : "Voice capture needs Chrome or Edge; you can still type notes below.";
+  // GUARDRAIL (Phase 23/29 ethics): the live indicator sits in the card HEADER, outside
+  // the collapsible body, and the card force-opens while the mic is on. Collapsing this
+  // card must never be a way to record without a visible "on".
+  $("listenLive").style.display = on ? "" : "none";
+  $("listenSummary").textContent = on ? "" : (canListen() ? "— off" : "— unsupported here");
+  if (on) openCard("listenBody", "listenToggle");
 }
 
 function startListen() {
@@ -696,6 +833,14 @@ function populateAutonomy(a) {
   $("autoInfer").checked = !!a.inferEnabled;
   $("autoAutopilot").checked = !!a.autopilotEnabled;
   $("autoDeadlineDecay").checked = !!a.deadlineDecayEnabled;
+  // Collapsed header still reports what is armed, so the owner never has to expand to learn it.
+  const onNames = [];
+  if (a.agentEnabled) onNames.push("chat");
+  if (a.advisorEnabled) onNames.push("advisor");
+  if (a.inferEnabled) onNames.push("infer");
+  if (a.autopilotEnabled) onNames.push("autopilot" + (a.autopilotApply ? " (apply ARMED)" : ""));
+  if (a.deadlineDecayEnabled) onNames.push("deadline-decay");
+  $("autonomySummary").textContent = onNames.length ? "— " + onNames.join(", ") + " on" : "— all off";
   const note = $("applyState");
   if (a.autopilotApply) {
     note.innerHTML = a.autopilotEnabled
@@ -713,6 +858,8 @@ function populateFileOutput(f) {
   $("foDirs").value = (f.dirs || []).join("\\n");
   $("foExec").checked = !!f.allowExecutable;
   $("foOverwrite").checked = !!f.allowOverwrite;
+  const n = (f.dirs || []).length;
+  $("foSummary").textContent = n ? ("— " + n + " folder(s)") : "— off (no folders)";
 }
 
 async function saveFileOutput() {

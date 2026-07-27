@@ -290,6 +290,31 @@
   use a backslash that breaks syntax (`/\(/` → `/(/`). *Bonus trap:* the run also left the sabotage
   **in the committed-ready tree** — read the full diff for stray `_sab` / `tmp-*.js` / `.bak`
   scaffolding. (Phase 44)
+- **A "long path" is NOT an unbreakable string — a CSS overflow test built on one is vacuous.**
+  *Symptom:* Phase 45's criterion "nothing scrolls sideways at 420px" planted
+  `C:/Users/owner/source/repos/…/implementation-detail.test.ts` and stayed **green with every
+  containment rule deleted** (`min-width:0` on the grid children *and* `overflow-wrap` on the card).
+  *Cause:* browsers take a line break after `/` and `-`, so a realistic-looking path wraps by itself
+  and never stresses the layout. *Fix:* plant a run of letters with **no break opportunity**
+  (`"averylongunbrokenidentifier".repeat(3)`). Doing so immediately exposed a **real** overflow the
+  weak fixture had hidden — 1,057px at a 420px viewport, because a flex child defaults to
+  `min-width:auto` and refuses to shrink below its min-content width. *Rule:* when a test feeds
+  "hostile" input, check the input is actually hostile. (Phase 45)
+- **When several rules could satisfy one assertion, find out WHICH one holds before writing a comment
+  that says it.** *Symptom:* the Phase 45 CSS claimed `minmax(0,…)` on the grid track was load-bearing.
+  Removing it: still green. Also removing `.col{min-width:0}`: still green. The measured guard was
+  `.card{min-width:0;overflow-wrap:break-word}` — without it the wide layout went to 1,462px. *Fix:*
+  three e2e runs, then a comment that names the rule that was actually measured and calls the other two
+  defence in depth. An unverified "this line is load-bearing" comment is a future maintainer deleting
+  the wrong thing. (Phase 45)
+- **An e2e that spawns a server must refuse to run when its port is taken.** *Symptom:* a Phase 45
+  sabotage came back GREEN that should have been red; the numbers were self-consistent, just wrong.
+  *Cause:* the previous run's server survived (`spawn(..., {shell:true})` means `kill()` reaps
+  `cmd.exe`, not `bun`), kept the port, the new server failed to bind silently, and the browser
+  measured the **old code** against a **deleted** temp home. *Fix:* probe the port before spawning and
+  abort loudly; assert the server you reached is serving **your** fixture (it reports the 8 proposals
+  you seeded); kill with `taskkill /pid <pid> /T /F` on Windows. This is the stale-daemon trap from
+  Phase 34/35 wearing a test-harness costume. (Phase 45)
 - **Generating source through a shell heredoc can plant INVISIBLE control characters.** *Symptom:* a
   freshly written function returned `null` for every input; the source on screen looked correct and
   `tsc` was green. *Cause:* a `python - <<'PY'` heredoc turned `\b` inside a regex into a literal

@@ -16,19 +16,25 @@
 > budget-ladder fix), a live-hardening session on the Discord agent (think-loop fix + retry resilience +
 > message chunking + button feedback + session trust), **Phase 39 + 39.1** (state decay/TTL; deadline
 > decay as an opt-in dashboard toggle), **Phase 38** (sandbox `run_command`), and **Phase 36 LIVE**
-> (Discord). **931 passing tests** + two opt-in browser e2e, all green.
-> Everything through **Phase 45's scope** is committed on `main`; **11 commits are NOT yet
-> pushed** as of this session's end. The agent is
+> (Discord). **940 passing tests** + three opt-in browser e2e, all green.
+> Everything through **Phase 45** is committed AND pushed as of this session's end. The agent is
 > **live-confirmed working** end-to-end over Discord. **If a running bot misbehaves after a pull, RESTART
 > it — code isn't hot-reloaded.**
 >
-> **▶️ START HERE NEXT SESSION — Phase 45 (dashboard IA) is scoped, fully decided, and ready to
-> implement.** `docs/scopes/phase-45-dashboard-ia.md`. Read the scope, not a summary; §6 of *this* doc
-> has the measurements. Do it **yourself, not delegated** — it is a judgment task and `page.ts` carries
-> the GOTCHA §8 backslash trap that stays green under `bun test`. **The two open questions in §9 were
-> ANSWERED by the owner on 2026-07-27, both as the scope proposed:** the chat card **stays** (position 3
-> per §6.1), and **`VISIBLE_PROPOSALS = 3` is right** (§6.2 as written). Nothing in §6 changes; there is
-> nothing left to ask.
+> **✅ PHASE 45 IS DONE** (this session) — the dashboard has had its first design pass. The page went
+> from **4,766px to 1,739px**, `Now` (renamed *"Where you are"*) from **3,652px down to 119**, the
+> proposal queue from **2,039px (43% of the page) to 870**, and an empty answer from ~184px across three
+> cards to **53px on one line**. New opt-in browser e2e `bun run test:e2e:ia` (16 checks) holds every one
+> of those numbers. **Read the `docs/phase-log.md` Phase 45 entry** for the three things the sabotage
+> checks caught — including a sabotage that came back green because a **leftover server held the port**,
+> and an overflow criterion of mine that was **vacuous because a file path is not an unbreakable
+> string** (fixing it exposed a real 1,057px overflow). Both are now in `GOTCHA.md` §4.
+>
+> **▶️ START HERE NEXT SESSION — there is no scoped phase waiting.** The queue below is the honest
+> answer: item 0 (restart `ui`), the owner's small list in §6, and then **the nudge measurement**, which
+> is the only thing with a real decision hanging off it. Per the Phase 33 method, the next phase should
+> come from **reading live data**, not from a list — `nudges.jsonl`, or the dashboard now that its
+> layout no longer hides what it knows.
 >
 > **▶️ `CLAUDE.md` was split (2026-07-27).** It had reached 163,798 chars and Claude Code was warning
 > that it exceeds the **150k auto-load limit**, i.e. the phase log — the thing a cold session most needs
@@ -178,11 +184,8 @@
 >    only the **tesseract** path is affected (winrt has no Thai pack and never will); the
 >    language-decision function must be **pure and exported** so it is testable, like `normalizeTitle` /
 >    `formatPatterns`. No scope doc yet — small enough to do directly.
-> 4. **Candidate C — `/scrutinize` the dashboard's visual design** (§6). Needs a scope doc first;
->    the file is one 988-line template literal, so read GOTCHA §8 before touching it. **This one is a
->    judgment job, not a mechanical one** (the finding is information architecture: 12 cards, with ~190
->    lines of configuration sitting *above* "what needs me"). The 43/44 session is evidence that
->    delegation handles mechanical work far better than judgment work — consider keeping this one.
+> 4. ~~Candidate C — the dashboard's information architecture~~ — **DONE, Phase 45.** Kept in-house
+>    rather than delegated, and that was right: three of the six sabotage checks changed the work.
 > 5. **Then wait and read `nudges.jsonl`.** That measurement still gates the `rules+llm` dial and cannot
 >    be rushed — see the caveats immediately below, which change how to read it.
 >
@@ -773,12 +776,15 @@ atomic temp+rename path in `src/fs-atomic.ts` — copy the previous contents to
 block the write. Rotation matters: a single `.bak` overwritten by the next bad write is how the
 existing snapshot became useless.
 
-### ⏭️ Candidate C → **Phase 45 — SCOPED, ready to implement** (`docs/scopes/phase-45-dashboard-ia.md`, `17bb60e`)
+### ✅ Candidate C → **Phase 45 — DONE** (`docs/scopes/phase-45-dashboard-ia.md`)
 
-**Read the scope, not this summary, before starting.** It carries the measurements, the acceptance
-criteria and the sabotage list. What matters here is that the scope was written **after measuring the
-owner's running dashboard with Playwright**, and the measurement **contradicted what this section used
-to claim**. The old text is preserved at the bottom as a lesson.
+Implemented as scoped; the before-numbers below are what `test/e2e/dashboard-ia.e2e.mjs` now asserts
+against. **After:** `statusCard` top **119** (was 3,652) · `answerCard` fully above the fold, and **53px**
+when there is nothing to say (was ~184 across three cards) · `proposalsCard` **870px** with 8 pending
+(was 2,039) · total page **1,739px** (was 4,766) · no horizontal overflow at 420px (was 457) · two
+columns above 1,180px. The scope was written **after measuring the owner's running dashboard with
+Playwright**, and that measurement **contradicted what this section used to claim** — the old text is
+preserved at the bottom as a lesson.
 
 Measured 2026-07-27, `127.0.0.1:4317`, real data, 1536×864. **Page height 4,766px = 5.5 screens.**
 
@@ -811,12 +817,15 @@ Measured 2026-07-27, `127.0.0.1:4317`, real data, 1536×864. **Page height 4,766
   above a page that repeats the same facts 3,600px lower.
 
 **The two open questions were answered by the owner on 2026-07-27, both as the scope proposed** (§9 of
-the scope, now recorded there): the **chat card stays** on the page — Discord is the daily interface,
-but the dashboard is the only place the browser mic works — and **`VISIBLE_PROPOSALS = 3` is the right
-bound**. §6 of the scope is unchanged by the answers; there is nothing left to ask.
+the scope): the **chat card stays** — Discord is the daily interface, but the dashboard is the only
+place the browser mic works — and **`VISIBLE_PROPOSALS = 3` is the right bound**.
 
-**Do not delegate this one.** It is a judgment task, and `page.ts` is the file with the GOTCHA §8
-backslash trap that stays green under `bun test`.
+**It was kept in-house rather than delegated, and that was the right call.** Three of the six sabotage
+checks changed the work: one reproduced the original 2,039px (proving the fixture realistic) while the
+*unit* tests stayed green under it; one came back green only because a **leftover server held the
+port**; and one showed an overflow criterion of mine was **vacuous** — a file path breaks at `/`, so it
+passed with every containment rule deleted, and the fix exposed a real 1,057px overflow. None of that
+is visible from a self-report.
 
 *Preserved as a lesson:* the original section read *"the owner scrolls past ~190 lines of configuration
 to reach 'what needs me'"* — a source-line count, dressed as a user-facing measurement, that pointed at
@@ -824,7 +833,9 @@ the wrong card. Measure the rendered page.
 
 ### Needs the owner — small, carried over, none of it blocking
 
-1. **Push.** 11 commits sit on local `main`, unpushed (`origin/main` is at `e00dc9b`).
+1. ~~Push~~ — **DONE 2026-07-27**: the 10 backlogged commits plus this session's are on
+   `origin/main`. (The count in the previous handoff was right; the base commit it named was not —
+   `origin/main` was at `702690e`, not `e00dc9b`. Read `git status`, don't copy a remembered SHA.)
 2. **Create the first config backup.** Phase 43 engages on the **next** config write, and Candidate B
    edited `config.json` by hand (not through `writeConfigFile`), so **`config-genesis.json` still does
    not exist**. Toggle anything in the dashboard Autonomy card once and it appears.

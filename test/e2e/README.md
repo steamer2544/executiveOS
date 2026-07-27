@@ -43,3 +43,25 @@ so **nothing here calls the LLM gateway** — no model, no token, no network. Ne
 (`bunx playwright install chromium`); no model download. Run with `bun run test:e2e:chat`. This test
 exists because a template-literal escaping bug in the page JS (GOTCHA §8) is invisible to `bun test` —
 only a real browser catches a page-script parse error.
+
+## dashboard-ia.e2e.mjs
+
+**Measures the layout** (Phase 45), which is the only way a layout claim can be checked. It seeds 8
+pending proposals into a temp `EXECUTIVE_HOME`, loads the dashboard at 1536×864, and asserts against the
+numbers measured on the owner's real page **before** the change: `statusCard` above 300px (was 3,652),
+the answer card fully above the fold (was 4,172), the whole page under 2,400px (was 4,766), the proposal
+queue under 900px with 8 pending (was 2,039) with a working `+ 5 more`, an empty answer costing ≤56px
+(was ~184 across three cards), no horizontal overflow at 420px (was 457), and two columns at 1280px.
+Needs only Chromium; no model, no gateway, no token. Run with `bun run test:e2e:ia`.
+
+Two things it does that are worth copying into any future e2e:
+
+- **It refuses to run if something already holds its port.** A leftover server from a previous run
+  makes the new one fail to bind silently, so the browser measures the *old* code against a *deleted*
+  temp home — which looks exactly like a passing test. It also verifies the server it reached reports
+  the 8 proposals it seeded, and kills its child with `taskkill /T` (on Windows `kill()` reaps the
+  shell, not `bun`).
+- **It plants a genuinely unbreakable token, not a realistic-looking file path.** Browsers break
+  happily after `/` and `-`, so the first version of the overflow check stayed green with *every*
+  containment rule deleted. A run of letters with no break opportunity is what makes it bite — and it
+  immediately exposed a real overflow (1,057px at a 420px viewport) that the weak version had hidden.

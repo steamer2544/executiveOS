@@ -13,7 +13,8 @@ describe("renderPage", () => {
     const html = renderPage();
     expect(html).toContain("<!doctype html>");
     expect(html).toContain("ExecutiveOS");
-    for (const s of ["Now", "Recommended action", "Needs you", "Last Autopilot run"]) {
+    // "Now" became "Where you are" in Phase 45; the other three headings are unchanged.
+    for (const s of ["Where you are", "Recommended action", "Needs you", "Last Autopilot run"]) {
       expect(html).toContain(s);
     }
     // no external resources (self-contained)
@@ -356,5 +357,101 @@ describe("renderPage — chat UI", () => {
     expect(html).toContain("speechSynthesis");
     // dictation is routed through one function so voice reaches the agent when it is on
     expect(html).toContain("heardVoice");
+  });
+});
+
+// ── Phase 45: dashboard information architecture ────────────────────────────
+// The layout claims (heights, fold, overflow) can only be verified in a real browser —
+// that is test/e2e/dashboard-ia.e2e.mjs. These are the guardrails and the structure that
+// a unit test CAN see, so a regression here fails without needing Playwright.
+
+describe("renderPage — Phase 45 information architecture", () => {
+  const html = renderPage();
+  const script = html.match(/<script>([\s\S]*?)<\/script>/)?.[1] ?? "";
+  const body = html.match(/<main>([\s\S]*?)<\/main>/)?.[1] ?? "";
+
+  it("keeps every card that existed before, and names the four that were anonymous (criterion 14)", () => {
+    for (const id of [
+      "chatCard", "listenCard", "settingsCard", "autonomyCard", "fileOutputCard",
+      "proposalsCard", "suggestCard",              // existed before Phase 45
+      "statusCard", "answerCard", "tellCard", "autopilotCard", // gained ids
+    ]) {
+      expect(body).toContain('id="' + id + '"');
+    }
+  });
+
+  it("orders the answer before the queue and the configuration (criterion 1/2)", () => {
+    const at = (id: string) => body.indexOf('id="' + id + '"');
+    expect(at("statusCard")).toBeLessThan(at("answerCard"));
+    expect(at("answerCard")).toBeLessThan(at("chatCard"));
+    expect(at("chatCard")).toBeLessThan(at("proposalsCard"));
+    // every configuration card comes after the queue
+    for (const id of ["listenCard", "autonomyCard", "fileOutputCard", "settingsCard"]) {
+      expect(at("proposalsCard")).toBeLessThan(at(id));
+    }
+  });
+
+  it("merges Needs you / Recommended / Suggestions into one card with a one-line empty state (criterion 5)", () => {
+    const answer = body.slice(body.indexOf('id="answerCard"'), body.indexOf('id="chatCard"'));
+    expect(answer).toContain('id="needsBlock"');
+    expect(answer).toContain('id="recBlock"');
+    expect(answer).toContain('id="suggestCard"');
+    expect(answer).toContain("Nothing needs you right now.");
+    // the heading itself is hidden when there is nothing to say, or the card cannot fit 56px
+    expect(script).toContain('$("answerHeading").style.display');
+  });
+
+  it("bounds the proposal queue at 3 with an expand control (criterion 4)", () => {
+    expect(script).toContain("const VISIBLE_PROPOSALS = 3;");
+    expect(script).toContain("more proposals");
+    expect(script).toContain("function expandProposals()");
+    // the bound is on COUNT, not detail: a visible proposal keeps its evidence line
+    expect(script).toContain("because:");
+  });
+
+  it("collapses the three configuration cards by default, each reporting its state (criterion 3)", () => {
+    for (const id of ["listenBody", "autonomyBody", "fileOutputBody", "settingsBody"]) {
+      const at = body.indexOf('id="' + id + '"');
+      expect(at).toBeGreaterThan(-1);
+      expect(body.slice(at, at + 60)).toContain('style="display:none"');
+    }
+    for (const id of ["listenSummary", "autonomySummary", "foSummary", "settingsSummary"]) {
+      expect(body).toContain('id="' + id + '"');
+    }
+  });
+
+  it("keeps the 🔴 listening indicator OUTSIDE the collapsible body (criterion 9, guardrail 1)", () => {
+    const live = body.indexOf('id="listenLive"');
+    const bodyStart = body.indexOf('id="listenBody"');
+    expect(live).toBeGreaterThan(-1);
+    expect(bodyStart).toBeGreaterThan(-1);
+    expect(live).toBeLessThan(bodyStart);           // header, not body
+    expect(body.slice(live, bodyStart)).toContain("🔴 Listening…");
+    // and the card force-opens while the mic is live, so the full status is never hidden
+    expect(script).toContain('openCard("listenBody"');
+  });
+
+  it("still offers no way to arm autopilot.apply, while reporting it (criterion 10, guardrail 2)", () => {
+    // NOTE: the scope said "the string autopilotApply is absent". That was wrong — Phase 34
+    // deliberately REPORTS the flag. What must be absent is any way to SET it: no input, and
+    // no such key in the patch sent to /api/autonomy.
+    expect(body).not.toContain('id="autoAutopilotApply"');
+    expect(script).not.toContain("autopilotApply:");
+    expect(script).toContain("a.autopilotApply");   // still reported, per Phase 34
+  });
+
+  it("declares the two width breakpoints, with minmax(0) so a long path cannot overflow (criterion 7/8)", () => {
+    const css = html.match(/<style>([\s\S]*?)<\/style>/)?.[1] ?? "";
+    expect(css).toContain("@media (min-width:1180px)");
+    expect(css).toContain("@media (max-width:480px)");
+    expect(css).toContain("grid-template-columns:minmax(0,1.35fr) minmax(0,1fr)");
+    expect(css).toContain(".col { display:grid");
+    expect(css).toContain("min-width:0");
+  });
+
+  it("emits an inline script that parses — the GOTCHA §8 backslash guard (criterion 12)", () => {
+    expect(html.match(/<script>/g)).toHaveLength(1);
+    expect(script.length).toBeGreaterThan(1000);
+    expect(() => new Function(script)).not.toThrow();
   });
 });

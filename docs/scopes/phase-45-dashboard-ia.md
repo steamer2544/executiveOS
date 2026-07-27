@@ -1,6 +1,8 @@
 # Phase 45 — Dashboard information architecture
 
-**Status:** scoped, not implemented
+**Status:** IMPLEMENTED 2026-07-27 — see the Phase 45 entry in `docs/phase-log.md` for what the
+sabotage checks changed, and two reported deviations (§7 criterion 10 was wrong as written; the diff
+also touches `package.json` and `test/e2e/README.md`).
 **Type:** presentation only. Deterministic, NO LLM, no new event/config/CLI/endpoint.
 **Predecessor:** the dashboard has never had a design pass; it grew one card per phase (Phase 18 → 44).
 

@@ -1535,6 +1535,56 @@
   the direction but far smaller (0 → 6 garbage Thai chars, 97 → 96 English words). The 59-char figure
   is from a real screenshot — a clean fixture will not demonstrate it. Files: `src/screen/{ocr,
   ocr.test,screen-infer,screen-infer.test}.ts`, `src/{config,config.test}.ts`, `src/ui/page.ts`.
+- **Phase 45 — DONE** (architect impl + self-review + sabotage-check, this session): **Dashboard
+  information architecture.** The dashboard had never had a design pass — it grew one card per phase
+  from 18 to 44 — and the scope was written **after measuring the owner's running page with
+  Playwright** rather than from source. That measurement **contradicted the prediction in `HANDOFF.md`**,
+  which blamed configuration and called the settings card "~80 lines tall": measured, `settingsCard` is
+  **84px (2%)** and its body is already collapsed. The real findings: **one unbounded card** —
+  `proposalsCard` rendered all 8 pending proposals at **2,039px, 43% of a 4,766px page** — while the two
+  sections that exist to answer *"what needs me?"* were **empty and cost 184px (3.9%)**, and `Now` sat
+  **4.2 screens down**. **The change:** two column wrappers (`colAnswer` / `colQueue`) so DOM order is
+  reading order in one column and a two-column grid above 1180px; `Now`→**"Where you are"** first;
+  Recommended + Needs you + Suggestions merged into one **`answerCard`** that collapses to a single
+  line (`Nothing needs you right now. ✓`) when all three are empty; the proposal queue bounded at
+  **`VISIBLE_PROPOSALS = 3`** with a `+ N more proposals` expander (**bound on COUNT, never on detail** —
+  a visible proposal keeps its Phase-33 `because:` evidence line, which is what makes it checkable
+  rather than trusted); Listening / Autonomy / File output collapsed by default, each header carrying a
+  state summary so the owner never has to expand to learn it; and two width breakpoints. **Measured
+  after:** statusCard `top 3652→119`, answerCard fully above the fold (`top 468 + 53 < 864`), page
+  `4766→1739`, proposalsCard `2039→870`, empty answer `~184→53px`, 420px overflow `457→420`.
+  **Guardrails held:** the `🔴 Listening…` indicator is in the card **header, outside the collapsible
+  body**, and the card force-opens while the mic is live (Phase 23/29 ethics — collapsing may never
+  become a way to record without a visible "on"); no `autopilot.apply` control was added (Phase 34);
+  nothing was removed from the page; no new endpoint/config/event/LLM. **Owner's two §9 decisions:**
+  keep the chat card (the only place the browser mic works), and 3 is the right bound.
+  940 passing tests (+9) plus a new opt-in browser e2e, `test/e2e/dashboard-ia.e2e.mjs`
+  (`bun run test:e2e:ia`, 16 checks) — **the only thing that can verify a layout claim**, asserting
+  against the same before-numbers so a regression is a failing test rather than a re-derivation.
+  **Sabotage-checked 6/6 by the architect** — and three of them found something. (1) Sabotage 2
+  (remove the bound) reproduced the original measurement almost exactly (**2,074px**), confirming the
+  fixture is realistic — and the *unit* tests stayed green under it, which is the case for the e2e in
+  one line. (2) Sabotage 3 came back **green when it should have been red**: the previous run's server
+  had survived `kill()` (with `shell:true` that reaps `cmd.exe`, not `bun`), held the port, and the
+  browser measured the **old code against a deleted temp home** — the stale-daemon trap in a
+  test-harness costume. The harness now refuses to start if the port answers, asserts the server it
+  reached reports the 8 proposals it seeded, and kills with `taskkill /T`. (3) Sabotage 6 exposed a
+  **vacuous criterion of my own**: the overflow check planted a realistic file path, and browsers break
+  after `/` and `-`, so it stayed green with **every** containment rule deleted. Replacing it with a
+  genuinely unbreakable token turned up a **real overflow the weak fixture had hidden** (1,057px at
+  420px) — a flex child defaults to `min-width:auto` and refuses to shrink below min-content, fixed
+  with `.row .k, .row .v { min-width:0; overflow-wrap:anywhere; }`. A further three runs established
+  which rule actually guards the wide layout (`.card{min-width:0;overflow-wrap:break-word}` — 1,462px
+  without it), so the CSS comment now names the measured guard instead of asserting an unverified one,
+  and a new criterion 8b tests it. Both lessons are recorded in `GOTCHA.md` §4.
+  **Two deviations from the scope, reported not hidden:** (a) §7's criterion 10 says the string
+  `autopilotApply` must be **absent** — that is wrong, Phase 34 deliberately *reports* the flag and the
+  string was already present before this phase; the test asserts the meaningful version (no input, and
+  no `autopilotApply:` key in the patch sent to `/api/autonomy`, while `a.autopilotApply` is still
+  read). (b) §7's criterion 16 limits the diff to three files; `package.json` (the `test:e2e:ia`
+  script) and `test/e2e/README.md` are also touched, since a test nobody can run is not shipped.
+  Spec: `docs/scopes/phase-45-dashboard-ia.md`. Files: `src/ui/page.ts`, `src/ui/ui.test.ts`,
+  `test/e2e/dashboard-ia.e2e.mjs`, `test/e2e/README.md`, `package.json`, `GOTCHA.md`.
 - **Loop complete (manual trigger):** `auto --apply` runs the whole chain in one command; the human
   reviews/merges the `executive/change-<id>` branch.
 
