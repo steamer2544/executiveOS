@@ -12,7 +12,7 @@
 > budget-ladder fix), a live-hardening session on the Discord agent (think-loop fix + retry resilience +
 > message chunking + button feedback + session trust), **Phase 39 + 39.1** (state decay/TTL; deadline
 > decay as an opt-in dashboard toggle), **Phase 38** (sandbox `run_command`), and **Phase 36 LIVE**
-> (Discord). **911 passing tests** + two opt-in browser e2e, all green.
+> (Discord). **931 passing tests** + two opt-in browser e2e, all green.
 > Everything through **Phase 44** is committed on `main` (`f8adad4`); **not yet pushed** as of this
 > session's end. The agent is
 > **live-confirmed working** end-to-end over Discord. **If a running bot misbehaves after a pull, RESTART
@@ -456,7 +456,7 @@ The full loop works and is validated (including **live against the real LLM gate
 | 43 | **Config backup on every write** | `.executive/config.json` holds the only copy of `discord.ownerId`, `repoSearchRoots`, `fileOutput.dirs` and every autonomy toggle — and it was destroyed once. Six writers now share one `writeConfigFile()` choke point that preserves the previous bytes first: a **`config-genesis.json` written once and never rotated** (survives a run of repeated bad writes) plus 10 rotating snapshots, sorted by filename (mtime is unreliable on Windows), identical content skipped, **never throws**. No restore command on purpose. **Engages on the NEXT write** — a fresh runtime has no genesis until something writes |
 | 44 | **Working pattern surfaced** | `State.patterns` has driven the Planner and Advisor since Phase 33, but the owner could not see the numbers a proposal cites without opening `state.json`. A pure `formatPatterns()` renders only the parts carrying information, in **human units** (raw ms once made a model read 36 *minutes* as "~36 hours"), as a digest line + Now-card row. `/api/state` needed no change |
 
-**Test count:** 911 passing, 100% offline (mock backends). Several phases **validated live** against the
+**Test count:** 931 passing, 100% offline (mock backends). Several phases **validated live** against the
 9arm Qwen gateway (`work`, `synth`, `infer`, `propose`, the agent); Phase-25 vendor download + browser-wasm
 e2e run live too. **Screen-sensing is fully live** (real capture → real OCR → real suggestions, both engines
 compared on the same image), the **Advisor is live-validated end to end** (Phase 33.1), **Discord is live**
@@ -477,7 +477,7 @@ change gets too big to review"* and it reaches the "Needs you" queue.
 ```bash
 bun install
 bun run typecheck          # tsc --noEmit (strict) — must stay green
-bun test                   # 911 tests, offline
+bun test                   # 931 tests, offline
 bun run test:e2e           # OPT-IN browser-wasm e2e (real Chromium via Playwright; runs under node, auto-skips
                            #   if playwright/model aren't set up — see test/e2e/README.md)
 bun run test:e2e:chat      # OPT-IN chat-UI e2e (markdown render + no-yank scroll; no gateway/token needed)
@@ -676,7 +676,8 @@ When something LLM-shaped goes silent, check in this order:
 
 ### ✅ Screen-sensing is DONE and running — nothing is blocked
 State on this machine: Defender exclusion in place, `screen.ocr.enabled = true`, `engine = "tesseract"`,
-`languages = "tha+eng"`, Tesseract 5.4 + `tha.traineddata` installed. A capture writes suggestions to
+`languages = "auto"` (Candidate B — picked per screenshot from the window title), Tesseract 5.4 +
+`tha.traineddata` installed. A capture writes suggestions to
 `.executive/screen-inferred.json`, surfaced in the digest / dashboard "Suggestions (unconfirmed)" with a
 Confirm button. Ethics held: opt-in, visible "🔴 reading screen" indicator, own-screen only.
 Layer 3 (vision) stays off — `qwen-vl-max` is 403 at the gateway; it fails cleanly if enabled.
@@ -689,17 +690,24 @@ done:** the `renderPage()` parse guard (`new Function(scriptSource)`) catches on
 breaks *syntax* — the silent `\d`→`d` corruption, which is the more common shape of GOTCHA §8, still
 passes it.
 
-### ⏭️ Candidate B — pick the OCR language from the window title
-`-l tha+eng` **hallucinates Thai on screens that contain none**. Measured on one real screenshot:
-`-l eng` → 0 Thai chars / 8 English words; `-l tha+eng` → **59 garbage Thai chars** / 7 English words —
-so `tha` also costs a little English accuracy. It is *not* a resolution artifact (native 1536×960 gives
-the same garbage), and the LLM still read the screen correctly, so this is noise rather than breakage.
+### ✅ Candidate B — pick the OCR language from the window title — **DONE (`d8e2673`)**
+`resolveOcrLanguages(configured, getTitle)` + `hasThai()` in `src/screen/ocr.ts`. Thai in the live
+window title → `tha+eng`, otherwise `eng`, unknown title → `tha+eng` (uncertainty must not DROP a
+script). `getTitle` is a **thunk**, and `screen-infer.ts` calls it only for the tesseract engine, so a
+manual setting or a WinRT run never pays for the spawnSync. It reads `foregroundWindow()` **directly**,
+not `State.currentWindow` as this section originally proposed — state is rebuilt on a 30 s timer and can
+still name the previous window while the screenshot is of the current one.
 
-The fix is cheap and uses what already exists: Layer 1 already puts the active window title in
-`State.currentWindow` **with Thai intact** (it is a `GetWindowTextW` call, not OCR). Derive the language
-list from it — Thai characters in the title → `tha+eng`, otherwise `eng` — instead of always sending both.
-`config.screen.ocr.languages` stays the manual override. Everything needed is in `src/state/types.ts`
-(`currentWindow`) and `src/screen/screen-infer.ts` (which already reads the config block).
+**The load-bearing part was the config default:** `loadConfig` filled `languages` with `"tha+eng"`
+unconditionally and the live config had that value on disk, so "non-empty = manual override" would have
+made the feature a no-op on the only machine that runs it. The default is now the sentinel `"auto"`
+(matched case-insensitively, and by empty/absent); anything else non-empty is a manual override that
+always wins. The live config was switched (backup: `.executive/config-precandidate-b.json`).
+
+**Honest caveat, measured (`GOTCHA.md` §2):** the hallucination does **not** reproduce on a clean
+synthetic fixture (black-on-white → identical 33 English words either way); a UI-like synthetic page
+reproduces the direction but far smaller (0 → 6 garbage Thai chars, 97 → 96 English words). The 59-char
+figure is from a **real** screenshot. Don't try to demonstrate this with a tidy test image.
 
 ### ✅ Back up `.executive/config.json` — **DONE (Phase 43, `4ef1fa8`)**
 Implemented as described below: one `writeConfigFile()` choke point for all six writers,
