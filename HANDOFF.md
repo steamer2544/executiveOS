@@ -3,16 +3,19 @@
 > **Purpose:** a single doc to resume this project cold if context/memory is lost. Pairs with
 > `CLAUDE.md` (the authoritative phase-by-phase log), `GOTCHA.md` (traps & non-obvious failure modes —
 > read before touching PowerShell/state/tests/LLM), and `README.md` (user-facing overview).
-> Last updated after the **Phase 40 session** (SQLite event storage + the live flip to it, a destroyed-config
-> incident + guardrail, and an agent budget-ladder fix), on top of a live-hardening session on the Discord
-> agent (think-loop fix + retry resilience + message chunking + button feedback + session trust), **Phase 39
-> + 39.1** (state decay/TTL; deadline decay as an opt-in dashboard toggle), **Phase 38** (sandbox
-> `run_command`), and **Phase 36 LIVE** (Discord). **876 passing tests** + two opt-in browser e2e, all green.
-> Everything through Phase 41 is **pushed** (`origin/main` = `main`). The agent is
+> Last updated after the **Phase 42 session** (read the live nudge log; fixed nudges composed from an
+> internal dedup key, and made the sent-vs-answered signal readable), on top of **Phase 41** ("make me a
+> file" works — context ladder, `save_file`, the ~125 s gateway wall clock), the **Phase 40 session**
+> (SQLite event storage + the live flip to it, a destroyed-config incident + guardrail, and an agent
+> budget-ladder fix), a live-hardening session on the Discord agent (think-loop fix + retry resilience +
+> message chunking + button feedback + session trust), **Phase 39 + 39.1** (state decay/TTL; deadline
+> decay as an opt-in dashboard toggle), **Phase 38** (sandbox `run_command`), and **Phase 36 LIVE**
+> (Discord). **876 passing tests** + two opt-in browser e2e, all green.
+> Everything through **Phase 42** is **pushed** (`origin/main` = `main`, `e00dc9b`). The agent is
 > **live-confirmed working** end-to-end over Discord. **If a running bot misbehaves after a pull, RESTART
 > it — code isn't hot-reloaded.**
 >
-> **▶️ LATEST SESSION (Phase 41, 5 commits `090d42d`→`e37ead0`, all PUSHED): "make me a file" now works.**
+> **▶️ PHASE 41 (5 commits `090d42d`→`e37ead0`, all PUSHED): "make me a file" now works.**
 > The agent writes complete, playable HTML games into a folder the owner names. Read the Phase 41 entry
 > in `CLAUDE.md` for the full account; the load-bearing facts:
 > - **The gateway kills every request at ~125 s and Qwen runs at 33–48 tok/s ⇒ ~4,000 output tokens is a
@@ -452,6 +455,17 @@ a `CLAUDE.md` phase entry.
   `tmp-*.js` script that flatten non-ASCII and leave litter behind, new `it()` blocks pasted *outside*
   the `describe()` whose fixtures they use, a header comment stating the exact opposite of what the
   tests do, and a dead `const thrown = calls` placeholder where the real assertion belonged.
+- **⚠️ Read the TESTS as carefully as the code — a narrowed assertion can hide a live bug in the same
+  commit.** Phase 42's criterion said *"the prompt must not contain `long_session` / `Planner`"*; the
+  delivered test asserted only on the prompt's **first line**. That is a plausible-looking narrowing —
+  and it exactly covered a real defect the same run had introduced (an instruction line listing those
+  identifiers as examples of what not to use, which put them straight back into the prompt). Suite
+  green, bug shipped. **When a test scopes an assertion more narrowly than the criterion states, treat
+  the narrowing as the suspect.** The tell is cheap: re-read each criterion, then check the assertion
+  actually covers the whole thing it names.
+- **A sabotage list from the scope is a floor, not a ceiling.** Phase 42 added a 5th sabotage
+  (re-inject the identifiers) specifically to prove the *repaired* test bites where the original did
+  not — the original was green under it. If you fix a test during review, sabotage it afterwards.
 - **Re-run the sabotage check yourself.** Phase 34.2's qwen run reported "tests 2,3,4,5,6 failed against
   the stripped implementation" and that turned out to be exactly right — but the whole point of the
   check is that it is the one claim you cannot verify by reading the diff. Break the code, run the
