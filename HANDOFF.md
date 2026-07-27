@@ -48,12 +48,18 @@
 >   appeared** (one citing screen-sense — Brave searches for `ไซส์ A4 และขอบของราชการ` plus Word Page
 >   Setup dialogs). Phase 33's grounding had been working all along with nowhere to put its output.
 >
-> **▶️ START HERE NEXT SESSION — there is no scoped phase waiting, and that is the honest answer.**
-> Item 0 below (restart `ui`) is a habit, not a task. The one thing with a real decision hanging off it
-> is still **the nudge measurement** — and this session established that it has barely started (see the
-> updated numbers below). Per the Phase 33 method the next phase should come from **reading live data**,
-> not from a list. Two places worth reading first: `nudges.jsonl`, and the freshly-refilled advisor
-> queue now that grounded proposals can actually reach it.
+> **▶️ START HERE NEXT SESSION — two small pieces, then wait.** No scope doc is needed for either; both
+> are identified down to the file and function in the NEXT UP queue below.
+> 1. **Wire the real reply signal for nudges** (`message_reference` → a message id on the `sent` record).
+>    Phase 42.1 filed this as "only if the ratio turns out ambiguous"; **that is wrong on timing** and was
+>    corrected — the measurement takes weeks, and every week spent on the 30-minute proxy is a week of
+>    data that cannot answer the question. This is the only item on the board with a clock.
+> 2. **Guard the silent backslash corruption in `page.ts`** — the follow-up named in Phase 44 and never
+>    claimed. The existing check catches only *syntax* breakage; `/\d+/g` → `/d+/g` is valid and silently
+>    wrong, and Phase 45/45.1 just rewrote much of that file.
+>
+> Then **wait and read two logs** (`nudges.jsonl`, `advisor.json`) — that part is waiting, not work. Per
+> the Phase 33 method, the phase after these should come from live data, not from a list.
 >
 > **▶️ `CLAUDE.md` was split (2026-07-27).** It had reached 163,798 chars and Claude Code was warning
 > that it exceeds the **150k auto-load limit**, i.e. the phase log — the thing a cold session most needs
@@ -180,33 +186,57 @@
 > that touched config/fixtures: `git grep -nE "MTUz|sk-|xox[baprs]-|-----BEGIN|Bearer [A-Za-z0-9._-]{20}"
 > $(git rev-list --all)` (expect only the two `agent.test.ts` fixtures).
 >
-> **▶️ NEXT UP — the queue, in the order it is worth doing** (measured 2026-07-27, after Phase 42.1).
-> The *planned* roadmap ended at Phase 40; everything since came from live failures and live data, and
-> so does this list. Full detail for each is in **§6**.
+> **▶️ NEXT UP — the queue, in the order it is worth doing** (re-derived 2026-07-27 at the end of the
+> Phase 45.1 + 46 session). The *planned* roadmap ended at Phase 40; everything since came from live
+> failures and live data, and so does this list. Full detail for each is in **§6**.
 >
 > 0. **Restart `ui` if it has been running since before the last pull.** Not a task, a habit — code is
->    loaded once at process start, only `config.json` is hot-reloaded. On 07-27 the daemon was found
->    serving :4317 with Phase-42 code, 30 min after 42.1 landed.
-> 1. ~~Back up `.executive/config.json`~~ — **DONE, Phase 43** (`4ef1fa8`).
-> 2. ~~Candidate A — surface `State.patterns`~~ — **DONE, Phase 44** (`f8adad4`).
-> 3. **Candidate B — derive the OCR language from the window title** (§6). **The next thing to do.**
->    Cheap, deterministic, no LLM, and the evidence is already measured. **Design note from a 07-27
->    read of the source, so the next session does not re-derive it:** `runScreenInference(config, deps?)`
->    does **not** receive `State` (callers are `src/index.ts:606` and `:1336`, both passing config only),
->    so the title has to come from somewhere. Prefer calling **`foregroundWindow()` in
->    `src/screen/capture.ts` directly** — it already exists, is synchronous, and returns
->    `{title, app} | null` — over reading `state.json`, because state is rebuilt on a 30 s timer and can
->    still name the *previous* window while the screenshot being OCR'd is of the current one. Touch
->    points: `src/screen/screen-infer.ts:74-78` (where `OcrOptions` is built from
->    `config.screen.ocr.*`) and `src/screen/ocr.ts:177` (`runTesseract`'s `?? "tha+eng"` default).
->    Constraints: `config.screen.ocr.languages` must stay a **manual override that beats the guess**;
->    only the **tesseract** path is affected (winrt has no Thai pack and never will); the
->    language-decision function must be **pure and exported** so it is testable, like `normalizeTitle` /
->    `formatPatterns`. No scope doc yet — small enough to do directly.
-> 4. ~~Candidate C — the dashboard's information architecture~~ — **DONE, Phase 45.** Kept in-house
->    rather than delegated, and that was right: three of the six sabotage checks changed the work.
-> 5. **Then wait and read `nudges.jsonl`.** That measurement still gates the `rules+llm` dial and cannot
->    be rushed — see the caveats immediately below, which change how to read it.
+>    loaded once at process start, only `config.json` is hot-reloaded. This has now bitten twice in one
+>    day: the daemon was found serving :4317 with Phase-42 code 30 min after 42.1 landed, and again at
+>    the end of the session running pre-45/46 code (pid 28200, started 13:16).
+>
+> 1. **Wire the REAL reply signal for nudges — and do it BEFORE the waiting period, not after.**
+>    Phase 42.1 filed this as *"worth doing only if the ratio turns out ambiguous once there is a real
+>    sample"*. **That reasoning inverts once you look at the clock, so this is now item 1.** The
+>    measurement needs *weeks* of wall-clock, and today `answered` means **"the owner sent any message
+>    within 30 minutes"** — a proxy, by its own docstring. Waiting two weeks on the proxy buys two weeks
+>    of ambiguous data; wiring the unambiguous signal first buys the same two weeks of trustworthy data.
+>    **Every day spent waiting with the weaker signal is a day wasted.** There is no clock on anything
+>    else in this list.
+>    **What it takes** (all identified, none of it speculative): Discord already delivers
+>    `message_reference` on a real reply and `handleMessageCreate` in `src/channel/discord.ts`
+>    **drops it** — it keeps only `content`; `Channel.send` (`src/channel/types.ts`) returns
+>    `{ok, error?}` and must also return the sent **message id**; the id then goes on the `sent` record
+>    in `nudges.jsonl` so `markNudgeAnswered` can pair a reply to *its* nudge instead of guessing from
+>    a 30-minute window. Keep the proxy as the fallback for a message that is not a reply — do not
+>    delete `ANSWER_WINDOW_MS`, and keep `answered + expired == sent` (the Phase 42.1 invariant).
+>    Records already written have no id; treat them as unpairable rather than migrating them.
+>
+> 2. **Close the named, unclaimed follow-up: a guard for the SILENT backslash corruption in `page.ts`.**
+>    The existing `new Function(scriptSource)` check catches only backslash damage that breaks
+>    **syntax**. `/\d+/g` emitted as `/d+/g` is a **valid** regex matching the letter `d` — the page
+>    loads, `bun test` is green, the browser e2e is green, and the behaviour is silently wrong. GOTCHA §8
+>    calls this "the more common shape of this bug" and records that it **has no automated guard**.
+>    Phase 45 and 45.1 both rewrote large parts of `page.ts`, which raises the exposure rather than
+>    lowering it.
+>    **The cheap guard matches the rule already written down** ("write no backslash in this file at
+>    all"): a unit test that scans the **source** of `src/ui/page.ts` and fails on any **odd-length run
+>    of backslashes**, since every legitimate one is doubled (`\\n`, `\\s`, `\\'`, and the
+>    `C:\\Users\\you\\Desktop` placeholder). Deterministic, no browser needed, and sabotage-checkable by
+>    inserting a single `\d`. Do this in the same session as item 1 — it is small.
+>
+> 3. **Then wait, and read two logs.** This part is *waiting*, not work — do not invent a phase to fill
+>    it (the Phase 33 method: the next phase comes from live data).
+>    - `nudges.jsonl`, once a nudge actually fires post-Phase-42. **Zero have** (see the baseline block
+>      below), so nothing about 42/42.1 has been observed live yet.
+>    - `.executive/advisor.json`, in a few days. Phase 46 unblocked it and the first three grounded
+>      proposals were good; the open question is whether that **holds at volume**, and whether the
+>      3-day TTL is the right number in practice.
+>
+> **Done, kept for the trail:** ~~back up `config.json`~~ (Phase 43) · ~~surface `State.patterns`~~
+> (Phase 44) · ~~OCR language from the window title~~ (Candidate B) · ~~dashboard IA~~ (Phase 45, and
+> Phase 45.1 after measuring it on real data) · ~~clear the advisor queue~~ (Phase 46 — it turned out to
+> be a real bug, not housekeeping).
 >
 > **📊 The nudge baseline, re-read at the END of the 2026-07-27 session** (the current file, not a plan):
 > `sent 6 · answered 5 · expired 1 · suppressed 14`. **All 5 `answered` records predate Phase 42 and
@@ -759,10 +789,14 @@ Layer 3 (vision) stays off — `qwen-vl-max` is 403 at the gateway; it fails cle
 ### ✅ Candidate A — surface `State.patterns` — **DONE (Phase 44, `f8adad4`)**
 `formatPatterns()` in `src/report/digest.ts` renders a `Working pattern` line in the digest and a
 Now-card row, in human units. Live: `last commit 41m ago · 7 edit(s) since`. Zero-valued parts are
-omitted and the whole line disappears when there is nothing to say. **One follow-up was named and not
-done:** the `renderPage()` parse guard (`new Function(scriptSource)`) catches only backslash damage that
-breaks *syntax* — the silent `\d`→`d` corruption, which is the more common shape of GOTCHA §8, still
-passes it.
+omitted and the whole line disappears when there is nothing to say.
+
+**The follow-up it named is now item 2 of the NEXT UP queue, and it has aged badly enough to be worth
+doing.** The `renderPage()` parse guard (`new Function(scriptSource)`) catches only backslash damage that
+breaks *syntax*; the silent `\d`→`d` corruption — the more common shape of GOTCHA §8 — still passes it,
+and Phase 45 + 45.1 have since rewritten large parts of `page.ts`. The cheap guard is a **source** scan
+of `src/ui/page.ts` that fails on any odd-length run of backslashes, which is exactly the rule GOTCHA §8
+already states ("write no backslash in this file at all" — every legitimate one is doubled).
 
 ### ✅ Candidate B — pick the OCR language from the window title — **DONE (`d8e2673`)**
 `resolveOcrLanguages(configured, getTitle)` + `hasThai()` in `src/screen/ocr.ts`. Thai in the live
@@ -905,12 +939,12 @@ Transcription now has **three working backends** (Phase 25); pick one in the das
 - **A db→jsonl exporter** — `migrate-events` is deliberately one-way. Nothing needs the reverse yet, but
   it is the gap that makes a rollback to `"jsonl"` lossy for anything appended since the flip.
 - **A backup of `.executive/config.json`** — **DONE (Phase 43).** See the section above.
-- **A real reply signal for nudges** (found by the Phase 42.1 `/scrutinize`) — `answered` currently means
-  "the owner sent *any* message within 30 min", a proxy. Discord delivers the unambiguous version:
-  `message_reference` on a real reply, which `handleMessageCreate` (`src/channel/discord.ts`) drops — it
-  keeps only `content`. Pairing it would also need `Channel.send` to return the message id (today it
-  returns `{ok, error?}`) and the id stored on the `sent` record. Worth doing only if the ratio turns out
-  ambiguous once there is a real sample.
+- **A real reply signal for nudges** — **NO LONGER DEFERRED; it is item 1 of the NEXT UP queue.** This
+  entry used to read *"worth doing only if the ratio turns out ambiguous once there is a real sample"*.
+  That was wrong on timing, and the 07-27 session corrected it: the measurement takes **weeks**, and
+  every one of those weeks spent on the proxy (`answered` = "the owner sent *any* message within 30 min")
+  produces data that cannot answer the question. Building the unambiguous signal **first** costs the same
+  weeks and yields data worth reading. See the queue block near the top for what it takes.
 - **`rules.md` / `planner.md`** — the vision's remaining 4-layer artifacts (editable decision rules /
   long-term goals). Speculative; rules already live as code in `src/planner/rules.ts`.
 - **Wiring approved proposals to real execution** — **partly done (Phase 27):** approving an *executable
