@@ -3,17 +3,42 @@
 > **Purpose:** a single doc to resume this project cold if context/memory is lost. Pairs with
 > `CLAUDE.md` (the authoritative phase-by-phase log), `GOTCHA.md` (traps & non-obvious failure modes —
 > read before touching PowerShell/state/tests/LLM), and `README.md` (user-facing overview).
-> Last updated after the **Phase 42 session** (read the live nudge log; fixed nudges composed from an
-> internal dedup key, and made the sent-vs-answered signal readable), on top of **Phase 41** ("make me a
+> Last updated after the **Phase 43 + 44 session** (config backup on every write; the working-pattern
+> numbers surfaced to the owner — and a delegation trap that invalidates the documented workaround, see
+> §3), on top of **Phase 42/42.1** (read the live nudge log; fixed nudges composed from an internal dedup
+> key, and made the sent-vs-answered signal readable), **Phase 41** ("make me a
 > file" works — context ladder, `save_file`, the ~125 s gateway wall clock), the **Phase 40 session**
 > (SQLite event storage + the live flip to it, a destroyed-config incident + guardrail, and an agent
 > budget-ladder fix), a live-hardening session on the Discord agent (think-loop fix + retry resilience +
 > message chunking + button feedback + session trust), **Phase 39 + 39.1** (state decay/TTL; deadline
 > decay as an opt-in dashboard toggle), **Phase 38** (sandbox `run_command`), and **Phase 36 LIVE**
-> (Discord). **882 passing tests** + two opt-in browser e2e, all green.
-> Everything through **Phase 42** is **pushed** (`origin/main` = `main`, `e00dc9b`). The agent is
+> (Discord). **911 passing tests** + two opt-in browser e2e, all green.
+> Everything through **Phase 44** is committed on `main` (`f8adad4`); **not yet pushed** as of this
+> session's end. The agent is
 > **live-confirmed working** end-to-end over Discord. **If a running bot misbehaves after a pull, RESTART
 > it — code isn't hot-reloaded.**
+>
+> **▶️ PHASE 43 + 44 (this session, committed `4ef1fa8` + `f8adad4`).** Both were delegated; **neither
+> delegated run survived to report**, so every acceptance criterion and every sabotage was run by the
+> architect. Read the two `CLAUDE.md` entries for the full account; what a future session must not lose:
+> - **`config.json` is now backed up on every write** — one choke point (`writeConfigFile`) feeding
+>   `backupConfig()`: a `config-genesis.json` written once and never rotated, plus 10 rotating snapshots,
+>   identical content skipped, never throws. **The backup only engages on the NEXT config write**, so a
+>   freshly-restored runtime has no genesis until something writes; toggling anything in the Autonomy
+>   card creates it. `.executive/config.json.pre-sqlite` is still the misleading fake backup — safe to
+>   delete now that a real one exists.
+> - **`State.patterns` is visible** — a `Working pattern` line in the digest and a Now-card row, in human
+>   units. Live: `last commit 41m ago · 7 edit(s) since`.
+> - **The delivered Phase-43 suite was 13/13 green and proved almost nothing** — the decisive sabotage
+>   (backup taken *after* the write, i.e. preserving the new bytes) passed every test, because the
+>   criteria asserted a `"enabled": false` **substring** and the merged config is full of default-off
+>   blocks. Three tests were vacuous; a fourth caught nothing because **`chmod(dir, 0o444)` does not
+>   block writes on Windows** (verified). **And a real bug the criteria could not catch:** the
+>   identical-content skip compared against `rotating[0]` while the list is sorted **oldest-first**.
+> - **The Phase-44 run left its own sabotage in the source** (a stray backslash in `page.ts`, never
+>   restored) — it would have shipped had the diff not been read line by line. That sabotage was also
+>   *ineffective*, so the run had verified nothing: a backslash before a newline is a line continuation.
+>   **GOTCHA §8 re-confirmed live:** `/\d+/g` in `page.ts` is emitted as `/d+/g`.
 >
 > **▶️ PHASE 41 (5 commits `090d42d`→`e37ead0`, all PUSHED): "make me a file" now works.**
 > The agent writes complete, playable HTML games into a folder the owner names. Read the Phase 41 entry
@@ -104,23 +129,27 @@
 > 0. **Restart `ui` if it has been running since before the last pull.** Not a task, a habit — code is
 >    loaded once at process start, only `config.json` is hot-reloaded. On 07-27 the daemon was found
 >    serving :4317 with Phase-42 code, 30 min after 42.1 landed.
-> 1. **Back up `.executive/config.json` on every write.** The one real risk left. It was destroyed once
->    (see the red block above) and the only snapshot on disk, `config.json.pre-sqlite` (2026-07-25), is
->    **missing the entire `agent` and `advisor` blocks** — restoring it would not bring back
->    `discord.ownerId`, `repoSearchRoots` or `fileOutput.dirs`. Small job, unbounded downside.
->    **📄 SCOPE IS WRITTEN AND READY TO DELEGATE: `docs/scopes/phase-43-config-backup.md`.**
-> 2. **Candidate A — surface `State.patterns`** (§6). Cheap, read-only, closes the loop on numbers the
->    Planner and Advisor already reason over but the owner cannot see.
->    **📄 SCOPE IS WRITTEN AND READY TO DELEGATE: `docs/scopes/phase-44-surface-patterns.md`.**
->
-> **43 and 44 touch DISJOINT files on purpose** (43: `config.ts` + `paths.ts`; 44: `report/*` +
-> `ui/page.ts`), so they can be delegated **in parallel** — which matters, because a parallel run whose
-> `bun run typecheck` sees another job's half-edited file will try to "fix" files it was told not to
-> touch. Both scopes already carry the standard delegation guards in their header (read the spec only,
-> never print full test output, keep the report under 20 lines).
-> 3. **Candidate C — `/scrutinize` the dashboard's visual design** (§6, new). Needs a scope doc first;
->    the file is one 988-line template literal, so read GOTCHA §8 before touching it.
-> 4. **Candidate B — derive the OCR language from the window title** (§6).
+> 1. ~~Back up `.executive/config.json`~~ — **DONE, Phase 43** (`4ef1fa8`).
+> 2. ~~Candidate A — surface `State.patterns`~~ — **DONE, Phase 44** (`f8adad4`).
+> 3. **Candidate B — derive the OCR language from the window title** (§6). **The next thing to do.**
+>    Cheap, deterministic, no LLM, and the evidence is already measured. **Design note from a 07-27
+>    read of the source, so the next session does not re-derive it:** `runScreenInference(config, deps?)`
+>    does **not** receive `State` (callers are `src/index.ts:606` and `:1336`, both passing config only),
+>    so the title has to come from somewhere. Prefer calling **`foregroundWindow()` in
+>    `src/screen/capture.ts` directly** — it already exists, is synchronous, and returns
+>    `{title, app} | null` — over reading `state.json`, because state is rebuilt on a 30 s timer and can
+>    still name the *previous* window while the screenshot being OCR'd is of the current one. Touch
+>    points: `src/screen/screen-infer.ts:74-78` (where `OcrOptions` is built from
+>    `config.screen.ocr.*`) and `src/screen/ocr.ts:177` (`runTesseract`'s `?? "tha+eng"` default).
+>    Constraints: `config.screen.ocr.languages` must stay a **manual override that beats the guess**;
+>    only the **tesseract** path is affected (winrt has no Thai pack and never will); the
+>    language-decision function must be **pure and exported** so it is testable, like `normalizeTitle` /
+>    `formatPatterns`. No scope doc yet — small enough to do directly.
+> 4. **Candidate C — `/scrutinize` the dashboard's visual design** (§6). Needs a scope doc first;
+>    the file is one 988-line template literal, so read GOTCHA §8 before touching it. **This one is a
+>    judgment job, not a mechanical one** (the finding is information architecture: 12 cards, with ~190
+>    lines of configuration sitting *above* "what needs me"). The 43/44 session is evidence that
+>    delegation handles mechanical work far better than judgment work — consider keeping this one.
 > 5. **Then wait and read `nudges.jsonl`.** That measurement still gates the `rules+llm` dial and cannot
 >    be rushed — see the caveats immediately below, which change how to read it.
 >
@@ -424,8 +453,10 @@ The full loop works and is validated (including **live against the real LLM gate
 | 41 | **"Make me a file" works** | the gateway's **~125 s wall clock** × 33–48 tok/s ⇒ **~4,000 output tokens is a physical ceiling**, so the budget ladder was inverted into a **context ladder** (`CONTEXT_LADDER = [null,3,1]` + `trimTranscript`); new `save_file` (confined dirs / no executables / no overwrite / NEVER_TRUSTABLE, per-folder approval, 🌿 branch option); large files arrive via `append` chunks with truncated-tool-call feedback; `run_command` had **never worked on Windows** (`sh -c`) → temp `.bat`. Owner-verified live: playable pong + tetris |
 | 42 | **Nudge quality + a readable answer signal** | read the real `nudges.jsonl` (5 sent / 3 days) and found the nudge sentence was composed from the **internal dedup key** — the model read *"needs your call"* as a **phone call** in 2 of 4 live nudges. `nudgeSubject()` sends the human `detail` and **never** `summary` when a detail exists (fixed in the presentation layer — rewording `digest.ts` would invalidate every dedup key already written). `answered` gains `latencyMs`, a new `expired` record gains `ageMs`, `ANSWER_WINDOW_MS = 30 min`; `openNudgeId` treats both as closing. **The sent-vs-answered baseline restarts from here** — the old 5/5 counted replies up to 1 h 55 min later |
 | 42.1 | **Cold re-review of 42** | `/scrutinize` of the phase just shipped. Phase 42 had fixed **1 of 4** owner-facing doors — `get_digest` → `renderDigest` still handed the model the internal key, as did the dashboard card and the `ui` console — and its `detail || summary` rule was right for **1 source of 4** (autopilot/executor/worker keep the human sentence in `summary`, so it dropped *"with FAILING tests"*). One shared `needsYouLabel()` + an explicit per-source `NeedsYouItem.label`. And the ratio still over-reported: only the newest open nudge was closed, so an ignored one kept **no record** and `answered/(answered+expired)` read **100%** — one message now closes every open nudge and answers at most one |
+| 43 | **Config backup on every write** | `.executive/config.json` holds the only copy of `discord.ownerId`, `repoSearchRoots`, `fileOutput.dirs` and every autonomy toggle — and it was destroyed once. Six writers now share one `writeConfigFile()` choke point that preserves the previous bytes first: a **`config-genesis.json` written once and never rotated** (survives a run of repeated bad writes) plus 10 rotating snapshots, sorted by filename (mtime is unreliable on Windows), identical content skipped, **never throws**. No restore command on purpose. **Engages on the NEXT write** — a fresh runtime has no genesis until something writes |
+| 44 | **Working pattern surfaced** | `State.patterns` has driven the Planner and Advisor since Phase 33, but the owner could not see the numbers a proposal cites without opening `state.json`. A pure `formatPatterns()` renders only the parts carrying information, in **human units** (raw ms once made a model read 36 *minutes* as "~36 hours"), as a digest line + Now-card row. `/api/state` needed no change |
 
-**Test count:** 882 passing, 100% offline (mock backends). Several phases **validated live** against the
+**Test count:** 911 passing, 100% offline (mock backends). Several phases **validated live** against the
 9arm Qwen gateway (`work`, `synth`, `infer`, `propose`, the agent); Phase-25 vendor download + browser-wasm
 e2e run live too. **Screen-sensing is fully live** (real capture → real OCR → real suggestions, both engines
 compared on the same image), the **Advisor is live-validated end to end** (Phase 33.1), **Discord is live**
@@ -446,7 +477,7 @@ change gets too big to review"* and it reaches the "Needs you" queue.
 ```bash
 bun install
 bun run typecheck          # tsc --noEmit (strict) — must stay green
-bun test                   # 882 tests, offline
+bun test                   # 911 tests, offline
 bun run test:e2e           # OPT-IN browser-wasm e2e (real Chromium via Playwright; runs under node, auto-skips
                            #   if playwright/model aren't set up — see test/e2e/README.md)
 bun run test:e2e:chat      # OPT-IN chat-UI e2e (markdown render + no-yank scroll; no gateway/token needed)
@@ -486,13 +517,21 @@ a `CLAUDE.md` phase entry.
 - Delegate with `claude-9arm -p "<self-contained prompt>" --allowedTools Bash Read Edit Write Glob Grep`
   (there is a `qwen-agent` skill for this). The prompt must be **standalone** — qwen has none of the
   conversation's context — with absolute paths and explicit acceptance criteria.
-- **⚠️ Run it from OUTSIDE the repo.** `CLAUDE.md` is now large enough that a headless `claude-9arm`
-  started *inside* the repo auto-loads it and dies on the first request with
-  `ContextWindowExceededError` (**99 k input tokens before doing any work**, against a 128 k window).
-  Phase 34.2 lost a run to this. The working shape: `cd <scratchpad> && claude-9arm -p "…"
-  --add-dir C:/Users/yiw20/Programming/myshi/executive`, with an explicit line in the prompt saying
-  **"do NOT read CLAUDE.md / HANDOFF.md / GOTCHA.md — everything you need is in the spec"**, plus
-  "work file by file, grep rather than reading whole files".
+- **🔴 Running it from outside the repo is NOT ENOUGH — `--add-dir` re-introduces the problem.**
+  `CLAUDE.md` is large enough that a headless `claude-9arm` auto-loads it and dies on the first request
+  with `ContextWindowExceededError` (**99 k input tokens before doing any work**, against a 128 k
+  window). Phase 34.2 lost a run to this and the fix recorded here was `cd <scratchpad> && claude-9arm
+  -p "…" --add-dir <repo>`. **Phase 43 proved that workaround false:** that exact shape died with
+  `input_tokens: 99073` — the same number — because **`--add-dir <repo>` puts the repo in the workspace,
+  and `CLAUDE.md` discovery follows the added directory.** Telling the prompt "do NOT read CLAUDE.md"
+  does not help: the auto-load happens before the model reads anything.
+  **Untested options for the next attempt** (pick one and record the result here): copy the spec plus
+  only the handful of files the job touches into a scratch dir and delegate without `--add-dir` at all;
+  or temporarily point the run at a directory that has no `CLAUDE.md`. Until one is verified, **assume a
+  delegated run will die at the report stage** and plan to review its files rather than its report.
+- Keep the rest of the prompt discipline regardless: an explicit **"do NOT read CLAUDE.md / HANDOFF.md /
+  GOTCHA.md — everything you need is in the spec"**, plus "work file by file, grep rather than reading
+  whole files".
 - **⚠️ …and forbid raw `bun test` output — that is the real context killer.** Phase 40's Job 1 died to the
   same `ContextWindowExceededError` *despite* running from outside the repo with the docs explicitly
   banned. The suite prints **750+ `(pass)` lines ≈ 20–30 k tokens per run**, and an implementer runs it
@@ -500,8 +539,23 @@ a `CLAUDE.md` phase entry.
   **"NEVER print full test output — always `bun test 2>&1 | tail -20`"** in every delegation prompt, and
   cap the final report ("under 20 lines"). Job 2 got that instruction and survived to report.
 - **A run that dies at the report stage has usually still done the work.** Both Phase 40 jobs wrote every
-  file before dying / reporting. Check `git status` before assuming a failed run produced nothing — and
+  file before dying / reporting; so did **both** Phase 43/44 jobs (one died at 99 k tokens, the other
+  exited 0 with an empty log). Check `git status` before assuming a failed run produced nothing — and
   then review it exactly as if it had reported success, because its acceptance criteria were never run.
+- **⚠️ A delegated run can leave its own SABOTAGE in the source.** Phase 44's job left
+  `var _sab = "test\<newline>";` in `src/ui/page.ts` — sabotage 5, never restored — and it would have
+  shipped had the diff not been read line by line. **Always read the full diff for stray scaffolding**
+  (`_sab`, `tmp-*.js`, `.bak` files: that same run also left `digest.ts.bak` and `page.ts.bak` behind).
+  Worse, the sabotage was *ineffective* — a backslash before a newline is a line continuation, so the
+  emitted script stayed valid and the criterion could never have failed. **A reported sabotage result is
+  worthless if the sabotage did not actually break anything**; verify the check goes red yourself.
+- **⚠️ `chmod` is not a way to make a write fail on Windows.** Phase 43's tests used
+  `chmodSync(dir, 0o444)` to simulate an unwritable backup directory; Node's chmod on Windows only
+  toggles the read-only flag and **does not prevent creating files inside a directory** (verified
+  empirically). Both "the backup failed" tests therefore had no failing backup and asserted nothing.
+  The portable trick: plant a regular **file** where the directory belongs, so `mkdirSync` throws
+  `EEXIST`. And always assert the failure was *real* (e.g. no backup exists) rather than only that
+  nothing threw.
 - **Delegation depends on Arm's box being up.** Phase 31's runs died to a gateway outage mid-task; when
   that happens the architect finishes the work rather than blocking. Split jobs so they touch **disjoint
   files** — a parallel run whose `bun run typecheck` sees another job's half-edited file will try to
@@ -627,11 +681,13 @@ State on this machine: Defender exclusion in place, `screen.ocr.enabled = true`,
 Confirm button. Ethics held: opt-in, visible "🔴 reading screen" indicator, own-screen only.
 Layer 3 (vision) stays off — `qwen-vl-max` is 403 at the gateway; it fails cleanly if enabled.
 
-### ⏭️ Candidate A — surface `State.patterns` in the digest / dashboard
-Phase 33 computes `patterns` (`sessionMs`, `msSinceLastCommit`, `editsSinceLastCommit`,
-`sameFileSaves30m`, `repoSwitches1h`) and the Planner + Advisor both reason over them, but the owner
-cannot see the numbers a proposal cites without opening `state.json`. A "Working pattern" line in the
-digest and a Now-card row would close that loop. Cheap and read-only — the values already exist.
+### ✅ Candidate A — surface `State.patterns` — **DONE (Phase 44, `f8adad4`)**
+`formatPatterns()` in `src/report/digest.ts` renders a `Working pattern` line in the digest and a
+Now-card row, in human units. Live: `last commit 41m ago · 7 edit(s) since`. Zero-valued parts are
+omitted and the whole line disappears when there is nothing to say. **One follow-up was named and not
+done:** the `renderPage()` parse guard (`new Function(scriptSource)`) catches only backslash damage that
+breaks *syntax* — the silent `\d`→`d` corruption, which is the more common shape of GOTCHA §8, still
+passes it.
 
 ### ⏭️ Candidate B — pick the OCR language from the window title
 `-l tha+eng` **hallucinates Thai on screens that contain none**. Measured on one real screenshot:
@@ -645,8 +701,15 @@ list from it — Thai characters in the title → `tha+eng`, otherwise `eng` —
 `config.screen.ocr.languages` stays the manual override. Everything needed is in `src/state/types.ts`
 (`currentWindow`) and `src/screen/screen-infer.ts` (which already reads the config block).
 
-### 🔴 Back up `.executive/config.json` — the one real risk left
-Promoted out of "deferred" on 2026-07-27, because the situation is worse than that section said. The
+### ✅ Back up `.executive/config.json` — **DONE (Phase 43, `4ef1fa8`)**
+Implemented as described below: one `writeConfigFile()` choke point for all six writers,
+`config-genesis.json` written once and never rotated, 10 rotating snapshots, identical content skipped,
+never throws, no restore command. **Two things the owner should still do:** the backup only engages on
+the **next** config write (toggle anything in the Autonomy card to create the genesis snapshot for the
+config currently in use), and `.executive/config.json.pre-sqlite` — the misleading fake backup — can be
+deleted now that a real one exists. The original problem statement is kept below for the reasoning.
+
+The situation was worse than the "deferred" section said. The
 file is gitignored, hand-edited, holds the **only** copy of `discord.ownerId`, `agent.repoSearchRoots`,
 `agent.fileOutput.dirs`, the OCR engine choice and every autonomy toggle — and it **was destroyed once**
 (see the red block at the top). The claim "there is no backup" is now half-true in the worse direction:
@@ -712,10 +775,7 @@ Transcription now has **three working backends** (Phase 25); pick one in the das
   would add a dependency and a schema layer for nothing. Revisit only if a second table appears.
 - **A db→jsonl exporter** — `migrate-events` is deliberately one-way. Nothing needs the reverse yet, but
   it is the gap that makes a rollback to `"jsonl"` lossy for anything appended since the flip.
-- **A backup of `.executive/config.json`** — **no longer deferred.** Promoted to a real item above
-  ("🔴 Back up `.executive/config.json`") after a 07-27 check found the existing `config.json.pre-sqlite`
-  snapshot is missing the whole `agent` + `advisor` blocks, i.e. worse than no backup because it looks
-  like one.
+- **A backup of `.executive/config.json`** — **DONE (Phase 43).** See the section above.
 - **A real reply signal for nudges** (found by the Phase 42.1 `/scrutinize`) — `answered` currently means
   "the owner sent *any* message within 30 min", a proxy. Discord delivers the unambiguous version:
   `message_reference` on a real reply, which `handleMessageCreate` (`src/channel/discord.ts`) drops — it

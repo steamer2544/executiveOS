@@ -256,6 +256,33 @@
 
 ## 4. Testing (how to not ship a green-but-fake suite)
 
+- **A `toContain` substring assertion on a merged config passes for the WRONG object.** *Symptom:*
+  Phase 43's decisive sabotage — moving `backupConfig()` to *after* the write, so the backup preserves
+  the **new** bytes and is worthless — left **all 13 tests green**. *Cause:* the criteria asserted
+  `expect(backupContent).toContain('"enabled": false')`, and `loadConfig()` merges in defaults, so the
+  written config is full of default-off blocks (`screen.window`, `vision`, …). The substring is present
+  either way. *Fix:* `JSON.parse` and assert the **specific field** (`advisor.enabled`), so the wrong
+  object fails. *Rule:* when a test asserts on a serialized blob, ask what else in that blob could
+  satisfy the assertion. (Phase 43)
+- **`chmod` cannot make a write fail on Windows.** *Symptom:* two tests named "backup directory
+  unwritable" and "a backup failure does not block the write" both passed — and would have passed with
+  the feature deleted. *Cause:* `chmodSync(dir, 0o444)` on Windows only toggles the read-only flag and
+  **does not prevent creating files inside the directory** (verified: the write succeeded), so the
+  backup never failed and `expect(...).not.toThrow()` was trivially true. *Fix:* plant a regular **file**
+  where the directory belongs — `mkdirSync` then throws `EEXIST`, portably. *And* assert the failure was
+  real (`listConfigBackups()` is empty), not merely that nothing threw. (Phase 43)
+- **An ordering assertion needs ≥3 elements, and must not sort the array it checks.** *Symptom:*
+  `expect(names).toEqual([...names].sort().reverse())` — green for any input, and doubly meaningless
+  with the single element the fixture produced. *Fix:* build three items with known content and assert
+  the literal expected order. (Phase 43)
+- **A sabotage that does not actually break anything proves nothing.** *Symptom:* a delegated run
+  reported sabotage 5 (`introduce a backslash into page.ts`) as done, and left
+  `var _sab = "test\<newline>";` in the source. *Cause:* a backslash **before a newline** is a
+  *line continuation* — it vanishes and the emitted script stays valid JS, so the guard could never
+  fire. *Fix:* verify the check goes **red** with your own eyes before trusting it; for §8 specifically,
+  use a backslash that breaks syntax (`/\(/` → `/(/`). *Bonus trap:* the run also left the sabotage
+  **in the committed-ready tree** — read the full diff for stray `_sab` / `tmp-*.js` / `.bak`
+  scaffolding. (Phase 44)
 - **Generating source through a shell heredoc can plant INVISIBLE control characters.** *Symptom:* a
   freshly written function returned `null` for every input; the source on screen looked correct and
   `tsc` was green. *Cause:* a `python - <<'PY'` heredoc turned `\b` inside a regex into a literal
@@ -398,3 +425,10 @@
   regex, or just run the browser e2e. This is the §4/§7 lesson again: **the Playwright e2e
   (`bun run test:e2e:chat`) is the only thing that catches a page-JS parse error** — mirror any new inline-JS
   logic with a check there. (Phase 37)
+- **Re-confirmed live in Phase 44**, in case anyone doubts it: `"x".replace(/\d+/g, "")` written in
+  `page.ts` is emitted as `"x".replace(/d+/g, "")`. **Note what that means — it does NOT throw.**
+  `/d+/g` is a perfectly valid regex that matches the letter `d`, so the page loads, the script parses,
+  and the behaviour is silently wrong. The unit guard added in Phase 44 (`new Function(scriptSource)`
+  must not throw) therefore catches only the subset of this bug that breaks **syntax** (e.g. `/\(/` →
+  `/(/`). **The silent-corruption case has no automated guard yet** — that is a named, unclaimed
+  follow-up. Until it exists, the rule stands: **write no backslash in this file at all.** (Phase 44)
