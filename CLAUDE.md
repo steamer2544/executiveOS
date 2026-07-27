@@ -1472,6 +1472,54 @@ docs/scopes/           # per-phase specs (the contract handed to the implementer
   key, so the identifier assertion is scoped to the Needs-you section and explains why.
   Files: `src/report/{digest,types,digest.test}.ts`, `src/proactive/{compose,proactive,types,
   compose.test,proactive.test}.ts`, `src/ui/page.ts`, `src/index.ts`.
+- **Phase 43 — DONE** (architect scope + qwen impl + architect review/fixes/live, this session): **Back
+  up `.executive/config.json` on every write.** The one real risk left on the board: the file is
+  gitignored, hand-edited, holds the **only** copy of `discord.ownerId` / `agent.repoSearchRoots` /
+  `agent.fileOutput.dirs` / every autonomy toggle — and it **was destroyed once**, with the on-disk
+  `config.json.pre-sqlite` turning out to be a backup that looks like insurance and is not (missing the
+  whole `agent` + `advisor` blocks). Six functions overwrote it through six byte-identical temp+rename
+  blocks, none preserving anything. Now one non-exported `writeConfigFile(raw)` in `src/config.ts` is the
+  single choke point (all six routed through it; happy path byte-identical), and new
+  `src/config-backup.ts` `backupConfig()` preserves the previous bytes first: a **`config-genesis.json`
+  written once and never overwritten or rotated** (survives a run of repeated bad writes, same
+  "only if absent" pattern `bootstrap()` uses for `claude.md`), plus rotating `config-<ts>.json`
+  snapshots capped at `MAX_CONFIG_BACKUPS = 10`, sorted **by filename not mtime** (the timestamp format
+  sorts chronologically; mtime is unreliable on Windows). Identical content is skipped so the dashboard's
+  trivial saves cannot push real history out of the window. **Never throws** — a backup failure can
+  never block a config write. **No restore command on purpose** (recovery is copying a file back; an
+  automated restore is one more thing that can overwrite a good config). 14 tests.
+  **Architect defects found + fixed — the delivered suite was 13/13 green and proved almost nothing:**
+  (1) **the decisive sabotage passed.** Moving `backupConfig()` to *after* the rename — i.e. preserving
+  the NEW contents, a worthless backup, the exact failure the spec called out — left **all 13 tests
+  green**, because criteria 10/11 asserted `toContain('"enabled": false')` and the merged config is full
+  of default-off blocks, so the substring matches either way. Now they parse the JSON and assert the
+  specific field (`advisor.enabled` / `screen.window.enabled`), and the sabotage correctly fails 2 tests.
+  (2) **`chmodSync(dir, 0o444)` does not block writes on Windows** (verified empirically), so criteria
+  9 and 12 — "backup failed" and "a backup failure does not block the write" — never had a failing
+  backup at all; replaced with a portable `blockBackupDir()` that plants a regular **file** where the
+  directory belongs so `mkdirSync` throws `EEXIST`, plus an assertion that the failure was real
+  (`listConfigBackups()` is empty) rather than silently worked around. (3) criterion 8's ordering check
+  ran against a **single** backup and asserted `names` equals `[...names].sort().reverse()` — true for
+  any one-element array, and self-referential besides; it now builds three distinct backups and asserts
+  the real order by content. (4) **A REAL BUG the criteria could not catch:** the identical-content skip
+  compared against `rotating[0]`, but `listRotatingBackups()` sorts **oldest-first**, so it compared
+  against the oldest backup — duplicates accumulate as soon as more than one exists. Criterion 5 passed
+  only because it had exactly one prior backup; added a regression test that builds three first and
+  fails against the pre-fix code. **Sabotage-checked 6/6 by the architect, not taken on report** (the
+  run died before reporting, so nothing was self-verified). Two spec predictions were wrong in detail
+  and are corrected here: sabotage 3 (rotation counts genesis) is caught by criteria 6/8, **not** 7 —
+  `config-genesis.json` sorts *last* lexicographically, so it is never the file deleted. **Delegation
+  note:** the run died with `ContextWindowExceededError` at **99,073 input tokens before doing any
+  work** — the documented CLAUDE.md trap, **despite being started from outside the repo**, because
+  `--add-dir <repo>` pulls the repo's `CLAUDE.md` in anyway. The "run it from outside" workaround in
+  `HANDOFF.md` is therefore insufficient on its own. It had written every file first (the documented
+  "a run that dies at the report stage has usually still done the work"). **Live-validated** in an
+  isolated `EXECUTIVE_HOME` (the owner's real config never touched): `bootstrap()` creates no backup
+  (correct — the init case), three real config writes produce 3 rotating + 1 genesis, and genesis holds
+  the pre-change value. **Note for the owner:** the backup only engages on the *next* config write, so
+  the currently-live config is not snapshotted until something writes it. Spec:
+  `docs/scopes/phase-43-config-backup.md`. Files: `src/config-backup{,.test}.ts`, `src/paths.ts`,
+  `src/config.ts`.
 - **Loop complete (manual trigger):** `auto --apply` runs the whole chain in one command; the human
   reviews/merges the `executive/change-<id>` branch.
 

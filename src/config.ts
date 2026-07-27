@@ -3,6 +3,23 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { renameOverwrite } from "./fs-atomic.js";
 import { configPath } from "./paths.js";
+import { backupConfig } from "./config-backup.js";
+
+/**
+ * Write config.json atomically, preserving the previous contents first.
+ * `raw` is the exact bytes to write (callers already build them).
+ * A backup failure never aborts the write.
+ */
+function writeConfigFile(raw: string): void {
+  try {
+    backupConfig();
+  } catch {
+    // Backup failure must never block a config write.
+  }
+  const tmp = configPath() + ".tmp";
+  writeFileSync(tmp, raw);
+  renameOverwrite(tmp, configPath());
+}
 
 export interface Config {
   /** Config schema version (always 1 for Phase 1). */
@@ -604,9 +621,7 @@ export function updateTranscribeConfig(patch: Record<string, unknown>): Config["
   }
 
   const raw = JSON.stringify(config, null, 2) + "\n";
-  const tmp = configPath() + ".tmp";
-  writeFileSync(tmp, raw);
-  renameOverwrite(tmp, configPath());
+  writeConfigFile(raw);
   return t;
 }
 
@@ -682,9 +697,7 @@ export function updateAutonomyConfig(patch: Record<string, unknown>): AutonomySt
   // patch.autopilotApply is ignored on purpose — see the doc comment above.
 
   const raw = JSON.stringify(config, null, 2) + "\n";
-  const tmp = configPath() + ".tmp";
-  writeFileSync(tmp, raw);
-  renameOverwrite(tmp, configPath());
+  writeConfigFile(raw);
   return readAutonomyConfig(config);
 }
 
@@ -731,9 +744,7 @@ export function updateFileOutputConfig(patch: Record<string, unknown>): FileOutp
   if (typeof patch.allowOverwrite === "boolean") f.allowOverwrite = patch.allowOverwrite;
 
   const raw = JSON.stringify(config, null, 2) + "\n";
-  const tmp = configPath() + ".tmp";
-  writeFileSync(tmp, raw);
-  renameOverwrite(tmp, configPath());
+  writeConfigFile(raw);
   return readFileOutputConfig(config);
 }
 
@@ -752,9 +763,7 @@ export function addFileOutputDir(dir: string): FileOutputState {
   if (!dirs.some((d) => d.trim() === clean)) config.agent.fileOutput.dirs = [...dirs, clean];
 
   const raw = JSON.stringify(config, null, 2) + "\n";
-  const tmp = configPath() + ".tmp";
-  writeFileSync(tmp, raw);
-  renameOverwrite(tmp, configPath());
+  writeConfigFile(raw);
   return readFileOutputConfig(config);
 }
 
@@ -797,9 +806,7 @@ export function trustTool(name: string): Config {
   }
   if (!current.includes(name)) {
     config.agent.trustedTools = [...current, name];
-    const tmp = configPath() + ".tmp";
-    writeFileSync(tmp, JSON.stringify(config, null, 2) + "\n");
-    renameOverwrite(tmp, configPath());
+    writeConfigFile(JSON.stringify(config, null, 2) + "\n");
   } else {
     config.agent.trustedTools = current;
   }
@@ -851,9 +858,7 @@ export function updateScreenConfig(patch: Record<string, unknown>): Config["scre
   }
 
   const raw = JSON.stringify(config, null, 2) + "\n";
-  const tmp = configPath() + ".tmp";
-  writeFileSync(tmp, raw);
-  renameOverwrite(tmp, configPath());
+  writeConfigFile(raw);
   return s;
 }
 

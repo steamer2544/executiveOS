@@ -159,3 +159,8 @@ export function eventDbPath(): string {
 export function nudgeLogPath(): string {
   return execRoot() + "/nudges.jsonl";
 }
+
+/** Absolute path to .executive/config-backups/ (rotating backups of config.json). */
+export function configBackupDir(): string {
+  return execRoot() + "/config-backups";
+}
