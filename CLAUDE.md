@@ -1520,6 +1520,40 @@ docs/scopes/           # per-phase specs (the contract handed to the implementer
   the currently-live config is not snapshotted until something writes it. Spec:
   `docs/scopes/phase-43-config-backup.md`. Files: `src/config-backup{,.test}.ts`, `src/paths.ts`,
   `src/config.ts`.
+- **Phase 44 — DONE** (architect scope + qwen impl + architect review/fixes/live, this session): **Show
+  the owner the numbers the system reasons over.** Phase 33 computes `State.patterns` and both the
+  Planner (`checkpoint_work`/`grinding_on_file`/`long_session`) and the Advisor (which must cite them as
+  evidence) reason over them — so the owner regularly reads *"113 edits over 11.5h with no commit"* and
+  had **no way to see the underlying numbers** without opening `state.json` by hand. New pure exported
+  `formatPatterns(p)` in `src/report/digest.ts` builds **only the parts that carry information** (a zero
+  or `null` field is omitted, not rendered as "0" or "never"), joined with `" · "`, returning `null` when
+  nothing survives so a fresh install renders no empty bullet. **Units are the point, not a detail** —
+  raw milliseconds have already caused a real repeated failure here (a model read `sessionMs: 2173707`
+  as "~36 hours"; it is 36 *minutes*), so `formatDuration` renders `"under a minute"` / `"25m"` /
+  `"3h 10m"`, dropping a zero minutes component (`"3h"`, never `"3h 0m"`). `Digest["now"]` gains
+  `workingPattern`, `renderDigest` prints a `- **Working pattern:**` line **only when non-null**, and the
+  dashboard Now card gains a matching row after `Idle`. Pure presentation: read-only, deterministic, NO
+  LLM, no new computation, no new event/config/CLI. **`/api/state` needed no change** — verified by
+  reading `src/ui/server.ts`: `currentState()` returns the whole `buildDigest()` object, so the field
+  flows through automatically. 49 tests in `digest.test.ts`.
+  **Architect defects found + fixed:** (1) **the delegated run left its own sabotage in the source** —
+  `src/ui/page.ts` still contained `var _sab = "test\<newline>";`, i.e. sabotage 5 never restored, which
+  would have shipped had the diff not been read. (2) That sabotage was **ineffective anyway**: a
+  backslash before a newline is a *line continuation*, so the emitted script stayed valid JS and
+  criterion 13 could never have gone red — the run verified nothing. Re-run properly with a
+  syntax-breaking backslash, criterion 13 does fail, so the guard is real. (3) `var _nr` renamed to
+  `const nowRows` to match its neighbours. **GOTCHA §8 confirmed live in the process:** `/\d+/g` written
+  in `page.ts` is emitted as `/d+/g` — the backslash really is eaten. **Known limitation of criterion 13,
+  reported rather than papered over:** `new Function(scriptSource)` catches only backslash damage that
+  breaks *syntax*; the silent `\d`→`d` corruption (a still-valid regex with different meaning, which is
+  the more common shape of this bug) passes it. Strengthening that guard is left as a named follow-up
+  rather than scope creep. **Sabotage-checked 5/5 by the architect** (the run exited 0 with an empty log
+  and reported nothing, so none of it was self-verified); one spec prediction is corrected here:
+  sabotage 1 (`formatPatterns` returns `""` instead of `null`) is caught by criteria 2 and 6, **not** 12
+  — `""` is falsy, so `renderDigest` still skips the line. **Live-validated** against the owner's real
+  event log: `report` now renders `- **Working pattern:** last commit 41m ago · 7 edit(s) since`. Spec:
+  `docs/scopes/phase-44-surface-patterns.md`. Files: `src/report/{digest,types,digest.test}.ts`,
+  `src/ui/page.ts`.
 - **Loop complete (manual trigger):** `auto --apply` runs the whole chain in one command; the human
   reviews/merges the `executive/change-<id>` branch.
 

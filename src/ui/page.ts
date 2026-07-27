@@ -335,7 +335,7 @@ async function refresh() {
       ? '<span style="color:var(--danger);font-weight:700">🔴 reading screen (' + esc(sa.layer || "") + ')</span>'
       : '<span class="muted">screen sensing: ' + (scrOn ? "on" : "off") + '</span>';
     const n = dg.now;
-    $("now").innerHTML = n.available ? rows([
+    const nowRows = [
       ["Project", dash(n.project)],
       ["Task", dash(n.task) + (n.task ? \` <button class="ghost" style="font-size:11px;padding:2px 8px" onclick="clearTask()">Clear task</button>\` : "")],
       ["Tests", n.tests ? \`<span class="pill \${n.tests==='failing'?'ask':'act'}">\${esc(n.tests)}</span>\` : dash(null)],
@@ -343,7 +343,10 @@ async function refresh() {
       ["Branch", dash(n.branch)],
       ["Deadline", dash(n.deadline) + (n.deadline ? \` <button class="ghost" style="font-size:11px;padding:2px 8px" onclick="clearDeadline()">Clear deadline</button>\` : "")],
       ["Current file", dash(n.currentFile)], ["Idle", n.idle===true?"yes":n.idle===false?"no":dash(null)],
-    ]) + (n.currentWindow ? \`<div class="row"><span class="k">Looking at</span><span class="v">\${esc(n.currentWindow.title)} <span class="muted">(\${esc(n.currentWindow.app)})</span></span></div>\` : "") + (n.repos && n.repos.length > 1 ? \`<div class="row"><span class="k">Repos</span><span class="v">\${repoList(n.repos, n.activeRepo)}</span></div>\` : "")
+    ];
+    if (n.workingPattern) nowRows.push(["Working pattern", esc(n.workingPattern)]);
+    $("now").innerHTML = n.available ? rows(nowRows) +
+    (n.currentWindow ? \`<div class="row"><span class="k">Looking at</span><span class="v">\${esc(n.currentWindow.title)} <span class="muted">(\${esc(n.currentWindow.app)})</span></span></div>\` : "") + (n.repos && n.repos.length > 1 ? \`<div class="row"><span class="k">Repos</span><span class="v">\${repoList(n.repos, n.activeRepo)}</span></div>\` : "")
       : "<span class='muted'>No state yet.</span>";
 
     const rec = dg.recommended;

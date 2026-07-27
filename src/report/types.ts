@@ -41,6 +41,8 @@ export interface Digest {
     repos: Array<{ name: string; branch: string | null }>; // watched repos (from git watcher)
     activeRepo: string | null;       // the currently active repo name
     currentWindow: { title: string; app: string } | null; // active foreground window (from screen watcher)
+    /** Human-readable working-pattern line, or null when there is nothing to say. */
+    workingPattern: string | null;
   };
 
   recommended: {

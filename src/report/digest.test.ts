@@ -5,7 +5,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node
 import { randomUUID } from "node:crypto";
 import { test, expect } from "bun:test";
 import { statePath, planPath, autoReportPath, execReportPath, proposalPath, digestPath, inferredPath, screenInferredPath, execRoot } from "../paths.js";
-import { buildDigest, renderDigest, needsYouSignature, needsYouLabel } from "./digest.js";
+import { buildDigest, renderDigest, needsYouSignature, needsYouLabel, formatPatterns } from "./digest.js";
 import type { NeedsYouItem } from "./types.js";
 import type { State } from "../state/types.js";
 import type { Plan } from "../planner/types.js";
@@ -845,4 +845,161 @@ test("suggestions: missing screen-inferred.json is a clean no-op (digest still b
     const d = buildDigest();
     expect(d.suggestions).toEqual([]);
   } finally { cleanup(dir); unsetHome(); }
+});
+
+// ── Phase 44: Working-pattern formatter ─────────────────────────────────────────
+
+test("formatPatterns(null) → null", () => {
+  expect(formatPatterns(null)).toBeNull();
+});
+
+test("formatPatterns(undefined) → null", () => {
+  expect(formatPatterns(undefined)).toBeNull();
+});
+
+test("formatPatterns(emptyPatterns()) → null (all zeros/nulls)", () => {
+  expect(formatPatterns(emptyPatterns())).toBeNull();
+});
+
+test("sessionMs: 5_100_000 (85 min) → contains 'session 1h 25m'", () => {
+  const result = formatPatterns({ ...emptyPatterns(), sessionMs: 5_100_000 });
+  expect(result).toContain("session 1h 25m");
+});
+
+test("sessionMs: 30_000 → contains 'under a minute'", () => {
+  const result = formatPatterns({ ...emptyPatterns(), sessionMs: 30_000 });
+  expect(result).toContain("under a minute");
+  // No digit-m/h duration should appear
+  expect(result).not.toMatch(/\d+m/);
+  expect(result).not.toMatch(/\d+h/);
+});
+
+test("msSinceLastCommit: 11_400_000 (3h10m) → contains '3h 10m'", () => {
+  const result = formatPatterns({ ...emptyPatterns(), msSinceLastCommit: 11_400_000 });
+  expect(result).toContain("3h 10m");
+});
+
+test("msSinceLastCommit: exactly 3h → '3h', not '3h 0m'", () => {
+  const result = formatPatterns({ ...emptyPatterns(), msSinceLastCommit: 3 * 60 * 60 * 1000 });
+  expect(result).toContain("3h");
+  expect(result).not.toContain("3h 0m");
+});
+
+test("editsSinceLastCommit: 0 → no 'edit'; 12 → does", () => {
+  const zeroResult = formatPatterns({ ...emptyPatterns(), editsSinceLastCommit: 0 });
+  expect(zeroResult).toBeNull();
+  expect(formatPatterns({ ...emptyPatterns(), editsSinceLastCommit: 12 })).toContain("12 edit(s) since");
+});
+
+test("populated Patterns → parts joined with ' · ', no raw ms in output", () => {
+  const inputMs = 11_400_000;
+  const p = {
+    ...emptyPatterns(),
+    sessionMs: 5_100_000,
+    msSinceLastCommit: inputMs,
+    editsSinceLastCommit: 12,
+    sameFileSaves30m: 9,
+    repoSwitches1h: 2,
+  };
+  const result = formatPatterns(p);
+  expect(result).toContain(" · ");
+  // The raw ms input must not appear anywhere in the output
+  expect(result).not.toContain(String(inputMs));
+});
+
+test("buildDigest with populated patterns → workingPattern set", () => {
+  const dir = createTempHome();
+  try {
+    setHome(dir);
+    seedState({
+      patterns: {
+        ...emptyPatterns(),
+        sessionMs: 5_100_000,
+        msSinceLastCommit: 11_400_000,
+        editsSinceLastCommit: 12,
+      },
+    });
+    const d = buildDigest();
+    expect(d.now.workingPattern).toContain("session 1h 25m");
+    expect(d.now.workingPattern).toContain("last commit 3h 10m ago");
+    expect(d.now.workingPattern).toContain("12 edit(s) since");
+  } finally { cleanup(dir); unsetHome(); }
+});
+
+test("buildDigest with no state.json → no throw, workingPattern null", () => {
+  const dir = createTempHome();
+  try {
+    setHome(dir);
+    const d = buildDigest();
+    expect(d.now.workingPattern).toBeNull();
+  } finally { cleanup(dir); unsetHome(); }
+});
+
+test("buildDigest with state.json missing patterns key → no throw, workingPattern null", () => {
+  const dir = createTempHome();
+  try {
+    setHome(dir);
+    // Write a state file without a patterns key (older file format)
+    const state = {
+      generatedAt: "2026-01-01T00:00:00.000Z",
+      eventCount: 10,
+      lastEventTs: "2026-01-01T00:00:00.000Z",
+      currentProject: "test",
+      currentTask: null,
+      deadline: null,
+      currentFile: null,
+      recentFiles: [],
+      git: { branch: null, lastCommit: null },
+      tests: "unknown",
+      blocked: false,
+      blockedReason: null,
+      currentWindow: null,
+      activity: { active: true, idleMs: 0 },
+      activeRepo: null,
+      repos: [],
+      // no patterns key
+    };
+    writeFileSync(statePath(), JSON.stringify(state));
+    const d = buildDigest();
+    expect(d.now.workingPattern).toBeNull();
+  } finally { cleanup(dir); unsetHome(); }
+});
+
+test("renderDigest with workingPattern set → contains '- **Working pattern:**' in ## Now", () => {
+  const dir = createTempHome();
+  try {
+    setHome(dir);
+    seedState({
+      patterns: {
+        ...emptyPatterns(),
+        sessionMs: 5_100_000,
+      },
+    });
+    const d = buildDigest();
+    const md = renderDigest(d);
+    const nowSection = md.split("## Now")[1]!.split("## ")[0]!;
+    expect(nowSection).toContain("- **Working pattern:**");
+  } finally { cleanup(dir); unsetHome(); }
+});
+
+test("renderDigest with workingPattern null → no 'Working pattern' at all", () => {
+  const dir = createTempHome();
+  try {
+    setHome(dir);
+    seedState({ patterns: emptyPatterns() });
+    const d = buildDigest();
+    const md = renderDigest(d);
+    expect(md).not.toContain("Working pattern");
+  } finally { cleanup(dir); unsetHome(); }
+});
+
+test("renderPage still has exactly one <script> and it parses", () => {
+  const { renderPage } = require("./../ui/page.js");
+  const html = renderPage();
+  const scripts = html.match(/<script>/g);
+  expect(scripts).toHaveLength(1);
+  const scriptMatch = html.match(/<script>([\s\S]*?)<\/script>/);
+  expect(scriptMatch).not.toBeNull();
+  const scriptSource = scriptMatch![1]!;
+  expect(() => new Function(scriptSource)).not.toThrow();
 });

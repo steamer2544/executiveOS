@@ -6,6 +6,7 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { renameOverwrite } from "../fs-atomic.js";
 import { randomUUID } from "node:crypto";
 import type { State } from "../state/types.js";
+import type { Patterns } from "../state/patterns.js";
 import type { Plan } from "../planner/types.js";
 import type { AutoReport } from "../auto/types.js";
 import type { ExecReport } from "../executor/types.js";
@@ -38,12 +39,15 @@ export function buildDigest(opts?: DigestOptions): Digest {
   // ── Now section ────────────────────────────────────────────────────────────
   const rawState = readJson<State>(statePath());
   let now: Digest["now"];
+  const workingPattern = formatPatterns(rawState?.patterns);
+
   if (!rawState) {
     now = {
       available: false,
       project: null, task: null, deadline: null, currentFile: null,
       tests: null, blocked: null, blockedReason: null, branch: null,
       idle: null, stateGeneratedAt: null, repos: [], activeRepo: null, currentWindow: null,
+      workingPattern: null,
     };
   } else {
     now = {
@@ -61,6 +65,7 @@ export function buildDigest(opts?: DigestOptions): Digest {
       repos: ((rawState as any).repos ?? []).map((r: { name: string; branch: string | null }) => ({ name: r.name, branch: r.branch ?? null })),
       activeRepo: (rawState as any).activeRepo ?? null,
       currentWindow: (rawState as any).currentWindow ?? null,
+      workingPattern,
     };
   }
 
@@ -265,6 +270,9 @@ export function renderDigest(d: Digest): string {
     lines.push("- **Branch:** " + field(d.now.branch));
     lines.push("- **Deadline:** " + field(d.now.deadline));
     lines.push("- **Idle:** " + (d.now.idle === true ? "yes" : d.now.idle === false ? "no" : "—"));
+    if (d.now.workingPattern) {
+      lines.push("- **Working pattern:** " + d.now.workingPattern);
+    }
     if (d.now.stateGeneratedAt) {
       lines.push("- _State generated at " + d.now.stateGeneratedAt + "_");
     }
@@ -419,6 +427,51 @@ export function needsYouSignature(items: NeedsYouItem[]): string {
     .map((i) => i.source + "|" + i.summary)
     .sort()
     .join("\n");
+}
+
+// ── Working-pattern formatter ──────────────────────────────────────────────────
+
+/**
+ * Format a duration in milliseconds into human-readable units.
+ * Pure function — no I/O, no clock.
+ */
+function formatDuration(ms: number): string {
+  if (ms < 60_000) return "under a minute";
+  const totalMin = Math.floor(ms / 60_000);
+  const hours = Math.floor(totalMin / 60);
+  const minutes = totalMin % 60;
+  if (hours === 0) return minutes + "m";
+  if (minutes === 0) return hours + "h";
+  return hours + "h " + minutes + "m";
+}
+
+/**
+ * One human-readable line describing the current working pattern, or null when
+ * there is nothing worth saying.
+ */
+export function formatPatterns(p: Patterns | null | undefined): string | null {
+  if (!p) return null;
+
+  const parts: string[] = [];
+
+  if (p.sessionMs != null) {
+    parts.push("session " + formatDuration(p.sessionMs));
+  }
+  if (p.msSinceLastCommit != null) {
+    parts.push("last commit " + formatDuration(p.msSinceLastCommit) + " ago");
+  }
+  if (p.editsSinceLastCommit !== undefined && p.editsSinceLastCommit !== 0) {
+    parts.push(p.editsSinceLastCommit + " edit(s) since");
+  }
+  if (p.sameFileSaves30m !== undefined && p.sameFileSaves30m !== 0) {
+    parts.push(p.sameFileSaves30m + " save(s) of the current file in 30m");
+  }
+  if (p.repoSwitches1h !== undefined && p.repoSwitches1h !== 0) {
+    parts.push(p.repoSwitches1h + " repo switch(es) in 1h");
+  }
+
+  if (parts.length === 0) return null;
+  return parts.join(" · ");
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
